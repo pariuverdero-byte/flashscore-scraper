@@ -1,8 +1,6 @@
 // Scraper Flashscore.mobi — Football, Tennis, Basketball
-// - listează meciuri din "All Games" (s=1) și "Odds" (s=5)
-// - extrage competiția din <h4> (ex: "ENGLAND: Premier League") și o atașează fiecărui meci
-// - piețe: 1X2 (3-way), 1/2 (2-way), Double Chance, Over/Under, Cards, Corners
-// Output odds.json: {id, teams, market, odd, url, sport, competition}
+// Fallback spre subpagina "Odds" a meciului când p.odds-detail lipsește în pagina principală.
+// Debug: salvează HTML pt. primele meciuri fără cote, loghează numărul de p.odds-detail.
 
 import fs from "fs/promises";
 import * as cheerio from "cheerio";
@@ -42,7 +40,7 @@ function absMatchUrl(href, d) {
   return addDayParam(abs, d);
 }
 
-// textul de dinaintea <a href="/match/...">
+// textul de dinaintea <a href="/match/..."> conține "EchipaA - EchipaB"
 function getPrevTeamsText($, aEl) {
   const parent = aEl.parent;
   if (!parent?.childNodes) return null;
@@ -61,7 +59,7 @@ function getPrevTeamsText($, aEl) {
   return null;
 }
 
-// PARSE LIST cu context de competitie (din <h4>) — lucrăm în #score-data
+// listare cu competiția (din <h4>) din #score-data
 function parseMatchLinksWithCompetitions(html, d, sportKey) {
   const $ = cheerio.load(html);
   const root = $("#score-data");
@@ -72,12 +70,10 @@ function parseMatchLinksWithCompetitions(html, d, sportKey) {
   root.children().each((_, node) => {
     const el = $(node);
     if (el.is("h4")) {
-      // exemplu text: "ENGLAND: Premier League Standings"
       const raw = el.text().trim().replace(/\s+Standings.*$/i, "").trim();
       currentCompetition = raw || null;
       return;
     }
-    // caută linkuri de meci în acest bloc
     el.find('a[href*="/match/"]').each((__, a) => {
       const href = $(a).attr("href");
       if (!href) return;
@@ -138,15 +134,12 @@ function asEvent(match, market, odd) {
   };
 }
 
-// ---- parsere piețe din pagina meciului (identice ca înainte) ----
-import { parse } from "node:path";
-import path from "node:path"; // inert, dar keeps ESM happy in some bundlers
-
+// ---- parsere piețe (la fel ca înainte) ----
 function parse1X2or2Way($, match) {
   const out = [];
   const ps = $("p.odds-detail");
   for (let i = 0; i < ps.length; i++) {
-    const anchors = $(ps[i]).find("a").map((_, a) => $(a).text().trim()).toArray();
+    const anchors = cheerio(ps[i]).find("a").map((_, a) => cheerio(a).text().trim()).toArray();
     if (anchors.length >= 2) {
       const nums = anchors.map(s => Number(s.replace(",", "."))).filter(n => n > 1.01 && n < 100);
       if (nums.length === 2) {
@@ -166,7 +159,7 @@ function parse1X2or2Way($, match) {
         return out;
       }
     }
-    const txt = $(ps[i]).text().trim();
+    const txt = cheerio(ps[i]).text().trim();
     const viaPipe = txt.split("|").map(s => s.trim()).filter(Boolean);
     const nums = viaPipe.map(s => Number(s.replace(",", "."))).filter(n => n > 1.01 && n < 100);
     if (nums.length === 2) {
@@ -190,7 +183,7 @@ function parse1X2or2Way($, match) {
 }
 
 function firstPAfterHeader($, regex) {
-  const h = $("h5").filter((_, el) => regex.test($(el).text())).first();
+  const h = $("h5").filter((_, el) => regex.test(cheerio(el).text())).first();
   if (!h.length) return null;
   const p = h.nextAll("p").first();
   return p.length ? p : null;
@@ -200,7 +193,7 @@ function parseDoubleChance($, match) {
   const out = [];
   const p = firstPAfterHeader($, /Double chance|Dubl[ăa] șans[ăa]/i);
   if (!p) return out;
-  const items = p.find("a").map((_, a) => $(a).text().trim()).toArray();
+  const items = p.find("a").map((_, a) => cheerio(a).text().trim()).toArray();
   const txt = p.text().trim();
   const cand = items.length ? items : txt.split("|").map(s => s.trim());
   cand.forEach(s => {
@@ -221,7 +214,7 @@ function parseOverUnderGeneric($, match) {
     firstPAfterHeader($, /Over\/Under|Peste\/Sub|Total (points|games)/i) ||
     firstPAfterHeader($, /Total/i);
   if (!p) return out;
-  const items = p.find("a").map((_, a) => $(a).text().trim()).toArray();
+  const items = p.find("a").map((_, a) => cheerio(a).text().trim()).toArray();
   const txt = p.text().trim();
   const cand = items.length ? items : txt.split("|").map(s => s.trim());
   cand.forEach(s => {
@@ -247,7 +240,7 @@ function parseCardsCorners($, match) {
   for (const sec of sections) {
     const p = firstPAfterHeader($, sec.rx);
     if (!p) continue;
-    const items = p.find("a").map((_, a) => $(a).text().trim()).toArray();
+    const items = p.find("a").map((_, a) => cheerio(a).text().trim()).toArray();
     const txt = p.text().trim();
     const cand = items.length ? items : txt.split("|").map(s => s.trim());
     cand.forEach(s => {
@@ -274,20 +267,79 @@ function dedupeSelections(rows) {
   });
 }
 
+// ——— Fallback: dacă nu găsim cote în pagina meciului, încercăm subpagina "Odds"
+function findOddsSubpageUrl($, baseUrl) {
+  // căutăm <a> cu text "Odds" sau href ce conține "odds"
+  let href = null;
+  $('a').each((_, a) => {
+    const t = cheerio(a).text().trim().toLowerCase();
+    const h = cheerio(a).attr('href') || "";
+    if (t === "odds" || /odds/i.test(h)) {
+      href = h;
+      return false;
+    }
+  });
+  if (!href) return null;
+  try {
+    const abs = new URL(href, baseUrl).toString();
+    // propagă d=DAY_OFFSET dacă nu e deja
+    return addDayParam(abs, DAY_OFFSET);
+  } catch {
+    return null;
+  }
+}
+
 async function scrapeMatch(match, i, dumpHtml = true) {
+  // 1) pagina principală a meciului
   const html = await fetchText(match.url);
   if (dumpHtml && i < 3) await fs.writeFile(`match-${i + 1}-${match.id}.html`, html, "utf8");
-  const $ = cheerio.load(html);
+  let $ = cheerio.load(html);
 
   let rows = [];
+  const before = $("p.odds-detail").length;
   rows.push(...parse1X2or2Way($, match));
   rows.push(...parseDoubleChance($, match));
   rows.push(...parseOverUnderGeneric($, match));
   rows.push(...parseCardsCorners($, match));
-
   rows = dedupeSelections(rows);
-  if (!rows.length) console.log(`[odds] none for ${match.id} (${match.teams}) [${match.sport}]`);
-  return rows;
+
+  if (rows.length) {
+    console.log(`[odds] ${match.id} ${match.sport} ok: p.odds-detail=${before}, selections=${rows.length}`);
+    return rows;
+  }
+
+  // 2) fallback către subpagina "Odds"
+  const oddsUrl = findOddsSubpageUrl($, match.url);
+  if (oddsUrl) {
+    try {
+      const html2 = await fetchText(oddsUrl);
+      if (dumpHtml && i < 3) await fs.writeFile(`match-${i + 1}-${match.id}-odds.html`, html2, "utf8");
+      $ = cheerio.load(html2);
+      const before2 = $("p.odds-detail").length;
+      let rows2 = [];
+      rows2.push(...parse1X2or2Way($, match));
+      rows2.push(...parseDoubleChance($, match));
+      rows2.push(...parseOverUnderGeneric($, match));
+      rows2.push(...parseCardsCorners($, match));
+      rows2 = dedupeSelections(rows2);
+      if (rows2.length) {
+        console.log(`[odds] ${match.id} ${match.sport} via subpage OK: p.odds-detail=${before2}, selections=${rows2.length}`);
+        return rows2;
+      } else {
+        console.log(`[odds] ${match.id} ${match.sport} subpage has no odds (p.odds-detail=${before2})`);
+      }
+    } catch (e) {
+      console.log(`[odds] ${match.id} subpage fetch fail: ${e.message}`);
+    }
+  } else {
+    console.log(`[odds] ${match.id} no 'Odds' link found`);
+  }
+
+  // 3) debug dump dacă n-am găsit nimic
+  if (dumpHtml && i < 6) {
+    await fs.writeFile(`no-odds-${i + 1}-${match.id}.html`, html, "utf8");
+  }
+  return [];
 }
 
 (async () => {
