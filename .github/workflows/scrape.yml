@@ -1,8 +1,9 @@
-name: Flashscore Scraper (hybrid)
+name: Flashscore.mobi Scraper + Tickets
 
 on:
   schedule:
-    - cron: "30 5 * * *"   # ~07:30 RO
+    # 07:30 Europe/Bucharest ≈ 04:30 UTC
+    - cron: "30 4 * * *"
   workflow_dispatch:
     inputs:
       day_offset:
@@ -12,7 +13,7 @@ on:
       max_matches:
         description: "Limită meciuri"
         required: false
-        default: "30"
+        default: "50"
 
 jobs:
   scrape:
@@ -20,7 +21,7 @@ jobs:
     timeout-minutes: 20
     env:
       DAY_OFFSET: ${{ github.event.inputs.day_offset || '1' }}
-      MAX_MATCHES: ${{ github.event.inputs.max_matches || '30' }}
+      MAX_MATCHES: ${{ github.event.inputs.max_matches || '50' }}
 
     steps:
       - name: Checkout repo
@@ -34,11 +35,11 @@ jobs:
       - name: Install deps
         run: npm install
 
-      - name: Install Playwright (Chromium + deps)
-        run: npx playwright install --with-deps chromium
-
-      - name: Run scraper (hybrid)
+      - name: Run scraper
         run: npm run scrape
+
+      - name: Build tickets (Biletul zilei + Cota 2)
+        run: npm run tickets
 
       - name: Upload matches.json
         uses: actions/upload-artifact@v4
@@ -54,13 +55,20 @@ jobs:
           path: odds.json
           if-no-files-found: ignore
 
+      - name: Upload tickets (JSON + Markdown)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tickets-d${{ env.DAY_OFFSET }}
+          path: |
+            tickets.json
+            tickets.md
+          if-no-files-found: error
+
       - name: Upload debug HTML
         uses: actions/upload-artifact@v4
         with:
           name: debug-html-d${{ env.DAY_OFFSET }}
           path: |
-            list-*.html
+            list.html
             match-*.html
-            match-*.fetch.html
-            match-*.playwright.html
           if-no-files-found: ignore
