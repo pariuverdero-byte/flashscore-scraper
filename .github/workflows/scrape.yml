@@ -1,7 +1,7 @@
 name: Flashscore.mobi Scraper
 
 on:
-  # Programare zilnică la 05:30 UTC (~07:30 ora României)
+  # Rulează zilnic la 05:30 UTC (~07:30 ora României)
   schedule:
     - cron: "30 5 * * *"
 
@@ -20,7 +20,7 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     env:
       DAY_OFFSET: ${{ github.event.inputs.day_offset || '0' }}
@@ -53,4 +53,13 @@ jobs:
         with:
           name: odds-d${{ env.DAY_OFFSET }}
           path: odds.json
-          if-no-files-found: error
+          if-no-files-found: ignore
+
+      - name: Upload debug HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-html-d${{ env.DAY_OFFSET }}
+          path: |
+            list.html
+            match-*.html
+          if-no-files-found: ignore
