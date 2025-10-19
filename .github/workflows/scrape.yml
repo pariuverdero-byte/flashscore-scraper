@@ -1,33 +1,29 @@
-name: Flashscore.mobi Scraper
+name: Flashscore Scraper (hybrid)
 
 on:
-  # Rulează zilnic la 05:30 UTC (~07:30 ora României)
   schedule:
-    - cron: "30 5 * * *"
-
-  # Permite rulare manuală din tabul Actions
+    - cron: "30 5 * * *"   # ~07:30 RO
   workflow_dispatch:
     inputs:
       day_offset:
-        description: "Zi: 0=azi, 1=maine, 2=poimaine (flashscore.mobi/?d=X)"
+        description: "Zi: 0=azi, 1=maine, 2=poimaine"
         required: false
-        default: "0"
+        default: "1"
       max_matches:
-        description: "Limită meciuri procesate"
+        description: "Limită meciuri"
         required: false
-        default: "50"
+        default: "30"
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    timeout-minutes: 20
     env:
-      DAY_OFFSET: ${{ github.event.inputs.day_offset || '0' }}
-      MAX_MATCHES: ${{ github.event.inputs.max_matches || '50' }}
+      DAY_OFFSET: ${{ github.event.inputs.day_offset || '1' }}
+      MAX_MATCHES: ${{ github.event.inputs.max_matches || '30' }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -35,10 +31,13 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install dependencies
+      - name: Install deps
         run: npm install
 
-      - name: Run scraper (flashscore.mobi)
+      - name: Install Playwright (Chromium + deps)
+        run: npx playwright install --with-deps chromium
+
+      - name: Run scraper (hybrid)
         run: npm run scrape
 
       - name: Upload matches.json
@@ -60,6 +59,8 @@ jobs:
         with:
           name: debug-html-d${{ env.DAY_OFFSET }}
           path: |
-            list.html
+            list-*.html
             match-*.html
+            match-*.fetch.html
+            match-*.playwright.html
           if-no-files-found: ignore
