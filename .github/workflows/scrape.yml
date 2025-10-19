@@ -1,10 +1,11 @@
 name: Flashscore.mobi Scraper
 
 on:
-  # Programare zilnică: 05:30 UTC ≈ 07:30 RO (ajustează dacă vrei altă oră)
+  # Programare zilnică la 05:30 UTC (~07:30 ora României)
   schedule:
     - cron: "30 5 * * *"
-  # Rulare manuală din tabul Actions, cu input-uri opționale
+
+  # Permite rulare manuală din tabul Actions
   workflow_dispatch:
     inputs:
       day_offset:
@@ -21,20 +22,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    # Variabile disponibile tuturor pașilor
     env:
       DAY_OFFSET: ${{ github.event.inputs.day_offset || '0' }}
       MAX_MATCHES: ${{ github.event.inputs.max_matches || '50' }}
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
 
       - name: Install dependencies
         run: npm install
@@ -42,7 +41,6 @@ jobs:
       - name: Run scraper (flashscore.mobi)
         run: npm run scrape
 
-      # Artifact cu lista meciurilor (pentru debug/verificare)
       - name: Upload matches.json
         uses: actions/upload-artifact@v4
         with:
@@ -50,7 +48,6 @@ jobs:
           path: matches.json
           if-no-files-found: ignore
 
-      # Artifact cu cotele (1/X/2) agregate
       - name: Upload odds.json
         uses: actions/upload-artifact@v4
         with:
