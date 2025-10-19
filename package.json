@@ -4,7 +4,9 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "scrape": "node scrape_mobi.js"
+    "scrape": "node scrape_mobi.js",
+    "tickets": "node generate_tickets.js",
+    "scrape-and-tickets": "node scrape_mobi.js && node generate_tickets.js"
   },
   "dependencies": {
     "cheerio": "^1.0.0-rc.12"
