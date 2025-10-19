@@ -1,6 +1,4 @@
-// Flashscore.mobi scraper – FIX: teams curate din <a>, fără fallback "parent",
-// și param d adăugat corect (fără dublură). Cotele rămân din <p class="odds-detail">.
-
+// Flashscore.mobi scraper – parser robust pentru cote 1/X/2
 import fs from "fs/promises";
 import * as cheerio from "cheerio";
 
@@ -23,24 +21,20 @@ async function fetchText(url) {
 }
 
 function toAbsUrlWithDay(href, offset) {
-  // face HREF absolut și adaugă param d=<offset> O SINGURĂ DATĂ
   const abs = new URL(href, BASE);
+  // nu dubla "d"
   if (!abs.searchParams.has("d")) abs.searchParams.set("d", String(offset));
   return abs.toString();
 }
 
 function cleanTeams(raw) {
   let t = String(raw || "").replace(/\s+/g, " ").trim();
-  // ținem DOAR forma "Home - Away"
   if (!/ - /.test(t)) return null;
-  // uneori apare "Home - Away -:-" -> tăiem din "-:-" încolo
-  t = t.replace(/\s+-:-.*$/, "").trim();
-  // uneori apar scurtături dubioase; dacă a rămas prea lung, mai filtrăm
-  if (t.length > 80) return null; // protecție împotriva ingerării de blocuri mari
+  t = t.replace(/\s+-:-.*$/, "").trim(); // taie “-:-” și după
+  if (t.length > 80) return null;        // protecție anti-“perete”
   return t;
 }
 
-// 1) Listează meciurile din ziua offset
 async function listMatches(offset) {
   const url = `${BASE}/?d=${offset}`;
   const html = await fetchText(url);
@@ -54,12 +48,11 @@ async function listMatches(offset) {
   $('a[href^="/match/"]').each((_, el) => {
     const href = $(el).attr("href");
     if (!href) return;
-
     const full = toAbsUrlWithDay(href, offset);
     const id = (/\/match\/([^/]+)\//i.exec(full) || [])[1];
     if (!id || seen.has(id)) return;
 
-    // IMPORTANT: folosim STRICT textul <a>, NU textul părintelui
+    // doooar textul <a> (nu parent)
     const teams = cleanTeams($(el).text());
     if (!teams) { skippedNoTeams++; return; }
 
@@ -67,39 +60,108 @@ async function listMatches(offset) {
     rows.push({ id, url: full, teams });
   });
 
-  console.log(`[list] d=${offset} -> matches: ${rows.length} (skipped without clean teams: ${skippedNoTeams})`);
+  console.log(`[list] d=${offset} -> matches: ${rows.length} (skipped w/o clean teams: ${skippedNoTeams})`);
   rows.slice(0, 5).forEach((r, i) => console.log(`  [${i}] ${r.teams} -> ${r.url}`));
   return rows.slice(0, MAX_MATCHES);
 }
 
-// 2) Cote 1/X/2 direct din <p class="odds-detail">
-function parseOddsFromHtml(html) {
-  const $ = cheerio.load(html);
-  const oddsEl = $("p.odds-detail").first();
-  if (!oddsEl.length) return null;
+/** ====== PARSING ODDS ====== **/
 
-  const nums = (oddsEl.text().match(/\d+(?:[.,]\d+)?/g) || [])
+function pick3Numbers(nums) {
+  // ia primele 3 numere plauzibile pentru cote
+  const arr = (nums || [])
     .map(s => Number(String(s).replace(",", ".")))
     .filter(n => n > 1.01 && n < 100);
-
-  if (nums.length < 2) return null; // minim 1 și X
-  return { o1: nums[0] ?? null, ox: nums[1] ?? null, o2: nums[2] ?? null };
+  return arr.length >= 2 ? { o1: arr[0] ?? null, ox: arr[1] ?? null, o2: arr[2] ?? null } : null;
 }
 
-async function scrapeMatch(match, i, dumpHtml = false) {
-  const html = await fetchText(match.url);
-  if (dumpHtml && i < 3) await fs.writeFile(`match-${i + 1}-${match.id}.html`, html, "utf8");
-
-  const odds = parseOddsFromHtml(html);
-  if (!odds) {
-    console.log(`[odds] none for ${match.id} (${match.teams})`);
-    return [];
+function parseOddsByStructure($) {
+  // 1) h5 Odds/Cote -> p.odds-detail (cel mai frecvent)
+  const h5 = $("h5").filter((_, el) => /Odds|Cote/i.test($(el).text())).first();
+  if (h5.length) {
+    const oddsP = h5.nextAll("p.odds-detail").first();
+    if (oddsP.length) {
+      const m = oddsP.text().match(/\d+(?:[.,]\d+)?/g);
+      const res = pick3Numbers(m);
+      if (res) return res;
+    }
+    // 2) dacă nu e .odds-detail, ia primul <p> după h5
+    const p = h5.nextAll("p").first();
+    if (p.length) {
+      const m = p.text().match(/\d+(?:[.,]\d+)?/g);
+      const res = pick3Numbers(m);
+      if (res) return res;
+    }
   }
 
+  // 3) direct orice <p class*="odds">
+  const anyOdds = $('p[class*="odds"]')
+    .map((_, el) => $(el).text())
+    .toArray()
+    .join(" ");
+  if (anyOdds) {
+    const m = anyOdds.match(/\d+(?:[.,]\d+)?/g);
+    const res = pick3Numbers(m);
+    if (res) return res;
+  }
+  return null;
+}
+
+function parseOddsByHeuristic(html) {
+  // caută o fereastră în jurul cuvintelor-cheie, apoi ia 3 numere
+  const KEYS = ["1X2", "Odds", "Cote", "Full Time", "Full-Time", "Rezultat final"];
+  let idx = -1;
+  for (const k of KEYS) {
+    idx = html.search(new RegExp(k.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&"), "i"));
+    if (idx >= 0) break;
+  }
+  const scope = idx >= 0 ? html.slice(idx, idx + 1800) : html;
+
+  // format cu pipe-uri
+  let m = /\b(\d+(?:[.,]\d+)?)\s*\|\s*(\d+(?:[.,]\d+)?)\s*\|\s*(\d+(?:[.,]\d+)?)\b/.exec(scope);
+  if (m) return { o1: Number(m[1].replace(",", ".")), ox: Number(m[2].replace(",", ".")), o2: Number(m[3].replace(",", ".")) };
+
+  // trei numere consecutive
+  m = scope.match(/\b\d+(?:[.,]\d+)?\b/g);
+  return pick3Numbers(m);
+}
+
+function parseOddsFromHtml(html) {
+  const $ = cheerio.load(html);
+  return parseOddsByStructure($) || parseOddsByHeuristic(html);
+}
+
+function toOddsSubpage(matchUrl, offset) {
+  const id = (/\/match\/([^/]+)\//i.exec(matchUrl) || [])[1];
+  return id ? `${BASE}/match/${id}/odds/?d=${offset}` : null;
+}
+
+async function scrapeMatch(match, i, dumpHtml = true) {
+  // 1) pagina principală a meciului
+  let html = await fetchText(match.url);
+  if (dumpHtml && i < 3) await fs.writeFile(`match-${i + 1}-${match.id}.html`, html, "utf8");
+  let odds = parseOddsFromHtml(html);
+  if (odds) return asTriplet(match, odds);
+
+  // 2) fallback: subpagina de cote
+  const oddsUrl = toOddsSubpage(match.url, DAY_OFFSET);
+  if (oddsUrl) {
+    html = await fetchText(oddsUrl);
+    if (dumpHtml && i < 3) await fs.writeFile(`match-${i + 1}-${match.id}-odds.html`, html, "utf8");
+    odds = parseOddsFromHtml(html);
+    if (odds) return asTriplet(match, odds, oddsUrl);
+  }
+
+  console.log(`[odds] none for ${match.id} (${match.teams})`);
+  return [];
+}
+
+function asTriplet(match, odds, urlOverride) {
+  const url = urlOverride || match.url;
   const out = [];
-  if (odds.o1) out.push({ id: match.id, teams: match.teams, market: "1", odd: odds.o1, url: match.url });
-  if (odds.ox) out.push({ id: match.id, teams: match.teams, market: "X", odd: odds.ox, url: match.url });
-  if (odds.o2) out.push({ id: match.id, teams: match.teams, market: "2", odd: odds.o2, url: match.url });
+  if (odds.o1) out.push({ id: match.id, teams: match.teams, market: "1", odd: odds.o1, url });
+  if (odds.ox) out.push({ id: match.id, teams: match.teams, market: "X", odd: odds.ox, url });
+  if (odds.o2) out.push({ id: match.id, teams: match.teams, market: "2", odd: odds.o2, url });
   return out;
 }
 
@@ -113,7 +175,7 @@ async function scrapeMatch(match, i, dumpHtml = false) {
       try {
         const rows = await scrapeMatch(matches[i], i, true);
         all.push(...rows);
-        await new Promise(r => setTimeout(r, 200)); // throttle mic
+        await new Promise(r => setTimeout(r, 200));
       } catch (e) {
         console.error("[MATCH FAIL]", matches[i].url, e.message);
       }
