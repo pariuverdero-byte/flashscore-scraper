@@ -1,21 +1,21 @@
-name: Flashscore Scraper
+name: Flashscore.mobi Scraper
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "0 5 * * *"   # rulează zilnic 05:00 UTC ~ 07:00 RO (ajustezi cum vrei)
   workflow_dispatch:
     inputs:
-      flash_url:
-        description: "URL Flashscore (ex: https://www.flashscore.com/football/italy/serie-a/)"
+      day_offset:
+        description: "Offset zi (0=azi, 1=maine, 2=poimaine)"
         required: false
       max_matches:
-        description: "Limită meciuri pentru test (ex: 5)"
+        description: "Limita meciuri"
         required: false
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -24,21 +24,16 @@ jobs:
           node-version: "20"
 
       - name: Install deps
-        run: npm ci
+        run: npm install
 
-      - name: Install Playwright (Chromium + deps)
-        run: npx playwright install --with-deps chromium
-
-      - name: Run scraper
+      - name: Run scraper (flashscore.mobi)
         env:
-          FLASH_URL: ${{ github.event.inputs.flash_url || 'https://www.flashscore.com/football/' }}
-          MAX_MATCHES: ${{ github.event.inputs.max_matches || '12' }}
-          HEADLESS: "true"
-          GUARD_TIME: "1"
+          DAY_OFFSET: ${{ github.event.inputs.day_offset || '0' }}
+          MAX_MATCHES: ${{ github.event.inputs.max_matches || '50' }}
         run: npm run scrape
 
-      - name: Upload odds.json as artifact
+      - name: Upload odds.json
         uses: actions/upload-artifact@v4
         with:
-          name: odds-json
+          name: odds-json-d${{ env.DAY_OFFSET || '0' }}
           path: odds.json
