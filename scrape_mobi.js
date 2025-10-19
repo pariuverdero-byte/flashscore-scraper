@@ -1,5 +1,6 @@
-// Flashscore.mobi scraper — extrage echipele din textul anterior <a class="sched|live|fin">,
-// listează meciurile și ia 1/X/2 din <p class="odds-detail"> pe pagina meciului.
+// Scraper Flashscore.mobi — extrage din pagina meciului:
+// 1X2 (p.odds-detail) + piețe suplimentare ("Double chance", "Over/Under", "Cards", "Corners")
+// NOTĂ: Formatarea pe mobi diferă pe competiții; parserul are fallback-uri tolerante.
 
 import fs from "fs/promises";
 import * as cheerio from "cheerio";
@@ -7,8 +8,7 @@ import * as cheerio from "cheerio";
 const BASE = "https://www.flashscore.mobi";
 const DAY_OFFSET = Number(process.env.DAY_OFFSET || 0);
 const MAX_MATCHES = Number(process.env.MAX_MATCHES || 50);
-const UA =
-  "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Mobile Safari/537.36";
+const UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Mobile Safari/537.36";
 
 async function fetchText(url) {
   const r = await fetch(url, {
@@ -29,28 +29,21 @@ function toAbsUrlWithDay(href, offset) {
   return abs.toString();
 }
 
-// >>> cheie: extrage "Home - Away" din nodul text chiar dinaintea linkului de meci
+// --- echipele sunt în textul de DINAINTEA linkului către meci ---
 function getTeamsFromContext($, aEl) {
-  // folosim structura DOM brută ca să accesăm nodurile text
   const parent = aEl.parent;
   if (!parent || !parent.childNodes) return null;
-
   const nodes = parent.childNodes;
   const idx = nodes.indexOf(aEl);
-  // căutăm înapoi până găsim un nod text ce conține " - "
   for (let i = idx - 1; i >= 0; i--) {
     const n = nodes[i];
     if (n.type === "text") {
       let t = String(n.data || "").replace(/\s+/g, " ").trim();
-      // exemple: "West Ham - Brentford", "St. Liege - Antwerp"
       if (t.includes(" - ")) {
-        // taie eventualul rezultat sau "-:-" la final
         t = t.replace(/\s+-:-.*$/, "").replace(/\s+\d+:\d+.*$/, "").trim();
-        // protecție: evită texte prea lungi (să nu "mănânce" blocuri)
         if (t.length > 3 && t.length <= 80) return t;
       }
     }
-    // dacă dăm peste <span>ora</span>, continuăm; echipele sunt după span
   }
   return null;
 }
@@ -60,97 +53,159 @@ async function listMatches(offset) {
   const html = await fetchText(url);
   await fs.writeFile("list.html", html, "utf8");
 
-  const $ = cheerio.load(html, { xmlMode: false, decodeEntities: true });
+  const $ = cheerio.load(html);
   const seen = new Set();
   const rows = [];
-  let skipped = 0;
-
-  // linkurile către meciuri pot avea class sched/live/fin, dar toate conțin "/match/"
   $('a[href*="/match/"]').each((_, el) => {
     const href = $(el).attr("href");
     if (!href) return;
-
     const full = toAbsUrlWithDay(href, offset);
     const id = (/\/match\/([^/]+)\//i.exec(full) || [])[1];
     if (!id || seen.has(id)) return;
-
-    // echipele sunt în NODUL TEXT imediat anterior ancorei
     const teams = getTeamsFromContext($, el);
-    if (!teams) { skipped++; return; }
-
+    if (!teams) return;
     seen.add(id);
     rows.push({ id, url: full, teams });
   });
 
-  console.log(`[list] d=${offset} -> matches: ${rows.length} (skipped=${skipped})`);
-  rows.slice(0, 8).forEach((r, i) => console.log(`  [${i}] ${r.teams} -> ${r.url}`));
+  console.log(`[list] d=${offset} -> matches: ${rows.length}`);
   return rows.slice(0, MAX_MATCHES);
 }
 
-// ======= ODDS din pagina meciului (p.odds-detail) =======
-function parseOddsFromHtml(html) {
-  const $ = cheerio.load(html);
+// ---------- parsere piețe ----------
+function asEvent(match, market, odd, url) {
+  return odd && odd > 1.01 && odd < 100 ? {
+    id: match.id, teams: match.teams, market, odd: Number(odd), url
+  } : null;
+}
 
-  const ps = $("p.odds-detail");
-  for (let i = 0; i < ps.length; i++) {
-    // a) <a>2.58</a>|<a>3.59</a>|<a>2.86</a>
-    const anchors = $(ps[i]).find("a").map((_, a) => $(a).text().trim()).toArray();
-    if (anchors.length >= 3) {
-      const nums = anchors.slice(0,3).map(s => Number(s.replace(",", "."))).filter(n => n > 1.01 && n < 100);
-      if (nums.length >= 2) return { o1: nums[0] ?? null, ox: nums[1] ?? null, o2: nums[2] ?? null };
+function parse1X2($, match, url) {
+  const out = [];
+  $("p.odds-detail").each((_, p) => {
+    const a = $(p).find("a").map((__, x) => $(x).text().trim()).toArray();
+    if (a.length >= 3) {
+      const o = a.slice(0,3).map(s => Number(s.replace(",", ".")));
+      const e1 = asEvent(match, "1", o[0], url);
+      const eX = asEvent(match, "X", o[1], url);
+      const e2 = asEvent(match, "2", o[2], url);
+      [e1,eX,e2].forEach(e=>e && out.push(e));
+      return false; // prima secțiune ajunge
     }
-    // b) "2.58|3.59|2.86"
-    const txt = $(ps[i]).text().trim();
-    const viaPipe = txt.split("|").map(s => s.trim()).filter(Boolean);
+    const txt = $(p).text().trim();
+    const viaPipe = txt.split("|").map(s => s.trim());
     if (viaPipe.length >= 3) {
-      const [a,b,c] = viaPipe.map(s => Number(s.replace(",", ".")));
-      if ([a,b,c].every(v => v > 1.01 && v < 100)) return { o1: a, ox: b, o2: c };
+      const o = viaPipe.slice(0,3).map(s => Number(s.replace(",", ".")));
+      [asEvent(match,"1",o[0],url),asEvent(match,"X",o[1],url),asEvent(match,"2",o[2],url)]
+        .forEach(e=>e && out.push(e));
+      return false;
     }
-    // c) fallback: primele 3 numere
-    const nums2 = (txt.match(/\d+(?:[.,]\d+)?/g) || [])
-      .map(s => Number(s.replace(",", ".")))
-      .filter(n => n > 1.01 && n < 100);
-    if (nums2.length >= 3) return { o1: nums2[0], ox: nums2[1], o2: nums2[2] };
-  }
+  });
+  return out;
+}
 
-  // d) fallback: <h5>Odds/Cote</h5> -> primul <p>
-  const h5 = $("h5").filter((_, el) => /Odds|Cote/i.test($(el).text())).first();
-  if (h5.length) {
-    const p = h5.nextAll("p").first();
-    const a = p.find("a").map((_, x) => $(x).text().trim()).toArray()
-      .map(s => Number(s.replace(",", "."))).filter(n => n > 1.01 && n < 100);
-    if (a.length >= 2) return { o1: a[0] ?? null, ox: a[1] ?? null, o2: a[2] ?? null };
+// helper: ia primul <p> după un <h5> care conține un cuvânt-cheie (ex: Over/Under)
+function firstPAfterHeader($, re) {
+  const h = $("h5").filter((_, el) => re.test($(el).text())).first();
+  if (!h.length) return null;
+  const p = h.nextAll("p").first();
+  return p.length ? p : null;
+}
 
-    const txt = p.text().trim();
-    const viaPipe = txt.split("|").map(s => s.trim()).filter(Boolean);
-    if (viaPipe.length >= 3) {
-      const [x,y,z] = viaPipe.map(s => Number(s.replace(",", ".")));
-      if ([x,y,z].every(v => v > 1.01 && v < 100)) return { o1: x, ox: y, o2: z };
+// Double chance (1X | 12 | X2)
+function parseDoubleChance($, match, url) {
+  const out = [];
+  const p = firstPAfterHeader($, /Double chance|Dubl[ăa] șans[ăa]/i);
+  if (!p) return out;
+  // Posibile formate: "<a>1X 1.35</a>|<a>12 1.40</a>|<a>X2 1.50</a>" sau text simplu
+  const chunks = p.find("a").map((_, a) => $(a).text().trim()).toArray();
+  const txt = p.text().trim();
+  const candidates = chunks.length ? chunks : txt.split("|").map(s => s.trim());
+  candidates.forEach(s => {
+    const m = /(1X|12|X2)\s*[: ]\s*(\d+(?:[.,]\d+)?)/i.exec(s) || /(1X|12|X2)\s*(\d+(?:[.,]\d+)?)/i.exec(s);
+    if (m) {
+      const mk = m[1].toUpperCase();
+      const odd = Number(m[2].replace(",", "."));
+      const e = asEvent(match, mk, odd, url);
+      if (e) out.push(e);
     }
-  }
+  });
+  return out;
+}
 
-  return null;
+// Over/Under Goluri (ex: Over 2.5, Under 2.5)
+function parseOverUnderGoals($, match, url) {
+  const out = [];
+  const p = firstPAfterHeader($, /Over\/Under|Peste\/Sub|Total goals/i);
+  if (!p) return out;
+  const items = p.find("a").map((_, a) => $(a).text().trim()).toArray();
+  const txt = p.text().trim();
+  const candidates = items.length ? items : txt.split("|").map(s => s.trim());
+  candidates.forEach(s => {
+    // ex: "Over 2.5 1.90" / "Under 2.5 1.95" / "O2.5 1.90"
+    const m = /(Over|Under|O|U)\s*([0-9]+(?:\.[05])?)\s*(\d+(?:[.,]\d+)?)/i.exec(s);
+    if (m) {
+      const side = m[1].toUpperCase().startsWith("O") ? "O" : "U";
+      const line = m[2];
+      const odd = Number(m[3].replace(",", "."));
+      const market = `${side}${line}`; // ex: O2.5 / U3.5
+      const e = asEvent(match, market, odd, url);
+      if (e) out.push(e);
+    }
+  });
+  return out;
+}
+
+// Cartonașe (Cards) și Cornere (Corners) — format similar Over/Under
+function parseTotalsSection($, match, url, headerRegex, prefix) {
+  const out = [];
+  const p = firstPAfterHeader($, headerRegex);
+  if (!p) return out;
+  const items = p.find("a").map((_, a) => $(a).text().trim()).toArray();
+  const txt = p.text().trim();
+  const candidates = items.length ? items : txt.split("|").map(s => s.trim());
+  candidates.forEach(s => {
+    const m = /(Over|Under|O|U)\s*([0-9]+(?:\.[05])?)\s*(\d+(?:[.,]\d+)?)/i.exec(s);
+    if (m) {
+      const side = m[1].toUpperCase().startsWith("O") ? "O" : "U";
+      const line = m[2];
+      const odd = Number(m[3].replace(",", "."));
+      const market = `${prefix} ${side}${line}`; // ex: Cards O4.5 / Corners U9.5
+      const e = asEvent(match, market, odd, url);
+      if (e) out.push(e);
+    }
+  });
+  return out;
+}
+
+function dedupe(arr) {
+  const seen = new Set();
+  return arr.filter(e => {
+    const key = `${e.id}|${e.market}|${e.odd.toFixed(3)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function scrapeMatch(match, i, dumpHtml = true) {
   const html = await fetchText(match.url);
   if (dumpHtml && i < 3) await fs.writeFile(`match-${i + 1}-${match.id}.html`, html, "utf8");
 
-  const odds = parseOddsFromHtml(html);
-  if (!odds) {
-    console.log(`[odds] none for ${match.id} (${match.teams}) -> ${match.url}`);
-    return [];
-  }
-  console.log(`[odds] ${match.id} ${match.teams} -> ${odds.o1}/${odds.ox}/${odds.o2}`);
+  const $ = cheerio.load(html);
 
-  return [
-    { id: match.id, teams: match.teams, market: "1", odd: odds.o1, url: match.url },
-    { id: match.id, teams: match.teams, market: "X", odd: odds.ox, url: match.url },
-    { id: match.id, teams: match.teams, market: "2", odd: odds.o2, url: match.url }
-  ];
+  let events = [];
+  events.push(...parse1X2($, match, match.url));
+  events.push(...parseDoubleChance($, match, match.url));
+  events.push(...parseOverUnderGoals($, match, match.url));
+  events.push(...parseTotalsSection($, match, match.url, /Cards|Cartona[șs]e/i, "Cards"));
+  events.push(...parseTotalsSection($, match, match.url, /Corners|Cornere/i, "Corners"));
+
+  events = dedupe(events);
+  if (!events.length) console.log(`[odds] none for ${match.id} (${match.teams})`);
+  return events;
 }
 
-// ======= MAIN =======
+// MAIN
 (async () => {
   try {
     const matches = await listMatches(DAY_OFFSET);
@@ -161,14 +216,14 @@ async function scrapeMatch(match, i, dumpHtml = true) {
       try {
         const rows = await scrapeMatch(matches[i], i, true);
         all.push(...rows);
-        await new Promise(r => setTimeout(r, 200));
+        await new Promise(r => setTimeout(r, 150));
       } catch (e) {
         console.error("[MATCH FAIL]", matches[i].url, e.message);
       }
     }
 
     await fs.writeFile("odds.json", JSON.stringify({ events: all }, null, 2), "utf8");
-    console.log(`[OK] Saved odds.json with ${all.length} rows (d=${DAY_OFFSET})`);
+    console.log(`[OK] Saved odds.json with ${all.length} selections (d=${DAY_OFFSET})`);
   } catch (e) {
     console.error(e);
     process.exit(1);
