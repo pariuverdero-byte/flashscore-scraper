@@ -1,157 +1,157 @@
-// Generator bilete cu constrângeri:
-// - Bilet cota 2: EXACT 2 selecții, produs în [1.90, 2.50]
-// - Biletul zilei: EXACT 4 selecții, produs în [4.00, 6.00]
-// Acceptă piețe: 1X2, 1X/12/X2, O/U goluri, Cards, Corners.
+// Generator bilete — disjuncte + preferințe pe competiții majore
+// - Cota 2: EXACT 2 selecții, produs ∈ [1.90, 2.50]
+// - Biletul zilei: EXACT 4 selecții, produs ∈ [4.00, 6.00]
+// - Fără suprapunere: aceleași meciuri NU pot apărea pe ambele bilete.
 
 import fs from "fs/promises";
 
 const INPUT = "odds.json";
-
-// filtre utile
-const ODD_MIN = 1.10;         // elimină cote aberant de mici
-const ODD_MAX = 10.00;
-const EXCLUDE_MARKETS_REGEX = /(HT|First Half|2nd Half|Asian|Exact|Correct Score)/i;
-
-// RULESETS
 const RULE_COTA2 = { size: 2, min: 1.90, max: 2.50 };
-const RULE_ZI =   { size: 4, min: 4.00, max: 6.00 };
+const RULE_ZI   = { size: 4, min: 4.00, max: 6.00 };
 
-// preferințe piețe (scor mai mic = preferat)
-function marketPreference(mkt) {
-  if (mkt === "1" || mkt === "X" || mkt === "2") return 0;
-  if (mkt === "1X" || mkt === "12" || mkt === "X2") return 1;
-  if (/^O\d/.test(mkt) || /^U\d/.test(mkt)) return 2;                  // Over/Under goals
-  if (/^Cards /.test(mkt)) return 3;
-  if (/^Corners /.test(mkt)) return 4;
+const ODD_MIN = 1.10, ODD_MAX = 25.0;
+const EXCLUDE = /(HT|First Half|2nd Half|Asian|Exact|Correct Score)/i;
+
+// competiții „majore” — scor mic = preferat
+const COMP_PRIORITY = [
+  // fotbal top
+  "Premier League", "LaLiga", "Serie A", "Bundesliga", "Ligue 1",
+  "Champions League", "Europa League", "Conference League",
+  // baschet
+  "NBA", "Euroleague", "EuroLeague", "ACB",
+  // tenis
+  "ATP", "WTA", "Grand Slam", "Australian Open", "Roland Garros", "Wimbledon", "US Open"
+];
+
+function competitionScore(c) {
+  if (!c) return 5;
+  const name = c.toLowerCase();
+  for (let i = 0; i < COMP_PRIORITY.length; i++) {
+    if (name.includes(COMP_PRIORITY[i].toLowerCase())) return 0 + Math.floor(i/5); // 0.. (grupuri)
+  }
+  // bonus pentru țări/ligii rezonabil de relevante
+  if (/england|spain|italy|germany|france|portugal|netherlands|romania/i.test(name)) return 2;
+  return 4;
+}
+
+function marketPref(m){
+  if (m==="1"||m==="X"||m==="2") return 0;
+  if (m==="1X"||m==="12"||m==="X2") return 1;
+  if (/^(O|U)\d/.test(m)) return 2;
+  if (/^Cards /.test(m)) return 3;
+  if (/^Corners /.test(m)) return 4;
   return 5;
 }
 
-function product(arr) { return arr.reduce((a,b)=>a*b,1); }
-function closeness(val, low, high) {
-  if (val >= low && val <= high) return 0;
-  if (val < low) return low - val;
-  return val - high;
-}
+function product(arr){ return arr.reduce((a,b)=>a*b,1); }
+function normalize(e){ return {
+  id:String(e.id),
+  teams:String(e.teams),
+  market:String(e.market),
+  odd:Number(e.odd),
+  url:String(e.url),
+  sport:String(e.sport||"football"),
+  competition:String(e.competition||"")
+};}
+function ok(e){ return isFinite(e.odd) && e.odd>=ODD_MIN && e.odd<=ODD_MAX && !EXCLUDE.test(e.market); }
 
-function normalize(e) {
-  return {
-    id: String(e.id),
-    teams: String(e.teams),
-    market: String(e.market),
-    odd: Number(e.odd),
-    url: String(e.url)
-  };
-}
-
-function isOk(e) {
-  if (!isFinite(e.odd) || e.odd < ODD_MIN || e.odd > ODD_MAX) return false;
-  if (EXCLUDE_MARKETS_REGEX.test(e.market)) return false;
-  return true;
-}
-
-function dedupeByMatchMarket(events) {
+function dedupeByIdMarket(events){
   const map = new Map();
-  for (const e of events) {
-    const key = `${e.id}|${e.market}`;
+  for (const e of events){
+    const key = `${e.id}|${e.market}|${e.sport}`;
     const prev = map.get(key);
-    if (!prev || e.odd > prev.odd) map.set(key, e); // păstrează cota cea mai mare
+    if (!prev || e.odd > prev.odd) map.set(key, e);
   }
-  return Array.from(map.values());
+  return [...map.values()];
 }
 
-function pickCombo(events, rule) {
-  // backtracking simplu cu tăieri; pentru size 2 și 4 e ok.
-  events = events.slice().sort((a,b) => {
-    // preferințe: piețe mai „safe”, apoi odd apropiat de ținta geometrică
-    const pref = marketPreference(a.market) - marketPreference(b.market);
-    if (pref !== 0) return pref;
-    return Math.abs(a.odd - 1.7) - Math.abs(b.odd - 1.7);
+// Sortare „deșteaptă”: competiție bună -> piață „safe” -> odd apropiat de 1.7 -> odd descrescător
+function smartSort(events){
+  return events.slice().sort((a,b)=>{
+    const ca = competitionScore(a.competition), cb = competitionScore(b.competition);
+    if (ca !== cb) return ca - cb;
+    const mp = marketPref(a.market) - marketPref(b.market);
+    if (mp !== 0) return mp;
+    const d = Math.abs(a.odd-1.7) - Math.abs(b.odd-1.7);
+    if (d !== 0) return d;
+    return b.odd - a.odd;
   });
+}
 
-  const targetGeo = Math.pow((rule.min + rule.max)/2, 1 / rule.size); // aproximativ
-  // low/high per selecție — doar pentru ghidare (nu sunt hard)
-  const lowEach  = Math.max(1.10, targetGeo * 0.8);
-  const highEach = targetGeo * 1.3;
+function pickCombo(events, rule){
+  const arr = smartSort(events);
+  let best=null;
 
-  // evită conflictul: nu pune două piețe din același meci
-  const res = [];
-  let best = null;
-
-  function bt(start, chosen, usedIds) {
-    if (best) return; // oprim la prima validă (preferințe au ordonat deja)
-    if (chosen.length === rule.size) {
+  function bt(start, chosen, usedIds){
+    if (best) return;
+    if (chosen.length===rule.size){
       const prod = Number(product(chosen.map(x=>x.odd)).toFixed(3));
-      if (prod >= rule.min && prod <= rule.max) {
-        best = { selections: chosen.slice(), product: prod };
-      }
+      if (prod>=rule.min && prod<=rule.max) best={ selections:chosen.slice(), product:prod };
       return;
     }
-    for (let i = start; i < events.length; i++) {
-      const e = events[i];
-      if (usedIds.has(e.id)) continue;
-      // mic pruning: dacă odd e complet în afara ghidajului, sare
-      if (e.odd < 1.05) continue;
-      // continuă
-      chosen.push(e);
-      usedIds.add(e.id);
-      bt(i + 1, chosen, usedIds);
-      usedIds.delete(e.id);
-      chosen.pop();
+    for (let i=start;i<arr.length;i++){
+      const e=arr[i];
+      if (usedIds.has(e.id)) continue; // evită 2 pariuri pe același meci
+      chosen.push(e); usedIds.add(e.id);
+      bt(i+1, chosen, usedIds);
+      usedIds.delete(e.id); chosen.pop();
       if (best) return;
     }
   }
-
-  bt(0, [], new Set());
+  bt(0,[],new Set());
   return best;
 }
 
-(async () => {
-  const raw = await fs.readFile(INPUT, "utf8").catch(()=>null);
-  if (!raw) {
-    console.error("[ERR] odds.json missing");
-    process.exit(1);
-  }
+function excludeByIds(events, idsToExclude){
+  if (!idsToExclude?.size) return events;
+  return events.filter(e => !idsToExclude.has(e.id));
+}
+
+(async ()=>{
+  const raw = await fs.readFile(INPUT,"utf8").catch(()=>null);
+  if (!raw){ console.error("odds.json missing"); process.exit(0); }
   const data = JSON.parse(raw);
-  let events = Array.isArray(data?.events) ? data.events.map(normalize).filter(isOk) : [];
-  events = dedupeByMatchMarket(events);
+  let E = Array.isArray(data?.events)? data.events.map(normalize).filter(ok):[];
+  E = dedupeByIdMarket(E);
 
-  if (!events.length) {
-    console.error("[ERR] no events to build tickets");
-    process.exit(0);
+  // 1) construim BILET COTA 2 mai întâi
+  const cota2 = pickCombo(E, RULE_COTA2);
+
+  // 2) excludem meciurile folosite în COTA 2
+  let remaining = E;
+  if (cota2?.selections?.length){
+    const used = new Set(cota2.selections.map(s=>s.id));
+    remaining = excludeByIds(E, used);
   }
 
-  const cota2 = pickCombo(events, RULE_COTA2);
-  const zi = pickCombo(events, RULE_ZI);
+  // 3) construim BILETUL ZILEI din rest (disjunct)
+  const zi = pickCombo(remaining, RULE_ZI);
 
   const dt = new Date().toISOString().slice(0,10);
-  const out = { date: dt, bilet_cota2: cota2 || null, biletul_zilei: zi || null };
-  const md = [];
+  const md=[]; md.push(`# Pariu Verde — ${dt}`,"");
 
-  md.push(`# Pariu Verde — ${dt}`);
-  md.push(``);
-  md.push(`## Bilet cota 2 (2 selecții; țintă ${RULE_COTA2.min}–${RULE_COTA2.max})`);
-  if (cota2) {
-    cota2.selections.forEach(s => {
-      md.push(`- ${s.teams} — **${s.market} @ ${s.odd.toFixed(2)}**`);
+  md.push(`## Bilet cota 2 (2 selecții; ${RULE_COTA2.min}–${RULE_COTA2.max})`);
+  if (cota2){
+    cota2.selections.forEach(s=>{
+      md.push(`- [${s.sport}] ${s.teams} — **${s.market} @ ${s.odd.toFixed(2)}**`);
+      if (s.competition) md.push(`  - Competiție: ${s.competition}`);
       md.push(`  - Link: ${s.url}`);
     });
     md.push(`- **Cota totală:** ${cota2.product}`);
-  } else {
-    md.push(`- (nu am găsit combinație validă azi)`);
-  }
-  md.push(``);
-  md.push(`## Biletul zilei (4 selecții; țintă ${RULE_ZI.min}–${RULE_ZI.max})`);
-  if (zi) {
-    zi.selections.forEach(s => {
-      md.push(`- ${s.teams} — **${s.market} @ ${s.odd.toFixed(2)}**`);
+  } else md.push(`- (nu am găsit combinație validă azi)`);
+
+  md.push("",`## Biletul zilei (4 selecții; ${RULE_ZI.min}–${RULE_ZI.max}) — fără suprapunere cu Cota 2`);
+  if (zi){
+    zi.selections.forEach(s=>{
+      md.push(`- [${s.sport}] ${s.teams} — **${s.market} @ ${s.odd.toFixed(2)}**`);
+      if (s.competition) md.push(`  - Competiție: ${s.competition}`);
       md.push(`  - Link: ${s.url}`);
     });
     md.push(`- **Cota totală:** ${zi.product}`);
-  } else {
-    md.push(`- (nu am găsit combinație validă azi)`);
-  }
+  } else md.push(`- (nu am găsit combinație validă în setul rămas)`);
 
-  await fs.writeFile("tickets.json", JSON.stringify(out, null, 2), "utf8");
+  const out = { date: dt, bilet_cota2: cota2||null, biletul_zilei: zi||null };
+  await fs.writeFile("tickets.json", JSON.stringify(out,null,2), "utf8");
   await fs.writeFile("tickets.md", md.join("\n"), "utf8");
-  console.log("[OK] tickets.json & tickets.md generate cu reguli noi");
+  console.log("[OK] tickets.json & tickets.md generate (disjunct + competiții prioritizate)");
 })();
