@@ -1,74 +1,45 @@
-name: Flashscore.mobi Scraper + Tickets
+name: Scrape Flashscore mobi
 
 on:
-  schedule:
-    # 07:30 Europe/Bucharest ≈ 04:30 UTC
-    - cron: "30 4 * * *"
   workflow_dispatch:
-    inputs:
-      day_offset:
-        description: "Zi: 0=azi, 1=maine, 2=poimaine"
-        required: false
-        default: "1"
-      max_matches:
-        description: "Limită meciuri"
-        required: false
-        default: "50"
+  schedule:
+    - cron: "30 4 * * *"  # 07:30 Europe/Bucharest ≈ 04:30 UTC
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      DAY_OFFSET: ${{ github.event.inputs.day_offset || '1' }}
-      MAX_MATCHES: ${{ github.event.inputs.max_matches || '50' }}
-
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: Install deps
-        run: npm install
+        run: npm i
 
-      - name: Run scraper
-        run: npm run scrape
+      - name: Run scraper (football, d=1)
+        # setează DAY_OFFSET aici (0=today, 1=tomorrow)
+        run: node scrape_mobi.js
+        env:
+          DAY_OFFSET: "1"
+          MAX_MATCHES: "60"
 
-      - name: Build tickets (Biletul zilei + Cota 2)
-        run: npm run tickets
-
-      - name: Upload matches.json
+      - name: Upload JSONs
         uses: actions/upload-artifact@v4
         with:
-          name: matches-d${{ env.DAY_OFFSET }}
-          path: matches.json
-          if-no-files-found: ignore
-
-      - name: Upload odds.json
-        uses: actions/upload-artifact@v4
-        with:
-          name: odds-d${{ env.DAY_OFFSET }}
-          path: odds.json
-          if-no-files-found: ignore
-
-      - name: Upload tickets (JSON + Markdown)
-        uses: actions/upload-artifact@v4
-        with:
-          name: tickets-d${{ env.DAY_OFFSET }}
+          name: json-output
           path: |
-            tickets.json
-            tickets.md
-          if-no-files-found: error
+            matches.json
+            odds.json
 
       - name: Upload debug HTML
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-html-d${{ env.DAY_OFFSET }}
+          name: debug-html
           path: |
             list.html
             match-*.html
-          if-no-files-found: ignore
