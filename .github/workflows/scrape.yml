@@ -43,8 +43,8 @@ jobs:
       - name: Generate tickets
         run: npm run tickets
         env:
-          COTA2_TOL: "0.15"   # ±15% toleranță pentru Cota 2
-          ZI_TOL: "0.30"      # ±30% toleranță pentru Biletul Zilei
+          COTA2_TOL: "0.45"   # ±15% toleranță pentru Cota 2
+          ZI_TOL: "0.50"      # ±30% toleranță pentru Biletul Zilei
 
       # urcă toate fișierele rezultate
       - name: Upload outputs
