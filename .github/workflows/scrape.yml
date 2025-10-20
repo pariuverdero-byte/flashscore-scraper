@@ -1,13 +1,26 @@
-name: Scrape Flashscore mobi + Tickets
+name: Scrape Flashscore mobi + Tickets + WordPress
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 4 * * *"  # ~07:30 Europe/Bucharest
+    - cron: "30 4 * * *"  # ~07:30 Europe/Bucharest (04:30 UTC)
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
+
+    env:
+      # poți schimba în "1" pentru meciurile de mâine
+      DAY_OFFSET: "0"
+      MAX_MATCHES: "60"
+      CONCURRENCY: "6"
+      FETCH_TIMEOUT_MS: "12000"
+      RETRIES: "1"
+      GLOBAL_HARD_STOP_MS: "150000"
+      INCLUDE_LIVE: "false"
+      # toleranțe bilete
+      COTA2_TOL: "0.15"   # ±15% pentru Cota 2 (țintă 1.90–2.50)
+      ZI_TOL: "0.30"      # ±30% pentru Biletul Zilei (țintă 4.00–6.00)
 
     steps:
       - uses: actions/checkout@v4
@@ -21,32 +34,27 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-npm-cheerio-1.0.0-rc.12
+          key: ${{ runner.os }}-npm-shared-cheerio-nodefetch
           restore-keys: |
             ${{ runner.os }}-npm-
 
-      - name: Install cheerio
-        run: npm install cheerio@^1.0.0-rc.12 --no-fund --no-audit --prefer-offline
+      # Instalăm doar ce avem nevoie pentru scripturi: cheerio + node-fetch@3
+      - name: Install minimal deps
+        run: |
+          npm install cheerio@^1.0.0-rc.12 node-fetch@^3 --no-fund --no-audit --prefer-offline
 
       # --- SCRAPER ---
       - name: Run scraper (football)
         timeout-minutes: 5
-        env:
-          DAY_OFFSET: "0"             # 0 = azi (filtrăm doar programate), 1 = mâine
-          MAX_MATCHES: "60"
-          CONCURRENCY: "6"
-          FETCH_TIMEOUT_MS: "12000"
-          RETRIES: "1"
-          GLOBAL_HARD_STOP_MS: "150000"
-          INCLUDE_LIVE: "false"       # păstrăm doar programatele
         run: node scrape_mobi.js
 
-      # --- GENERATOR BILETE ---
+      # --- GENERATOR BILETE (JSON + MD) ---
       - name: Generate tickets
-        env:
-          COTA2_TOL: "0.15"           # ±15% toleranță pentru Cota 2 (2 selecții, țintă 1.90–2.50)
-          ZI_TOL: "0.30"              # ±30% toleranță pentru Biletul Zilei (4 selecții, țintă 4.00–6.00)
         run: node generate_tickets.js
+
+      # --- HTML pentru WordPress ---
+      - name: Generate WordPress HTML
+        run: node generate_wp.js
 
       # --- ARTEFACTE BRUTE (HTML + JSON) ---
       - name: Upload outputs
@@ -69,3 +77,15 @@ jobs:
           path: |
             tickets.json
             tickets.md
+            cota2.html
+            biletul-zilei.html
+
+      # --- PUBLICARE WORDPRESS ---
+      # Necesită secrets setate în repo: WP_URL, WP_USER, WP_APP_PASS
+      - name: Publish posts to WordPress
+        if: success()
+        env:
+          WP_URL: ${{ secrets.WP_URL }}
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+        run: node publish_wp.js
