@@ -1,45 +1,41 @@
-name: Scrape Flashscore mobi
+name: Scrape Flashscore mobi (fast-safe)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 4 * * *"  # 07:30 Europe/Bucharest ≈ 04:30 UTC
+    - cron: "30 4 * * *"
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install deps
-        run: npm i
+      - name: Install cheerio
+        run: npm install cheerio@^1.0.0-rc.12
 
       - name: Run scraper (football, d=1)
-        # setează DAY_OFFSET aici (0=today, 1=tomorrow)
-        run: node scrape_mobi.js
+        timeout-minutes: 5
         env:
           DAY_OFFSET: "1"
-          MAX_MATCHES: "60"
+          MAX_MATCHES: "36"
+          CONCURRENCY: "6"
+          FETCH_TIMEOUT_MS: "12000"
+          RETRIES: "1"
+          GLOBAL_HARD_STOP_MS: "150000"
+        run: node scrape_mobi.js
 
-      - name: Upload JSONs
-        uses: actions/upload-artifact@v4
-        with:
-          name: json-output
-          path: |
-            matches.json
-            odds.json
-
-      - name: Upload debug HTML
+      - name: Upload outputs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-html
+          name: output
           path: |
             list.html
             match-*.html
+            matches.json
+            odds.json
