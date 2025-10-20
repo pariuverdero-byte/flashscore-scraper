@@ -1,4 +1,4 @@
-// generate_wp.js
+// generate_wp.js (versiune completă, cu linkuri în <a target="_blank">)
 import fs from "fs/promises";
 
 const INPUT = "tickets.json";
@@ -26,12 +26,19 @@ function tableHTML(title, selections, dateLabel){
   html+=`<h2>${esc(title)}</h2>\n<p><em>${esc(dateLabel)}</em></p>\n`;
   html+=`<table class="bilet-pariu">\n<thead>\n<tr><th>Eveniment</th><th>Sport/Țară</th><th>Ora (RO)</th><th>Pariu propus</th><th>Cotă</th></tr>\n</thead>\n<tbody>\n`;
   let total=1;
-  selections.forEach((s,i)=>{ total*=Number(s.odd)||1; const attr=i>=1?` data-status="pending"`:"";
-    html+=`<tr${attr}>\n<td>${esc(s.teams)}</td>\n<td>${esc(sportTara(s))}</td>\n<td>${esc(s.time||"")}</td>\n<td>${esc(marketLabel(s.market))}</td>\n<td>${Number(s.odd).toFixed(2)}</td>\n</tr>\n`; });
+  selections.forEach((s,i)=>{ 
+    total*=Number(s.odd)||1; 
+    const attr=i>=1?` data-status="pending"`:"";
+    const ev = s.url 
+      ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.teams)}</a>`
+      : esc(s.teams);
+    html+=`<tr${attr}>\n<td>${ev}</td>\n<td>${esc(s.sport?sportTara(s):sportTara({sport:"Fotbal", competition:s.competition}))}</td>\n<td>${esc(s.time||"")}</td>\n<td>${esc(marketLabel(s.market))}</td>\n<td>${Number(s.odd).toFixed(2)}</td>\n</tr>\n`; 
+  });
   html+=`<tr class="total"><td colspan="4"><strong>Cotă totală</strong></td><td><strong>${total.toFixed(2)}</strong></td></tr>\n`;
   html+=`</tbody>\n</table>\n<h3>Analiza selecțiilor</h3>\n`;
   selections.forEach(s=>{ html+=`<p>${esc(analysis(s))}</p>\n`; });
-  html+=`\n<p>[status_bilet]</p>\n`; return html;
+  html+=`\n<p>[status_bilet]</p>\n`; 
+  return html;
 }
 
 (async()=>{
