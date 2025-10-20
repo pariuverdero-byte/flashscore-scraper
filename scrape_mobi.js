@@ -10,7 +10,7 @@ const CONCURRENCY = Number(process.env.CONCURRENCY || 6);
 const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS || 12000);
 const RETRIES = Number(process.env.RETRIES || 1);
 const GLOBAL_HARD_STOP_MS = Number(process.env.GLOBAL_HARD_STOP_MS || 150000);
-const INCLUDE_LIVE = String(process.env.INCLUDE_LIVE || "false").toLowerCase() === "true"; // dacă vrei live
+const INCLUDE_LIVE = String(process.env.INCLUDE_LIVE || "false").toLowerCase() === "true";
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
@@ -69,7 +69,7 @@ function getTeamsFromPrevText($, aEl) {
       }
     }
   }
-  const parentTxt = cheerio(parent).text().replace(/\s+/g, " ").trim();
+  const parentTxt = $(parent).text().replace(/\s+/g, " ").trim(); // <-- FIX: $(parent)
   if (parentTxt.includes(" - ")) {
     return parentTxt.replace(/\s+-:-.*$/, "").replace(/\s+\d+:\d+.*$/, "").trim();
   }
@@ -85,7 +85,7 @@ function getTimeFromPrevSpan($, aEl) {
   for (let i = idx - 1; i >= 0; i--) {
     const n = nodes[i];
     if (n.type === "tag" && n.name === "span") {
-      const t = cheerio(n).text().trim();
+      const t = $(n).text().trim(); // <-- FIX: $(n)
       if (/^\d{1,2}:\d{2}$/.test(t)) return t;
       break;
     }
@@ -107,7 +107,6 @@ async function listMatches(offset) {
     const cls = ($(el).attr("class") || "").trim(); // "sched" | "live" | "fin"
     if (!href) return;
 
-    // vrem doar programate; opțional, includem live dacă INCLUDE_LIVE=true
     if (!INCLUDE_LIVE && (cls.includes("live") || cls.includes("fin"))) return;
     if (cls.includes("fin")) return;
 
@@ -122,7 +121,7 @@ async function listMatches(offset) {
     const teams = getTeamsFromPrevText($, el);
     if (!teams) return;
 
-    const ko = getTimeFromPrevSpan($, el); // "21:00" etc.
+    const ko = getTimeFromPrevSpan($, el);
 
     seen.add(id);
     rows.push({ id, url: full, teams, status: cls || "sched", time: ko || null });
@@ -155,7 +154,6 @@ function parseOddsFromHtml(html) {
 }
 
 async function scrapeOne(match, idx) {
-  // safety: nu procesa dacă nu e programat, decât dacă e explicit permis live
   if (!INCLUDE_LIVE && match.status && match.status !== "sched") {
     return [];
   }
