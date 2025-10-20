@@ -1,4 +1,4 @@
-name: Scrape Flashscore mobi (fast-safe)
+name: Scrape Flashscore mobi + Tickets
 
 on:
   workflow_dispatch:
@@ -14,9 +14,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"   # fără cache:"npm" — nu avem lockfile
+          node-version: "20"   # fără cache:"npm" (nu avem lockfile)
 
-      # Cache pentru ~/.npm (nu are nevoie de lockfile)
+      # Cache pentru ~/.npm (nu necesită lockfile)
       - name: Cache npm dir
         uses: actions/cache@v4
         with:
@@ -28,25 +28,27 @@ jobs:
       - name: Install cheerio
         run: npm install cheerio@^1.0.0-rc.12 --no-fund --no-audit --prefer-offline
 
-      - name: Run scraper (football, d=1)
+      # --- SCRAPER ---
+      - name: Run scraper (football)
         timeout-minutes: 5
         env:
-          DAY_OFFSET: "0"             # 0=today, 1=tomorrow
-          MAX_MATCHES: "36"
+          DAY_OFFSET: "0"             # 0 = azi (filtrăm doar programate), 1 = mâine
+          MAX_MATCHES: "60"
           CONCURRENCY: "6"
           FETCH_TIMEOUT_MS: "12000"
           RETRIES: "1"
           GLOBAL_HARD_STOP_MS: "150000"
+          INCLUDE_LIVE: "false"       # păstrăm doar programatele
         run: node scrape_mobi.js
 
-      # 🆕 generează biletele din odds.json
+      # --- GENERATOR BILETE ---
       - name: Generate tickets
-        run: npm run tickets
         env:
-          COTA2_TOL: "0.45"   # ±15% toleranță pentru Cota 2
-          ZI_TOL: "0.50"      # ±30% toleranță pentru Biletul Zilei
+          COTA2_TOL: "0.15"           # ±15% toleranță pentru Cota 2 (2 selecții, țintă 1.90–2.50)
+          ZI_TOL: "0.30"              # ±30% toleranță pentru Biletul Zilei (4 selecții, țintă 4.00–6.00)
+        run: node generate_tickets.js
 
-      # urcă toate fișierele rezultate
+      # --- ARTEFACTE BRUTE (HTML + JSON) ---
       - name: Upload outputs
         if: always()
         uses: actions/upload-artifact@v4
@@ -57,5 +59,13 @@ jobs:
             match-*.html
             matches.json
             odds.json
+
+      # --- BILETE (FINAL) ---
+      - name: Upload tickets
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tickets
+          path: |
             tickets.json
             tickets.md
