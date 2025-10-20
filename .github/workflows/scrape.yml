@@ -3,20 +3,30 @@ name: Scrape Flashscore mobi (fast-safe)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 4 * * *"
+    - cron: "30 4 * * *"  # 07:30 Europe/Bucharest ~ 04:30 UTC
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
 
       - name: Install cheerio
-        run: npm install cheerio@^1.0.0-rc.12
+        run: npm install cheerio@^1.0.0-rc.12 --no-fund --no-audit --prefer-offline
 
       - name: Run scraper (football, d=1)
         timeout-minutes: 5
