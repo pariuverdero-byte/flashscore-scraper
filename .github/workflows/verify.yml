@@ -1,0 +1,39 @@
+name: Verify tickets & update WP
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Din oră în oră noaptea + o rulare dimineața (tunează după nevoie)
+    - cron: "0 18-23 * * *"   # 21:00-00:00 RO (UTC+3 ⇒ 18-21 UTC)
+    - cron: "0 0-2 * * *"     # 03:00-05:00 RO (UTC+3 ⇒ 00-02 UTC)
+    - cron: "0 5 * * *"       # 08:00 RO (UTC+3 ⇒ 05:00 UTC)
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache npm dir
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-verify
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      - name: Install deps
+        run: |
+          npm install cheerio@^1.0.0-rc.12 node-fetch@^3 --no-fund --no-audit --prefer-offline
+
+      - name: Verify and update posts
+        env:
+          WP_URL: ${{ secrets.WP_URL }}
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+          MAX_POSTS_PER_CAT: "8"
+        run: node verify_and_update_wp.js
