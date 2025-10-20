@@ -3,7 +3,7 @@ name: Scrape Flashscore mobi (fast-safe)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 4 * * *"  # 07:30 Europe/Bucharest ~ 04:30 UTC
+    - cron: "30 4 * * *"  # ~07:30 Europe/Bucharest
 
 jobs:
   scrape:
@@ -14,14 +14,14 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: "npm"
+          node-version: "20"   # FARA cache:"npm"
 
-      - name: Cache node_modules
+      # Cache pentru ~/.npm (nu are nevoie de lockfile)
+      - name: Cache npm dir
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('package.json') }}
+          key: ${{ runner.os }}-npm-cheerio-1.0.0-rc.12
           restore-keys: |
             ${{ runner.os }}-npm-
 
@@ -31,7 +31,7 @@ jobs:
       - name: Run scraper (football, d=1)
         timeout-minutes: 5
         env:
-          DAY_OFFSET: "1"
+          DAY_OFFSET: "1"             # 0=today, 1=tomorrow
           MAX_MATCHES: "36"
           CONCURRENCY: "6"
           FETCH_TIMEOUT_MS: "12000"
