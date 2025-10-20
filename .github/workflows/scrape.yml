@@ -14,7 +14,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"   # FARA cache:"npm"
+          node-version: "20"   # fără cache:"npm" — nu avem lockfile
 
       # Cache pentru ~/.npm (nu are nevoie de lockfile)
       - name: Cache npm dir
@@ -39,6 +39,14 @@ jobs:
           GLOBAL_HARD_STOP_MS: "150000"
         run: node scrape_mobi.js
 
+      # 🆕 generează biletele din odds.json
+      - name: Generate tickets
+        run: npm run tickets
+        env:
+          COTA2_TOL: "0.15"   # ±15% toleranță pentru Cota 2
+          ZI_TOL: "0.30"      # ±30% toleranță pentru Biletul Zilei
+
+      # urcă toate fișierele rezultate
       - name: Upload outputs
         if: always()
         uses: actions/upload-artifact@v4
@@ -49,3 +57,5 @@ jobs:
             match-*.html
             matches.json
             odds.json
+            tickets.json
+            tickets.md
