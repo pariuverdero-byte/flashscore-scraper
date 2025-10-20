@@ -3,61 +3,53 @@ name: Scrape Flashscore mobi + Tickets + WordPress
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 4 * * *"  # ~07:30 Europe/Bucharest (04:30 UTC)
+    - cron: "30 4 * * *"  # 07:30 Europe/Bucharest (04:30 UTC)
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
 
     env:
-      # poți schimba în "1" pentru meciurile de mâine
-      DAY_OFFSET: "0"
+      DAY_OFFSET: "0"          # 0=azi, 1=mâine
       MAX_MATCHES: "60"
       CONCURRENCY: "6"
       FETCH_TIMEOUT_MS: "12000"
       RETRIES: "1"
       GLOBAL_HARD_STOP_MS: "150000"
       INCLUDE_LIVE: "false"
-      # toleranțe bilete
-      COTA2_TOL: "0.15"   # ±15% pentru Cota 2 (țintă 1.90–2.50)
-      ZI_TOL: "0.30"      # ±30% pentru Biletul Zilei (țintă 4.00–6.00)
+      COTA2_TOL: "0.15"
+      ZI_TOL: "0.30"
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"   # fără cache:"npm" (nu avem lockfile)
+          node-version: "20"
 
-      # Cache pentru ~/.npm (nu necesită lockfile)
       - name: Cache npm dir
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-npm-shared-cheerio-nodefetch
+          key: ${{ runner.os }}-npm-scraper
           restore-keys: |
             ${{ runner.os }}-npm-
 
-      # Instalăm doar ce avem nevoie pentru scripturi: cheerio + node-fetch@3
       - name: Install minimal deps
         run: |
           npm install cheerio@^1.0.0-rc.12 node-fetch@^3 --no-fund --no-audit --prefer-offline
 
-      # --- SCRAPER ---
       - name: Run scraper (football)
         timeout-minutes: 5
         run: node scrape_mobi.js
 
-      # --- GENERATOR BILETE (JSON + MD) ---
       - name: Generate tickets
         run: node generate_tickets.js
 
-      # --- HTML pentru WordPress ---
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
-      # --- ARTEFACTE BRUTE (HTML + JSON) ---
-      - name: Upload outputs
+      - name: Upload artifacts (raw)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -68,8 +60,7 @@ jobs:
             matches.json
             odds.json
 
-      # --- BILETE (FINAL) ---
-      - name: Upload tickets
+      - name: Upload artifacts (tickets)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -80,8 +71,6 @@ jobs:
             cota2.html
             biletul-zilei.html
 
-      # --- PUBLICARE WORDPRESS ---
-      # Necesită secrets setate în repo: WP_URL, WP_USER, WP_APP_PASS
       - name: Publish posts to WordPress
         if: success()
         env:
