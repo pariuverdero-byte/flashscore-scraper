@@ -18,7 +18,7 @@ jobs:
       GLOBAL_HARD_STOP_MS: "150000"
       INCLUDE_LIVE: "false"
       COTA2_TOL: "0.15"
-      ZI_TOL: "0.30"
+      ZI_TOL:   "0.30"
 
     steps:
       - uses: actions/checkout@v4
@@ -39,16 +39,36 @@ jobs:
         run: |
           npm install cheerio@^1.0.0-rc.12 node-fetch@^3 --no-fund --no-audit --prefer-offline
 
+      # 1) Scrape Flashscore.mobi (matches + 1X2 from mobi)
       - name: Run scraper (football)
         timeout-minutes: 5
         run: node scrape_mobi.js
 
-      - name: Generate tickets
-        run: node generate_tickets.js
+      # 2) Extra odds: OddsPortal (football) + BetExplorer (tennis/basket) + TheOddsAPI fallback (O/U)
+      - name: Odds (combo HTML + API)
+        env:
+          DAY_OFFSET: ${{ env.DAY_OFFSET }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}   # optional: the-odds-api.com
+          ODDS_REGION: "eu"
+        run: node scrape_odds_combo.js
 
+      # 3) Build tickets with the new engine (uses matches.json, odds.json, odds_extra.json)
+      - name: Build tickets (engine)
+        env:
+          DAY_OFFSET: ${{ env.DAY_OFFSET }}
+          C2_MIN: "1.9"
+          C2_MAX: "2.5"
+          C2_TOL: ${{ env.COTA2_TOL }}    # map tolerances from your existing env
+          BZ_MIN: "4.0"
+          BZ_MAX: "6.0"
+          BZ_TOL: ${{ env.ZI_TOL }}
+        run: node engine.js
+
+      # (kept) Generate WordPress-ready HTML snippets
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
+      # Artifacts: raw scrape + odds
       - name: Upload artifacts (raw)
         if: always()
         uses: actions/upload-artifact@v4
@@ -59,7 +79,9 @@ jobs:
             match-*.html
             matches.json
             odds.json
+            odds_extra.json
 
+      # Artifacts: tickets + HTML
       - name: Upload artifacts (tickets)
         if: always()
         uses: actions/upload-artifact@v4
@@ -71,6 +93,7 @@ jobs:
             cota2.html
             biletul-zilei.html
 
+      # (kept) Publish to WordPress via your existing script
       - name: Publish posts to WordPress
         if: success()
         env:
