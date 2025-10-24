@@ -1,4 +1,4 @@
-// scrape_mobi.js — Flashscore.mobi (kept simple) + competition heading capture
+// scrape_mobi.js — PATCHED: robust match list + clean competition names
 import fs from "fs/promises";
 import * as cheerio from "cheerio";
 
@@ -13,8 +13,18 @@ async function fetchText(url) {
   return await r.text();
 }
 const absUrl = (href)=> { try { return new URL(href, BASE).toString(); } catch { return null; } };
+const normSpace = (s="") => s.replace(/\s+/g," ").trim();
 
-function normSpace(s=""){ return s.replace(/\s+/g," ").trim(); }
+// NEW: strip “Standings”, “Table”, trailing links etc.
+function cleanCompetition(h4Text="") {
+  let t = h4Text.replace(/\s*Standings.*$/i, "")
+                .replace(/\s*Table.*$/i, "")
+                .replace(/\s*Classification.*$/i, "")
+                .replace(/\s*\|.*$/,"")
+                .trim();
+  // Also normalize multiple spaces
+  return normSpace(t);
+}
 
 async function listMatches(offset) {
   const url = `${BASE}/?d=${offset}`;
@@ -25,18 +35,17 @@ async function listMatches(offset) {
   const rows = [];
   const seen = new Set();
 
-  // Track last <h4> heading like "ENGLAND: Premier League"
   let lastComp = "";
 
+  // Primary path: traverse #score-data children
   $("#score-data").children().each((_, el) => {
     const node = $(el);
 
     if (node.is("h4")) {
-      lastComp = normSpace(node.text());
+      lastComp = cleanCompetition(normSpace(node.text()));
       return;
     }
 
-    // match links
     node.find('a[href^="/match/"]').each((__, a) => {
       const href = $(a).attr("href");
       if (!href) return;
@@ -45,14 +54,13 @@ async function listMatches(offset) {
       const id = m ? m[1] : null;
       if (!id || seen.has(id)) return;
 
-      // teams text is around link; use parent text
+      // Try to extract "Home - Away"
+      // Example line looks like: <span>21:00</span>West Ham - Brentford <a ...>-:-</a>
       const parentTxt = normSpace(node.text());
-      // Try to isolate e.g. "West Ham - Brentford"
       let teams = "";
       const m2 = parentTxt.match(/([^\n]+ - [^\n]+)\s/);
-      teams = m2 ? normSpace(m2[1]) : normSpace($(a).prevAll().addBack().parent().text());
+      teams = m2 ? normSpace(m2[1]) : normSpace($(a).parent().text()).replace(/-:-.*$/,"").trim();
 
-      // kickoff time (if present)
       const time = node.find("span").first().text().trim() || "";
 
       seen.add(id);
@@ -61,17 +69,46 @@ async function listMatches(offset) {
         teams,
         url: full,
         time,
-        competition: lastComp || "",   // <— NEW
-        sport: "Fotbal"
+        competition: lastComp || "",   // CLEANED
+        sport: "Fotbal",
       });
     });
   });
+
+  // Fallback parser if nothing found (structure sometimes differs)
+  if (rows.length === 0) {
+    $('a[href^="/match/"]').each((_, a) => {
+      const href = $(a).attr("href");
+      if (!href) return;
+      const full = absUrl(href.includes("?") ? `${href}&d=${offset}` : `${href}?d=${offset}`);
+      const m = /\/match\/([^/]+)\//i.exec(full || "");
+      const id = m ? m[1] : null;
+      if (!id || seen.has(id)) return;
+
+      const block = $(a).closest("div, p, li");
+      const blockTxt = normSpace(block.text());
+      const m2 = blockTxt.match(/([^\n]+ - [^\n]+)\s/);
+      const teams = m2 ? normSpace(m2[1]) : normSpace(blockTxt.split("-:-")[0] || "");
+      const time = block.find("span").first().text().trim() || "";
+
+      // Walk up to find nearest h4 for comp
+      let comp = "";
+      let p = block.prev();
+      while (p.length) {
+        if (p.is("h4")) { comp = cleanCompetition(normSpace(p.text())); break; }
+        p = p.prev();
+      }
+
+      seen.add(id);
+      rows.push({ id, teams, url: full, time, competition: comp, sport: "Fotbal" });
+    });
+  }
 
   console.log(`[list] found ${rows.length} matches for d=${offset}`);
   return rows.slice(0, MAX_MATCHES);
 }
 
-// 1X2 odds from <p class="odds-detail"> on match page (keep your working method)
+// Odds on match page (kept)
 function parseOddsFromHtml(html) {
   const $ = cheerio.load(html);
   const oddsEl = $("p.odds-detail").first();
@@ -90,7 +127,6 @@ async function scrapeMatch(match, i) {
   if (i < 3) await fs.writeFile(`match-${i + 1}-${match.id}.html`, html, "utf8");
   const odds = parseOddsFromHtml(html);
   if (!odds) return [];
-
   return [
     { id: match.id, teams: match.teams, market: "1", odd: odds.o1, url: match.url },
     { id: match.id, teams: match.teams, market: "X", odd: odds.ox, url: match.url },
