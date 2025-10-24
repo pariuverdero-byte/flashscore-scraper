@@ -51,10 +51,15 @@ jobs:
         timeout-minutes: 5
         run: node scrape_mobi.js
 
-      # 2) Odds from Flashscore mobi "Odds" tab (?s=5) — static HTML
+      # 2) Odds from Flashscore mobi "Odds" tab (?s=5) — static HTML (may be empty if odds load via JS)
       - name: Run scraper (Flashscore Odds tab)
         timeout-minutes: 5
         run: node scrape_odds_tab.js
+
+      # 2b) Odds from BetExplorer (static HTML) — merges onto matches.json and writes odds.json
+      - name: Run scraper (BetExplorer — soccer odds)
+        timeout-minutes: 5
+        run: node scrape_betexplorer.js
 
       # 3) (Optional) Merge odds from The Odds API (h2h + totals)
       #    Safe to run even if no key is set — script will write odds_debug.json with info
@@ -83,10 +88,12 @@ jobs:
           path: |
             list.html
             list-odds.html
+            list-betexplorer.html
             match-*.html
             matches.json
             odds.json
             odds_tab.json
+            odds_betexplorer.json
             odds_extra.json
             odds_debug.json
 
