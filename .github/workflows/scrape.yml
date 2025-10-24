@@ -80,6 +80,7 @@ jobs:
             matches.json
             odds.json
             odds_extra.json
+            odds_debug.json   
 
       # Artifacts: tickets + HTML
       - name: Upload artifacts (tickets)
