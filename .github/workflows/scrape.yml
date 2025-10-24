@@ -1,4 +1,4 @@
-name: Scrape Flashscore mobi + Tickets + WordPress
+name: Scrape Flashscore mobi + Odds + Tickets + WordPress
 
 on:
   workflow_dispatch:
@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
+      # Scraper controls
       DAY_OFFSET: "0"          # 0=azi, 1=mâine
       MAX_MATCHES: "60"
       CONCURRENCY: "6"
@@ -17,8 +18,14 @@ jobs:
       RETRIES: "1"
       GLOBAL_HARD_STOP_MS: "150000"
       INCLUDE_LIVE: "false"
+
+      # Ticket tolerances (folosite de generate_tickets.js)
       COTA2_TOL: "0.15"
-      ZI_TOL:   "0.30"
+      ZI_TOL: "0.30"
+
+      # Odds API (opțional; dacă nu e setat, scriptul scrie odds_debug cu mesaj)
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      ODDS_REGION: "eu"
 
     steps:
       - uses: actions/checkout@v4
@@ -39,36 +46,35 @@ jobs:
         run: |
           npm install cheerio@^1.0.0-rc.12 node-fetch@^3 --no-fund --no-audit --prefer-offline
 
-      # 1) Scrape Flashscore.mobi (matches + 1X2 from mobi)
-      - name: Run scraper (football)
+      # 1) Fixture scraper (Flashscore mobi main page)
+      - name: Run scraper (fixtures - football)
         timeout-minutes: 5
         run: node scrape_mobi.js
 
-      # 2) Extra odds: OddsPortal (football) + BetExplorer (tennis/basket) + TheOddsAPI fallback (O/U)
-      - name: Odds (combo HTML + API)
-        env:
-          DAY_OFFSET: ${{ env.DAY_OFFSET }}
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}   # optional: the-odds-api.com
-          ODDS_REGION: "eu"
-        run: node scrape_odds_combo.js
+      # 2) Odds from Flashscore mobi "Odds" tab (?s=5) — static HTML
+      - name: Run scraper (Flashscore Odds tab)
+        timeout-minutes: 5
+        run: node scrape_odds_tab.js
 
-      # 3) Build tickets with the new engine (uses matches.json, odds.json, odds_extra.json)
-      - name: Build tickets (engine)
-        env:
-          DAY_OFFSET: ${{ env.DAY_OFFSET }}
-          C2_MIN: "1.9"
-          C2_MAX: "2.5"
-          C2_TOL: ${{ env.COTA2_TOL }}    # map tolerances from your existing env
-          BZ_MIN: "4.0"
-          BZ_MAX: "6.0"
-          BZ_TOL: ${{ env.ZI_TOL }}
-        run: node engine.js
+      # 3) (Optional) Merge odds from The Odds API (h2h + totals)
+      #    Safe to run even if no key is set — script will write odds_debug.json with info
+      - name: Merge (optional) The Odds API odds
+        timeout-minutes: 5
+        run: |
+          if [ -f "scrape_odds_combo.js" ]; then
+            node scrape_odds_combo.js
+          else
+            echo "scrape_odds_combo.js not present, skipping."
+          fi
 
-      # (kept) Generate WordPress-ready HTML snippets
+      # 4) Generate tickets and WordPress HTML
+      - name: Generate tickets
+        run: node generate_tickets.js
+
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
-      # Artifacts: raw scrape + odds
+      # 5) Upload raw artifacts for debugging
       - name: Upload artifacts (raw)
         if: always()
         uses: actions/upload-artifact@v4
@@ -76,13 +82,15 @@ jobs:
           name: output
           path: |
             list.html
+            list-odds.html
             match-*.html
             matches.json
             odds.json
+            odds_tab.json
             odds_extra.json
-            odds_debug.json   
+            odds_debug.json
 
-      # Artifacts: tickets + HTML
+      # 6) Upload ticket outputs
       - name: Upload artifacts (tickets)
         if: always()
         uses: actions/upload-artifact@v4
@@ -94,7 +102,7 @@ jobs:
             cota2.html
             biletul-zilei.html
 
-      # (kept) Publish to WordPress via your existing script
+      # 7) Publish posts to WordPress
       - name: Publish posts to WordPress
         if: success()
         env:
