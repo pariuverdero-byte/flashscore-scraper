@@ -11,7 +11,7 @@ jobs:
 
     env:
       # Scraper controls
-      DAY_OFFSET: "0"          # 0=azi, 1=mâine
+      DAY_OFFSET: "0"           # 0=azi, 1=maine
       MAX_MATCHES: "60"
       CONCURRENCY: "6"
       FETCH_TIMEOUT_MS: "12000"
@@ -23,7 +23,7 @@ jobs:
       COTA2_TOL: "0.15"
       ZI_TOL: "0.30"
 
-      # Odds API (opțional; dacă nu e setat, scriptul scrie odds_debug cu mesaj)
+      # The Odds API (optional; dacă lipsesc, scripturile scriu odds_debug.json cu mesaj)
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
       ODDS_REGION: "eu"
 
@@ -46,23 +46,17 @@ jobs:
         run: |
           npm install cheerio@^1.0.0-rc.12 node-fetch@^3 --no-fund --no-audit --prefer-offline
 
-      # 1) Fixture scraper (Flashscore mobi main page)
+      # 1) Fixtures din Flashscore (mobi)
       - name: Run scraper (fixtures - football)
         timeout-minutes: 5
         run: node scrape_mobi.js
 
-      # 2) Odds from Flashscore mobi "Odds" tab (?s=5) — static HTML (may be empty if odds load via JS)
+      # 2) (Optional) Odds din tab-ul Flashscore ?s=5 (poate fi gol pe unele zile/ligi)
       - name: Run scraper (Flashscore Odds tab)
         timeout-minutes: 5
         run: node scrape_odds_tab.js
 
-      # 2b) Odds from BetExplorer (static HTML) — merges onto matches.json and writes odds.json
-      - name: Run scraper (BetExplorer — soccer odds)
-        timeout-minutes: 5
-        run: node scrape_betexplorer.js
-
-      # 3) (Optional) Merge odds from The Odds API (h2h + totals)
-      #    Safe to run even if no key is set — script will write odds_debug.json with info
+      # 3) (Optional) Merge The Odds API (h2h + totals) — sigur de rulat și fără cheie
       - name: Merge (optional) The Odds API odds
         timeout-minutes: 5
         run: |
@@ -72,14 +66,28 @@ jobs:
             echo "scrape_odds_combo.js not present, skipping."
           fi
 
-      # 4) Generate tickets and WordPress HTML
-      - name: Generate tickets
+      # 4) Generează biletele din datele curente (fără piețe extra încă)
+      - name: Generate tickets (initial)
         run: node generate_tickets.js
 
+      # 5) Augmentează DOAR meciurile selectate cu piețe extra (BetExplorer per-match)
+      - name: Augment odds for selected events (BetExplorer per-match)
+        run: |
+          if [ -f "augment_odds_selected.js" ]; then
+            node augment_odds_selected.js
+          else
+            echo "augment_odds_selected.js not present, skipping."
+          fi
+
+      # 6) Re-generează biletele ținând cont de odds_extra.json (DC / O-U etc.)
+      - name: Generate tickets (with extras)
+        run: node generate_tickets.js
+
+      # 7) Generează HTML pentru WordPress
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
-      # 5) Upload raw artifacts for debugging
+      # 8) Upload raw artifacts (debug)
       - name: Upload artifacts (raw)
         if: always()
         uses: actions/upload-artifact@v4
@@ -88,16 +96,14 @@ jobs:
           path: |
             list.html
             list-odds.html
-            list-betexplorer.html
             match-*.html
             matches.json
             odds.json
             odds_tab.json
-            odds_betexplorer.json
             odds_extra.json
             odds_debug.json
 
-      # 6) Upload ticket outputs
+      # 9) Upload ticket outputs
       - name: Upload artifacts (tickets)
         if: always()
         uses: actions/upload-artifact@v4
@@ -109,7 +115,7 @@ jobs:
             cota2.html
             biletul-zilei.html
 
-      # 7) Publish posts to WordPress
+      # 10) Publică în WordPress
       - name: Publish posts to WordPress
         if: success()
         env:
