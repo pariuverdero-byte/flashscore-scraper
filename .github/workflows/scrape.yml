@@ -23,7 +23,7 @@ jobs:
       COTA2_TOL: "0.15"
       ZI_TOL: "0.30"
 
-      # The Odds API (optional; dacă lipsesc, scripturile scriu odds_debug.json cu mesaj)
+      # The Odds API (optional)
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
       ODDS_REGION: "eu"
 
@@ -51,22 +51,24 @@ jobs:
         timeout-minutes: 5
         run: node scrape_mobi.js
 
-      # 2) (Optional) Odds din tab-ul Flashscore ?s=5 (poate fi gol pe unele zile/ligi)
+      # 2) (optional) Odds din tab-ul Flashscore ?s=5 (poate fi gol pe unele zile/ligi)
       - name: Run scraper (Flashscore Odds tab)
         timeout-minutes: 5
         run: node scrape_odds_tab.js
 
-      # 3) (Optional) Merge The Odds API (h2h + totals) — sigur de rulat și fără cheie
+      # 3) (optional) Merge The Odds API (h2h + totals)
       - name: Merge (optional) The Odds API odds
         timeout-minutes: 5
         run: |
-          if [ -f "scrape_odds_combo.js" ]; then
+          if [ -z "${ODDS_API_KEY}" ]; then
+            echo "ODDS_API_KEY missing -> skipping The Odds API merge"
+          elif [ -f "scrape_odds_combo.js" ]; then
             node scrape_odds_combo.js
           else
             echo "scrape_odds_combo.js not present, skipping."
           fi
 
-      # 4) Construiește odds_extra.json din 1X2 (Double Chance 1X/12/X2 pentru toate meciurile cu 1X2 complet)
+      # 4) Construiește odds_extra.json din 1X2 (Double Chance 1X/12/X2)
       - name: Build odds_extra (derive DC from 1X2)
         run: |
           if [ -f "build_odds_extra_from_1x2.js" ]; then
@@ -79,7 +81,7 @@ jobs:
       - name: Generate tickets (with extras)
         run: node generate_tickets.js
 
-      # 6) (Opțional) Augmentează DOAR meciurile selectate cu alte piețe (e.g., O/U) și re-generează biletele
+      # 6) (opțional) Augmentează DOAR meciurile selectate și re-generează biletele
       - name: Augment odds for selected events (optional per-match)
         run: |
           if [ -f "augment_odds_selected.js" ]; then
