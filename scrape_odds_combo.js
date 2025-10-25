@@ -1,209 +1,156 @@
-// scrape_odds_combo.js — DIAGNOSTICS + tolerant matching + helpful logs
+// scrape_odds_combo.js — robust to new matches.json shape; safe when no API key
 import fs from "fs/promises";
+import fetch from "node-fetch";
 
 const ODDS_API_KEY = process.env.ODDS_API_KEY || "";
-const ODDS_REGION  = process.env.ODDS_REGION || "eu";
-const DAY_OFFSET   = Number(process.env.DAY_OFFSET || 0);
+const ODDS_REGION  = process.env.ODDS_REGION  || "eu";
 
-// ---------- Helpers ----------
-function normName(s = "") {
-  return s.toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9 ]+/g, " ")
-    .replace(/\b(fc|cf|afc|sc|u19|u20|u21|w|women|club|de|da|do|la|el|los|las|the)\b/g, " ")
-    .replace(/\b(st\.|st)\b/g, "saint")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-function keyPair(home, away) { return `${normName(home)}__${normName(away)}`; }
-
-function cleanComp(s=""){
-  return s.replace(/\s*Standings.*$/i,"")
-          .replace(/\s*Table.*$/i,"")
-          .replace(/\s*Classification.*$/i,"")
-          .replace(/\s*\|.*$/,"")
-          .trim();
-}
-
-// Flashscore competition -> Odds API sport_key
-function mapCompetitionToOddsKey(compRaw = "") {
-  const comp = cleanComp(compRaw).toUpperCase();
-  const dict = {
-    "ENGLAND: PREMIER LEAGUE": "soccer_epl",
-    "SPAIN: LALIGA": "soccer_spain_la_liga",
-    "ITALY: SERIE A": "soccer_italy_serie_a",
-    "GERMANY: BUNDESLIGA": "soccer_germany_bundesliga",
-    "FRANCE: LIGUE 1": "soccer_france_ligue_one",
-    "PORTUGAL: LIGA PORTUGAL": "soccer_portugal_primeira_liga",
-    "NETHERLANDS: EREDIVISIE": "soccer_netherlands_eredivisie",
-    "SCOTLAND: PREMIERSHIP": "soccer_scotland_premier_league",
-    "BELGIUM: JUPILER PRO LEAGUE": "soccer_belgium_first_div",
-    "TURKEY: SUPER LIG": "soccer_turkey_super_league",
-    "ROMANIA: SUPERLIGA": "soccer_romania_liga_i",
-    "USA: MLS": "soccer_usa_mls",
-  };
-  if (dict[comp]) return dict[comp];
-
-  // Fuzzy heuristics
-  if (/ENGLAND/.test(comp) && /PREMIER/.test(comp)) return "soccer_epl";
-  if (/SPAIN/.test(comp) && /LALIGA/.test(comp))   return "soccer_spain_la_liga";
-  if (/ITALY/.test(comp) && /SERIE A/.test(comp))   return "soccer_italy_serie_a";
-  if (/GERMANY/.test(comp) && /BUNDES/.test(comp))  return "soccer_germany_bundesliga";
-  if (/FRANCE/.test(comp) && /LIGUE 1/.test(comp))  return "soccer_france_ligue_one";
-  if (/ROMANIA/.test(comp) && /(SUPERLIGA|LIGA I)/.test(comp)) return "soccer_romania_liga_i";
-  return null;
-}
-
-async function fetchJSON(url) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
-  return await r.json();
-}
-async function fetchLeagueOdds(sportKey) {
-  const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds/?regions=${ODDS_REGION}&markets=h2h,totals&oddsFormat=decimal&apiKey=${ODDS_API_KEY}`;
-  return await fetchJSON(url);
-}
-
-// soft contains match: "man utd" in "manchester united"
-function softMatch(a,b){ 
-  const A = normName(a), B = normName(b);
-  return A.length>3 && B.includes(A) || B.length>3 && A.includes(B);
-}
-
-// Try multiple strategies to match a Flashscore pair to an API game record
-function matchGameIdx(idxMap, home, away) {
-  const direct = idxMap.get(keyPair(home, away));
-  if (direct) return direct;
-
-  // Try swapped (bookmakers sometimes list reversed)
-  const swapped = idxMap.get(keyPair(away, home));
-  if (swapped) return swapped;
-
-  // Soft scan
-  for (const [k, arr] of idxMap.entries()) {
-    const [h,a] = k.split("__");
-    if ((softMatch(home,h) && softMatch(away,a)) || (softMatch(home,a) && softMatch(away,h))) {
-      return arr;
-    }
+// --- helpers ---
+async function readJson(path, fallback = null) {
+  try {
+    const txt = await fs.readFile(path, "utf8");
+    return JSON.parse(txt);
+  } catch {
+    return fallback;
   }
-  return null;
 }
 
-(async () => {
-  const debug = { summary:{}, unmappedCompetitions:[], perLeague:{} };
+function getMatchesArray(mjx) {
+  // mjx can be { day, matches:[...] } OR [...] (legacy)
+  if (!mjx) return [];
+  if (Array.isArray(mjx)) return mjx;
+  if (Array.isArray(mjx.matches)) return mjx.matches;
+  return [];
+}
 
-  if (!ODDS_API_KEY) {
-    console.log("No ODDS_API_KEY set. Skipping odds_extra.");
-    await fs.writeFile("odds_extra.json", JSON.stringify({}, null, 2), "utf8");
-    await fs.writeFile("odds_debug.json", JSON.stringify({error:"ODDS_API_KEY missing"}, null, 2), "utf8");
+function splitTeams(s = "") {
+  const [home, away] = String(s).split(" - ").map(t => t?.trim()).filter(Boolean);
+  return { home, away };
+}
+
+// Optional: map country/league to sport key for The Odds API
+// For now, we only try "soccer" and bail gracefully.
+function sportKeyFor(m) {
+  return "soccer";
+}
+
+// --- main ---
+(async () => {
+  // 1) Load matches
+  const matchesJson = await readJson("matches.json", null);
+  const matches = getMatchesArray(matchesJson);
+
+  if (!matches.length) {
+    await fs.writeFile("odds_extra.json", JSON.stringify({ events: [], info: "no matches" }, null, 2));
+    console.log("[odds-combo] No matches found; wrote empty odds_extra.json");
     return;
   }
 
-  const matches = JSON.parse(await fs.readFile("matches.json", "utf8"));
-  debug.summary.flashscoreMatches = matches.length;
-
-  // Group by sportKey + track unmapped
-  const grouped = new Map();
-  const unmappedSet = new Set();
-
-  for (const m of matches) {
-    const sk = mapCompetitionToOddsKey(m.competition || "");
-    if (!sk) { unmappedSet.add(cleanComp(m.competition||"")); continue; }
-    if (!grouped.has(sk)) grouped.set(sk, []);
-    grouped.get(sk).push(m);
+  // 2) If no API key, write stub and exit OK (so workflow doesn't fail)
+  if (!ODDS_API_KEY) {
+    await fs.writeFile(
+      "odds_extra.json",
+      JSON.stringify({ events: [], info: "ODDS_API_KEY not set; skipping API fetch." }, null, 2)
+    );
+    console.log("[odds-combo] ODDS_API_KEY missing; wrote stub odds_extra.json");
+    return;
   }
-  debug.unmappedCompetitions = Array.from(unmappedSet).filter(Boolean).sort();
-  debug.summary.mappedCompetitions = grouped.size;
 
-  const result = {};
+  const out = [];
+  let calls = 0;
 
-  for (const [sportKey, ms] of grouped.entries()) {
-    const leagueDbg = { sportKey, flashscoreMatches: ms.length, apiGames:0, matchedPairs:0, unmatchedExamples:[] };
+  // 3) Group matches by sport key to reduce API calls later if you expand logic
+  // For now, we fetch per match (kept simple & rate-friendly with try/catch).
+  for (const m of matches) {
+    const { home, away } = splitTeams(m.teams || "");
+    if (!home || !away) continue;
+
+    const sportKey = sportKeyFor(m);        // "soccer"
+    // The Odds API typical endpoint (no team filter server-side; we’ll filter client-side):
+    // https://api.the-odds-api.com/v4/sports/soccer/odds?regions=eu&markets=h2h,totals
+    const url = `https://api.the-odds-api.com/v4/sports/${encodeURIComponent(
+      sportKey
+    )}/odds?regions=${encodeURIComponent(ODDS_REGION)}&markets=h2h,totals&oddsFormat=decimal&apiKey=${encodeURIComponent(
+      ODDS_API_KEY
+    )}`;
+
     try {
-      const data = await fetchLeagueOdds(sportKey);
-      leagueDbg.apiGames = (data||[]).length;
-
-      // Build index by normalized pair
-      const idx = new Map();
-      for (const g of data || []) {
-        const k = keyPair(g.home_team || "", g.away_team || "");
-        if (!idx.has(k)) idx.set(k, []);
-        idx.get(k).push(g);
+      const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+      calls++;
+      if (!r.ok) {
+        console.warn(`[odds-combo] HTTP ${r.status} for ${url}`);
+        continue;
       }
+      const arr = await r.json();
+      if (!Array.isArray(arr) || !arr.length) continue;
 
-      for (const m of ms) {
-        const [home, away] = String(m.teams||"").split(" - ").map(s=>s.trim());
-        const games = matchGameIdx(idx, home, away);
+      // naive filter on team names (string contains, case-insensitive)
+      const homeUp = home.toUpperCase();
+      const awayUp = away.toUpperCase();
+      const candidates = arr.filter(ev => {
+        const h = (ev.home_team || "").toUpperCase();
+        const a = (ev.away_team || "").toUpperCase();
+        return (h.includes(homeUp) && a.includes(awayUp)) || (h.includes(awayUp) && a.includes(homeUp));
+      });
 
-        if (!games) {
-          if (leagueDbg.unmatchedExamples.length < 10) {
-            leagueDbg.unmatchedExamples.push({teams:m.teams, comp:cleanComp(m.competition||"")});
+      for (const ev of candidates) {
+        // Flatten markets we care about: h2h (1X2-ish), totals (Over/Under).
+        // The Odds API returns bookmakers -> markets -> outcomes.
+        // We pick the best available across bookmakers (max decimal).
+        const markets = {};
+        for (const bk of ev.bookmakers || []) {
+          for (const mk of bk.markets || []) {
+            if (!mk.key) continue;
+            if (!markets[mk.key]) markets[mk.key] = [];
+            markets[mk.key].push(...(mk.outcomes || []));
           }
-          continue;
         }
 
-        let o1=null, ox=null, o2=null, oOver=null, oUnder=null, srcH2H=null, srcTot=null;
+        // Build extra selections (example: Over/Under total goals)
+        // Map totals to standard labels like O2.5 / U2.5 when possible.
+        const extras = [];
 
-        for (const g of games) {
-          for (const bk of g.bookmakers || []) {
-            for (const market of bk.markets || []) {
-              if (market.key === "h2h") {
-                const mm = {};
-                for (const o of market.outcomes || []) {
-                  const n = normName(o.name || "");
-                  if (n === normName(home)) mm["1"] = Number(o.price);
-                  else if (n === normName(away)) mm["2"] = Number(o.price);
-                  else if (n === "draw") mm["X"] = Number(o.price);
-                }
-                if ((mm["1"] && mm["2"]) && (o1===null || o2===null)) {
-                  o1 = mm["1"]; o2 = mm["2"]; if (mm["X"]) ox = mm["X"];
-                  srcH2H = `oddsapi:${bk.key}`;
-                }
-              }
-              if (market.key === "totals") {
-                for (const o of market.outcomes || []) {
-                  if (Number(o.point) === 2.5) {
-                    if (o.name === "Over")  { oOver  = Number(o.price); srcTot = `oddsapi:${bk.key}`; }
-                    if (o.name === "Under") { oUnder = Number(o.price); srcTot = `oddsapi:${bk.key}`; }
-                  }
-                }
-              }
+        // H2H -> convert to 1 / 2 (no "X" on most books)
+        if (Array.isArray(markets.h2h) && markets.h2h.length) {
+          let maxHome = null, maxAway = null;
+          for (const oc of markets.h2h) {
+            if (!oc || typeof oc.price !== "number") continue;
+            if (oc.name?.toUpperCase().includes(homeUp)) {
+              if (!maxHome || oc.price > maxHome) maxHome = oc.price;
+            } else if (oc.name?.toUpperCase().includes(awayUp)) {
+              if (!maxAway || oc.price > maxAway) maxAway = oc.price;
             }
           }
+          if (maxHome) extras.push({ id: m.id, teams: m.teams, market: "1", odd: maxHome, url: m.url, sport: m.sport || "football", competition: m.competition || "", country: m.country || "", time: m.time || "", status: m.status || "" });
+          if (maxAway) extras.push({ id: m.id, teams: m.teams, market: "2", odd: maxAway, url: m.url, sport: m.sport || "football", competition: m.competition || "", country: m.country || "", time: m.time || "", status: m.status || "" });
         }
 
-        const markets = {};
-        const sources = {};
-        if (o1) { markets["1"] = o1; sources["1"] = srcH2H; }
-        if (ox){ markets["X"] = ox; sources["X"] = srcH2H; }
-        if (o2) { markets["2"] = o2; sources["2"] = srcH2H; }
-        if (oOver){ markets["O2.5"] = oOver; sources["O2.5"] = srcTot; }
-        if (oUnder){ markets["U2.5"] = oUnder; sources["U2.5"] = srcTot; }
-
-        if (Object.keys(markets).length) {
-          leagueDbg.matchedPairs++;
-          result[m.id] = {
-            markets, sources,
-            teams: m.teams,
-            competition: cleanComp(m.competition||""),
-            date: new Date(Date.now() + DAY_OFFSET*86400000).toISOString().slice(0,10),
-          };
-        } else if (leagueDbg.unmatchedExamples.length < 10) {
-          leagueDbg.unmatchedExamples.push({teams:m.teams, note:"pair matched, but markets missing"});
+        // Totals -> build Over/Under selections for common lines (2.5)
+        if (Array.isArray(markets.totals) && markets.totals.length) {
+          // Pick best Over 2.5 and best Under 2.5 (if present)
+          let bestO = null, bestU = null;
+          for (const oc of markets.totals) {
+            const price = typeof oc.price === "number" ? oc.price : null;
+            const point = typeof oc.point === "number" ? oc.point : Number(oc.point);
+            const nm = (oc.name || "").toUpperCase();
+            if (!price || !point) continue;
+            if (Math.abs(point - 2.5) < 1e-9) {
+              if (nm.includes("OVER"))  bestO = Math.max(bestO || 0, price);
+              if (nm.includes("UNDER")) bestU = Math.max(bestU || 0, price);
+            }
+          }
+          if (bestO) extras.push({ id: m.id, teams: m.teams, market: "O2.5", odd: bestO, url: m.url, sport: m.sport || "football", competition: m.competition || "", country: m.country || "", time: m.time || "", status: m.status || "" });
+          if (bestU) extras.push({ id: m.id, teams: m.teams, market: "U2.5", odd: bestU, url: m.url, sport: m.sport || "football", competition: m.competition || "", country: m.country || "", time: m.time || "", status: m.status || "" });
         }
+
+        out.push(...extras);
       }
     } catch (e) {
-      leagueDbg.error = e.message;
+      console.warn(`[odds-combo] fetch failed for ${m.teams}: ${e.message}`);
+      continue;
     }
-    debug.perLeague[sportKey] = leagueDbg;
   }
 
-  await fs.writeFile("odds_extra.json", JSON.stringify(result, null, 2), "utf8");
-  await fs.writeFile("odds_debug.json", JSON.stringify(debug, null, 2), "utf8");
-
-  console.log(`✔ odds_extra.json: ${Object.keys(result).length} matched matches`);
-  console.log(`ℹ Unmapped competitions: ${debug.unmappedCompetitions.length}`);
-  if (debug.unmappedCompetitions.length) {
-    console.log(debug.unmappedCompetitions.slice(0,15).map(s=>` - ${s}`).join("\n"));
-  }
+  await fs.writeFile("odds_extra.json", JSON.stringify({ events: out, calls }, null, 2), "utf8");
+  console.log(`[odds-combo] Wrote odds_extra.json with ${out.length} selections (API calls: ${calls})`);
 })();
