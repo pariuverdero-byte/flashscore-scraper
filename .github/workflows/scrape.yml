@@ -66,22 +66,28 @@ jobs:
             echo "scrape_odds_combo.js not present, skipping."
           fi
 
-      # 4) Generează biletele din datele curente (fără piețe extra încă)
-      - name: Generate tickets (initial)
+      # 4) Construiește odds_extra.json din 1X2 (Double Chance 1X/12/X2 pentru toate meciurile cu 1X2 complet)
+      - name: Build odds_extra (derive DC from 1X2)
+        run: |
+          if [ -f "build_odds_extra_from_1x2.js" ]; then
+            node build_odds_extra_from_1x2.js
+          else
+            echo "build_odds_extra_from_1x2.js not present, skipping."
+          fi
+
+      # 5) Generează biletele (folosește odds.json + odds_extra.json)
+      - name: Generate tickets (with extras)
         run: node generate_tickets.js
 
-      # 5) Augmentează DOAR meciurile selectate cu piețe extra (BetExplorer per-match)
-      - name: Augment odds for selected events (BetExplorer per-match)
+      # 6) (Opțional) Augmentează DOAR meciurile selectate cu alte piețe (e.g., O/U) și re-generează biletele
+      - name: Augment odds for selected events (optional per-match)
         run: |
           if [ -f "augment_odds_selected.js" ]; then
             node augment_odds_selected.js
+            node generate_tickets.js
           else
             echo "augment_odds_selected.js not present, skipping."
           fi
-
-      # 6) Re-generează biletele ținând cont de odds_extra.json (DC / O-U etc.)
-      - name: Generate tickets (with extras)
-        run: node generate_tickets.js
 
       # 7) Generează HTML pentru WordPress
       - name: Generate WordPress HTML
