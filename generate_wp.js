@@ -1,4 +1,4 @@
-// generate_wp.js (versiune completă, cu linkuri <a target="_blank"> și data-status pe TOATE rândurile)
+// generate_wp.js — WordPress HTML pentru bilete (include country, data-* pe fiecare rând)
 import fs from "fs/promises";
 
 const INPUT = "tickets.json";
@@ -7,7 +7,10 @@ const RO_DATE = new Date(Date.now() + TODAY_OFFSET * 86400000)
   .toLocaleDateString("ro-RO", { year: "numeric", month: "long", day: "2-digit" });
 
 const esc = (s = "") =>
-  String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  String(s).replace(/&/g, "&amp;")
+           .replace(/</g, "&lt;")
+           .replace(/>/g, "&gt;")
+           .replace(/"/g, "&quot;");
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 function niceSport(s) {
@@ -18,62 +21,69 @@ function niceSport(s) {
   return cap(s || "Fotbal");
 }
 
-function sportTara(e) {
+function sportCountryComp(e) {
   const sport = niceSport(e.sport || "Fotbal");
-  const comp = e.competition ? ` – ${e.competition}` : "";
-  return `${sport}${comp}`;
+  const country = e.country ? ` — ${e.country}` : "";
+  const comp = e.competition ? ` / ${e.competition}` : "";
+  return `${sport}${country}${comp}`;
 }
 
 function marketLabel(m) {
-  if (m === "1") return "1 (gazde)";
-  if (m === "X") return "X (egal)";
-  if (m === "2") return "2 (oaspeți)";
+  if (m === "1")  return "1 (gazde)";
+  if (m === "X")  return "X (egal)";
+  if (m === "2")  return "2 (oaspeți)";
   if (m === "1X") return "1X (gazde sau egal)";
   if (m === "12") return "12 (oricine câștigă)";
   if (m === "X2") return "X2 (egal sau oaspeți)";
+  // O/U
+  if (/^O\d+(\.\d+)?$/.test(m)) return `Peste ${m.slice(1).replace(".5",",5")} goluri`;
+  if (/^U\d+(\.\d+)?$/.test(m)) return `Sub ${m.slice(1).replace(".5",",5")} goluri`;
   return m;
 }
 
 const analysis = (s) =>
-  `${s.teams} — selecție: ${marketLabel(s.market)} la cotă ${Number(s.odd).toFixed(
-    2
-  )}.` +
+  `${s.teams} — selecție: ${marketLabel(s.market)} la cotă ${Number(s.odd).toFixed(2)}.` +
+  (s.country ? ` Țară: ${s.country}.` : "") +
   (s.competition ? ` Competiție: ${s.competition}.` : "") +
   (s.time ? ` Ora de start (RO): ${s.time}.` : "") +
   (s.url ? ` Link meci: ${s.url}.` : "");
 
 function tableHTML(title, selections, dateLabel) {
   let html = "";
-  html += `<!-- categorie: ${
-    title.toLowerCase().includes("cota 2") ? "cota 2" : "biletul zilei"
-  } -->\n`;
+  html += `<!-- categorie: ${title.toLowerCase().includes("cota 2") ? "cota 2" : "biletul zilei"} -->\n`;
   html += `<h2>${esc(title)}</h2>\n<p><em>${esc(dateLabel)}</em></p>\n`;
   html += `<table class="bilet-pariu">\n<thead>\n<tr><th>Eveniment</th><th>Sport/Țară</th><th>Ora (RO)</th><th>Pariu propus</th><th>Cotă</th></tr>\n</thead>\n<tbody>\n`;
 
   let total = 1;
-  selections.forEach((s) => {
+
+  for (const s of selections) {
     total *= Number(s.odd) || 1;
-    const attr = ` data-status="pending"`; // ← acum pe TOATE rândurile
+
     const ev = s.url
       ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.teams)}</a>`
       : esc(s.teams);
 
-    html += `<tr${attr}>\n` +
+    // data-status pe toate rândurile + meta utile pentru verificator
+    const attrs = ` data-status="pending"` +
+                  (s.id ? ` data-id="${esc(s.id)}"` : "") +
+                  (s.market ? ` data-market="${esc(s.market)}"` : "");
+
+    html += `<tr${attrs}>\n` +
             `<td>${ev}</td>\n` +
-            `<td>${esc(s.sport ? sportTara(s) : sportTara({ sport: "Fotbal", competition: s.competition }))}</td>\n` +
+            `<td>${esc(sportCountryComp(s))}</td>\n` +
             `<td>${esc(s.time || "")}</td>\n` +
             `<td>${esc(marketLabel(s.market))}</td>\n` +
             `<td>${Number(s.odd).toFixed(2)}</td>\n` +
             `</tr>\n`;
-  });
+  }
 
-  html += `<tr class="total"><td colspan="4"><strong>Cotă totală</strong></td><td><strong>${total.toFixed(
-    2
-  )}</strong></td></tr>\n`;
+  html += `<tr class="total"><td colspan="4"><strong>Cotă totală</strong></td><td><strong>${total.toFixed(2)}</strong></td></tr>\n`;
   html += `</tbody>\n</table>\n<h3>Analiza selecțiilor</h3>\n`;
-  selections.forEach((s) => {
+
+  for (const s of selections) {
     html += `<p>${esc(analysis(s))}</p>\n`;
-  });
+  }
+
   html += `\n<p>[status_bilet]</p>\n`;
   return html;
 }
@@ -96,7 +106,9 @@ function tableHTML(title, selections, dateLabel) {
       "utf8"
     );
     console.log("✔ cota2.html generat");
-  } else console.log("ℹ Nu există Bilet Cota 2");
+  } else {
+    console.log("ℹ Nu există Bilet Cota 2");
+  }
 
   if (zi?.length) {
     await fs.writeFile(
@@ -105,5 +117,7 @@ function tableHTML(title, selections, dateLabel) {
       "utf8"
     );
     console.log("✔ biletul-zilei.html generat");
-  } else console.log("ℹ Nu există Biletul Zilei");
+  } else {
+    console.log("ℹ Nu există Biletul Zilei");
+  }
 })();
