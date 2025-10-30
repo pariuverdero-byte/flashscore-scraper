@@ -1,4 +1,4 @@
-// verify_and_update_wp.js — re-evaluate all rows + robust final-score parser + verbose logs
+// verify_and_update_wp.js — rows re-eval + overall ticket status + robust score parse
 
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
@@ -16,11 +16,11 @@ const DRY_RUN =
   String(process.env.DRY_RUN || "0").toLowerCase() === "1" ||
   String(process.env.DRY_RUN || "").toLowerCase() === "true";
 
-const TEST_HTML_PATH = process.env.TEST_HTML_PATH || ""; // test local pe fișier (ex: cota2.html)
+const TEST_HTML_PATH = process.env.TEST_HTML_PATH || ""; // for local tests
 const OUTPUT_HTML_PATH = process.env.OUTPUT_HTML_PATH || "updated.html";
 const ONLY_POST_ID = process.env.POST_ID ? String(process.env.POST_ID) : "";
 
-// ---------- WordPress helpers ----------
+// ---------- WP helpers ----------
 async function getCategoryId(slug) {
   const r = await fetch(`${WP_URL}/wp-json/wp/v2/categories?slug=${slug}`, {
     headers: { Authorization: AUTH },
@@ -72,7 +72,6 @@ function stripDiacritics(s = "") {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
-// Accept 1, X, 2 and textual variants in RO
 function parseMarketLabel(text) {
   const t = stripDiacritics(String(text || "").toUpperCase()).trim();
   if (/^(1)(\s|$)/.test(t) || /\bGAZDE\b/.test(t)) return "1";
@@ -103,7 +102,6 @@ async function fetchText(url) {
   return await r.text();
 }
 
-/** Find FINAL FT score on a Flashscore mobi match page. */
 function getFinalScoreFromHtml(html) {
   if (!html) return null;
   const text = html.replace(/\s+/g, " ").trim();
@@ -113,16 +111,14 @@ function getFinalScoreFromHtml(html) {
   const allScores = [...text.matchAll(/(\d{1,2})\s*:\s*(\d{1,2})/g)];
   if (!allScores.length) return null;
 
-  // drop halftime like "(1:0)"
   const filtered = allScores.filter((m) => {
     const start = Math.max(0, m.index - 1);
     const end = m.index + m[0].length + 1;
     const slice = text.slice(start, end);
-    return !slice.includes("(");
+    return !slice.includes("("); // ignore halftime like (1:0)
   });
   if (!filtered.length) return null;
 
-  // prefer last score BEFORE the Finished marker
   let chosen = null;
   for (const m of filtered) if (m.index < finishedIdx) chosen = m;
   const fm = chosen || filtered[filtered.length - 1];
@@ -133,15 +129,11 @@ function getFinalScoreFromHtml(html) {
   return { home, away };
 }
 
-// Primary: parse match page for status + score
 async function parseMatchPage(url) {
   const html = await fetchText(url);
   if (!html) return { status: "pending" };
 
-  const $ = cheerio.load(html);
-  const bodyTxt = $("body").text();
-
-  const finished = /(Finished|FT\b|Final|After extra time|AET)/i.test(bodyTxt);
+  const finished = /(Finished|FT\b|Final|After extra time|AET)/i.test(html);
   if (!finished) return { status: "pending" };
 
   const fs = getFinalScoreFromHtml(html);
@@ -152,7 +144,6 @@ async function parseMatchPage(url) {
   return { status: "finished", outcome: null, score: null };
 }
 
-// Fallback: scan list pages (-3..+3 days)
 async function parseFromListPages(matchId) {
   if (!matchId) return { status: "pending" };
   for (let d = -3; d <= 3; d++) {
@@ -164,7 +155,7 @@ async function parseFromListPages(matchId) {
     const a = $(`a[href*="/match/${matchId}/"]`).first();
     if (!a.length) continue;
 
-    const cls = (a.attr("class") || "").toLowerCase(); // live | sched | fin
+    const cls = (a.attr("class") || "").toLowerCase();
     const text = a.text().trim();
     if (cls.includes("fin") || /(\d{1,2})\s*:\s*(\d{1,2})/.test(text)) {
       const m = text.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
@@ -184,16 +175,58 @@ async function fetchMatchOutcome(url) {
   try {
     const primary = await parseMatchPage(url);
     if (primary.status === "finished") return primary;
-
     const id = extractMatchIdFromUrl(url);
     return await parseFromListPages(id);
-  } catch (err) {
-    console.warn("fetchMatchOutcome error:", err?.message || err);
+  } catch {
     return { status: "pending" };
   }
 }
 
-// ---------- Core: verify + update one HTML ----------
+// ---------- Ticket-level status ----------
+function computeTicketStatus($, table) {
+  const rows = table.find("tbody > tr").not(".total").toArray();
+  let wins = 0, losses = 0, pend = 0, considered = 0;
+
+  for (const tr of rows) {
+    const $row = $(tr);
+    const s = ($row.attr("data-status") || "pending").toLowerCase();
+    if (["win", "loss", "pending"].includes(s)) {
+      considered++;
+      if (s === "win") wins++;
+      else if (s === "loss") losses++;
+      else pend++;
+    }
+  }
+
+  if (losses > 0) return { status: "loss", wins, losses, pend, considered };
+  if (considered > 0 && pend === 0) return { status: "win", wins, losses, pend, considered };
+  return { status: "pending", wins, losses, pend, considered };
+}
+
+function setTicketStatusVisual($, table, status) {
+  const labels = {
+    win: "Rezultat: Câștigat ✅",
+    loss: "Rezultat: Pierdut ❌",
+    pending: "Rezultat în așteptare ⏳",
+  };
+
+  // Try common WP button markup near the table
+  let btn =
+    table.nextAll('div.wp-block-button').first().find('a.wp-block-button__link:contains("Rezultat")').first();
+  if (!btn.length) btn = $('a.wp-block-button__link:contains("Rezultat")').first();
+  if (!btn.length) btn = $('a:contains("Rezultat")').first();
+  if (!btn.length) btn = $('button:contains("Rezultat")').first();
+
+  if (btn.length) {
+    btn.text(labels[status]);
+    btn.attr("data-status", status);
+  } else {
+    // Fallback: inject a small paragraph after the table.
+    table.after(`<p class="ticket-result" data-status="${status}">${labels[status]}</p>`);
+  }
+}
+
+// ---------- Core: verify + update ----------
 async function verifyHtmlAndReturn(html) {
   const $ = cheerio.load(html);
   const table = $("table.bilet-pariu").first();
@@ -229,7 +262,7 @@ async function verifyHtmlAndReturn(html) {
       continue;
     }
 
-    // ALWAYS re-evaluate; if result contradicts current, flip it.
+    // ALWAYS re-evaluate
     const res = await fetchMatchOutcome(url);
 
     if (res.status === "finished" && res.outcome) {
@@ -249,6 +282,12 @@ async function verifyHtmlAndReturn(html) {
       console.log("         Not finished yet -> leaving as is.");
     }
   }
+
+  // Ticket-level compute & visual
+  const agg = computeTicketStatus($, table);
+  setTicketStatusVisual($, table, agg.status);
+  // also store on table for future runs
+  table.attr("data-ticket-status", agg.status);
 
   return { html: $.html(), changed };
 }
