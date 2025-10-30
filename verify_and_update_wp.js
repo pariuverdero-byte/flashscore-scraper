@@ -1,4 +1,7 @@
-// verify_and_update_wp.js — rows re-eval + overall ticket status with proper WP update
+// verify_and_update_wp.js — robust updater with fallback via list pages
+// - Verifies each event row and sets data-status=win/loss/pending
+// - Computes the whole ticket result and updates the badge/button text
+// - Works against latest N modern Cheerio/Node versions
 
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
@@ -16,11 +19,11 @@ const DRY_RUN =
   String(process.env.DRY_RUN || "0").toLowerCase() === "1" ||
   String(process.env.DRY_RUN || "").toLowerCase() === "true";
 
-const TEST_HTML_PATH = process.env.TEST_HTML_PATH || "";
+const TEST_HTML_PATH = process.env.TEST_HTML_PATH || ""; // local testing on a file
 const OUTPUT_HTML_PATH = process.env.OUTPUT_HTML_PATH || "updated.html";
 const ONLY_POST_ID = process.env.POST_ID ? String(process.env.POST_ID) : "";
 
-// ---------- WP helpers ----------
+// ---------- WordPress helpers ----------
 async function getCategoryId(slug) {
   const r = await fetch(`${WP_URL}/wp-json/wp/v2/categories?slug=${slug}`, {
     headers: { Authorization: AUTH },
@@ -71,80 +74,95 @@ async function updatePost(postId, newContent) {
 function stripDiacritics(s = "") {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
+
 function parseMarketLabel(text) {
   const t = stripDiacritics(String(text || "").toUpperCase()).trim();
   if (/^(1)(\s|$)/.test(t) || /\bGAZDE\b/.test(t)) return "1";
   if (/^(X)(\s|$)/.test(t) || /\bEGAL\b/.test(t)) return "X";
   if (/^(2)(\s|$)/.test(t) || /\bOASP/.test(t) || /\bOASPETI\b/.test(t)) return "2";
+  // Extend later: 1X, X2, 12, O/U etc.
   return null;
 }
+
 function decideOutcomeFromScore(home, away) {
   if (home > away) return "1";
   if (home < away) return "2";
   return "X";
 }
+
 function extractMatchIdFromUrl(url = "") {
   const m = /\/match\/([A-Za-z0-9]+)\//i.exec(url);
   return m ? m[1] : null;
 }
+
 async function fetchText(url) {
   const r = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0", "Accept-Language": "ro,en;q=0.9" },
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      "Accept-Language": "ro,en;q=0.9",
+    },
   });
   if (!r.ok) return null;
   return await r.text();
 }
-function getFinalScoreFromHtml(html) {
-  if (!html) return null;
-  const text = html.replace(/\s+/g, " ").trim();
-  const finishedIdx = text.search(/(Finished|FT\b|Final|After extra time|AET)/i);
-  if (finishedIdx === -1) return null;
-  const allScores = [...text.matchAll(/(\d{1,2})\s*:\s*(\d{1,2})/g)];
-  if (!allScores.length) return null;
 
-  const filtered = allScores.filter((m) => {
-    const slice = text.slice(Math.max(0, m.index - 1), m.index + m[0].length + 1);
-    return !slice.includes("("); // ignore halftime like (1:0)
-  });
-  if (!filtered.length) return null;
-
-  let chosen = null;
-  for (const m of filtered) if (m.index < finishedIdx) chosen = m;
-  const fm = chosen || filtered[filtered.length - 1];
-  const home = parseInt(fm[1], 10);
-  const away = parseInt(fm[2], 10);
-  if (!Number.isFinite(home) || !Number.isFinite(away)) return null;
-  return { home, away };
-}
+// Primary: parse match page
 async function parseMatchPage(url) {
   const html = await fetchText(url);
   if (!html) return { status: "pending" };
-  const finished = /(Finished|FT\b|Final|After extra time|AET)/i.test(html);
+
+  const $ = cheerio.load(html);
+  const bodyTxt = $("body").text();
+
+  // Detect finished
+  const finished = /(Finished|FT\b|Final)/i.test(bodyTxt);
   if (!finished) return { status: "pending" };
-  const fs = getFinalScoreFromHtml(html);
-  if (fs) {
-    const outcome = decideOutcomeFromScore(fs.home, fs.away);
-    return { status: "finished", outcome, score: `${fs.home}:${fs.away}` };
+
+  // Try to pick the first score a:b that is not minute/time
+  // Prefer patterns near odds / summary blocks
+  const tryAreas = ["#tab-mcontent", "p.odds-detail", "#main", "body"];
+  for (const sel of tryAreas) {
+    const t = $(sel).first().text();
+    const m = t.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
+    if (m) {
+      const home = parseInt(m[1], 10);
+      const away = parseInt(m[2], 10);
+      return {
+        status: "finished",
+        outcome: decideOutcomeFromScore(home, away),
+        score: `${home}:${away}`,
+      };
+    }
   }
+
+  // Fallback: still finished but no parseable score
   return { status: "finished", outcome: null, score: null };
 }
+
+// Fallback: scan list pages for this match ID (-3..+3 days)
 async function parseFromListPages(matchId) {
   if (!matchId) return { status: "pending" };
   for (let d = -3; d <= 3; d++) {
     const url = `https://www.flashscore.mobi/?d=${d}&s=1`;
     const html = await fetchText(url);
     if (!html) continue;
+
     const $ = cheerio.load(html);
     const a = $(`a[href*="/match/${matchId}/"]`).first();
     if (!a.length) continue;
-    const cls = (a.attr("class") || "").toLowerCase();
+
+    const cls = (a.attr("class") || "").toLowerCase(); // live | sched | fin
     const text = a.text().trim();
     if (cls.includes("fin") || /(\d{1,2})\s*:\s*(\d{1,2})/.test(text)) {
       const m = text.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
       if (m) {
         const home = parseInt(m[1], 10);
         const away = parseInt(m[2], 10);
-        return { status: "finished", outcome: decideOutcomeFromScore(home, away), score: `${home}:${away}` };
+        return {
+          status: "finished",
+          outcome: decideOutcomeFromScore(home, away),
+          score: `${home}:${away}`,
+        };
       }
       return { status: "finished", outcome: null, score: null };
     }
@@ -152,93 +170,74 @@ async function parseFromListPages(matchId) {
   }
   return { status: "pending" };
 }
+
 async function fetchMatchOutcome(url) {
   try {
     const primary = await parseMatchPage(url);
     if (primary.status === "finished") return primary;
     const id = extractMatchIdFromUrl(url);
-    return await parseFromListPages(id);
+    const fb = await parseFromListPages(id);
+    return fb;
   } catch {
     return { status: "pending" };
   }
 }
 
-// ---------- Ticket-level helpers ----------
+// ---------- Ticket status helpers ----------
 function computeTicketStatus($, table) {
   const rows = table.find("tbody > tr").not(".total").toArray();
-  let wins = 0, losses = 0, pend = 0, considered = 0;
+
+  let wins = 0,
+    losses = 0,
+    pend = 0,
+    considered = 0;
+
   for (const tr of rows) {
-    const s = (cheerio.load(tr)("*").first().parent().attr("data-status") ||
-      cheerio.load(tr)("").root().parent?.attr?.("data-status") ||
-      (cheerio(tr).attr("data-status"))) || "pending";
-    const st = String(s).toLowerCase();
-    if (["win", "loss", "pending"].includes(st)) {
+    const st = (($(tr).attr("data-status")) || "pending").toLowerCase();
+    if (st === "win") {
+      wins++;
       considered++;
-      if (st === "win") wins++;
-      else if (st === "loss") losses++;
-      else pend++;
+    } else if (st === "loss") {
+      losses++;
+      considered++;
+    } else {
+      pend++;
+      considered++;
     }
   }
+
   if (losses > 0) return { status: "loss", wins, losses, pend, considered };
   if (considered > 0 && pend === 0) return { status: "win", wins, losses, pend, considered };
   return { status: "pending", wins, losses, pend, considered };
 }
 
-function readExistingTicketStatus($, table) {
-  const tableAttr = (table.attr("data-ticket-status") || "").toLowerCase();
-  if (["win", "loss", "pending"].includes(tableAttr)) return tableAttr;
-
-  let btn = table.nextAll('div.wp-block-button').first().find('a.wp-block-button__link:contains("Rezultat")').first();
-  if (!btn.length) btn = $('a.wp-block-button__link:contains("Rezultat")').first();
-  if (!btn.length) btn = $('a:contains("Rezultat")').first();
-  if (!btn.length) btn = $('button:contains("Rezultat")').first();
-
-  const txt = (btn.text() || "").toLowerCase();
-  const ds = (btn.attr("data-status") || "").toLowerCase();
-  if (["win", "loss", "pending"].includes(ds)) return ds;
-  if (txt.includes("câștigat")) return "win";
-  if (txt.includes("pierdut")) return "loss";
-  if (txt.includes("așteptare") || txt.includes("asteptare")) return "pending";
-
-  const p = table.nextAll("p.ticket-result").first();
-  const pTxt = (p.text() || "").toLowerCase();
-  const pDs = (p.attr("data-status") || "").toLowerCase();
-  if (["win", "loss", "pending"].includes(pDs)) return pDs;
-  if (pTxt.includes("câștigat")) return "win";
-  if (pTxt.includes("pierdut")) return "loss";
-  if (pTxt.includes("așteptare") || pTxt.includes("asteptare")) return "pending";
-
-  return ""; // unknown
-}
-
-function setTicketStatusVisual($, table, status) {
-  const labels = {
-    win: "Rezultat: Câștigat ✅",
-    loss: "Rezultat: Pierdut ❌",
-    pending: "Rezultat în așteptare ⏳",
+function applyTicketBadge($, status, table) {
+  // Map UI text + bootstrap class
+  const map = {
+    pending: { text: "Rezultat în așteptare", cls: "btn-warning" },
+    win: { text: "Bilet câștigător", cls: "btn-success" },
+    loss: { text: "Bilet pierdut", cls: "btn-danger" },
   };
+  const cfg = map[status] || map.pending;
 
-  let btn =
-    table.nextAll('div.wp-block-button').first().find('a.wp-block-button__link:contains("Rezultat")').first();
-  if (!btn.length) btn = $('a.wp-block-button__link:contains("Rezultat")').first();
-  if (!btn.length) btn = $('a:contains("Rezultat")').first();
-  if (!btn.length) btn = $('button:contains("Rezultat")').first();
-
-  if (btn.length) {
-    btn.text(labels[status]);
-    btn.attr("data-status", status);
-  } else {
-    const existingP = table.nextAll("p.ticket-result").first();
-    if (existingP.length) {
-      existingP.text(labels[status]).attr("data-status", status);
-    } else {
-      table.after(`<p class="ticket-result" data-status="${status}">${labels[status]}</p>`);
-    }
+  // Update any visible "Rezultat ..." button/badge
+  let $btn =
+    $('a.btn:contains("Rezultat"), button.btn:contains("Rezultat"), .ticket-result').first();
+  if ($btn.length) {
+    // reset known state classes then add the right one
+    $btn.removeClass("btn-warning btn-success btn-danger");
+    $btn.addClass(cfg.cls);
+    $btn.text(cfg.text);
   }
-  table.attr("data-ticket-status", status);
+
+  // Mark table + total row, so future runs can read this quickly
+  if (table && table.length) {
+    table.attr("data-ticket-status", status);
+    table.find("tr.total").attr("data-status", status);
+  }
 }
 
-// ---------- Core: verify + update ----------
+// Walks the table, updates data-status on rows and returns updated HTML
 async function verifyHtmlAndReturn(html) {
   const $ = cheerio.load(html);
   const table = $("table.bilet-pariu").first();
@@ -251,54 +250,55 @@ async function verifyHtmlAndReturn(html) {
     const $row = $(tr);
     if ($row.hasClass("total")) continue;
 
+    // ensure data-status exists
     if (!$row.attr("data-status")) $row.attr("data-status", "pending");
 
     const tds = $row.find("td");
     if (tds.length < 4) continue;
 
-    const eventText = tds.eq(0).text().trim();
     const anchor = tds.eq(0).find("a").first();
-    const url = anchor.attr("href") || "";
+    const url = anchor.attr("href");
+
     const pickText = tds.eq(3).text().trim();
     const pick = parseMarketLabel(pickText);
+
     const current = ($row.attr("data-status") || "pending").toLowerCase();
 
-    console.log(`\n[VERIFY] Event: ${eventText}`);
-    console.log(`         URL:   ${url || "(no url)"}`);
-    console.log(`         Pick:  ${pickText} -> ${pick || "?"}`);
-    console.log(`         Cur:   ${current}`);
+    if (!url || !pick) continue;
 
-    if (!url || !pick) {
-      console.log("         Skip: missing URL or unsupported market.");
+    // If we already have a final state, skip rechecking to save requests
+    if (current === "win" || current === "loss") {
+      console.log(
+        `[VERIFY] Event: ${tds.eq(0).text().trim()}\n         URL:   ${url}\n         Pick:  ${pickText} -> ${pick}\n         Cur:   ${current}\n         Skip: already decided.\n`
+      );
       continue;
     }
 
+    // Ask Flashscore
     const res = await fetchMatchOutcome(url);
 
     if (res.status === "finished" && res.outcome) {
-      const newStatus = res.outcome === pick ? "win" : "loss";
-      if (current !== newStatus) {
-        $row.attr("data-status", newStatus);
-        changed = true;
-        console.log(`         Score: ${res.score} | outcome=${res.outcome} | FIX -> ${newStatus.toUpperCase()}`);
-      } else {
-        console.log(`         Score: ${res.score} | outcome=${res.outcome} | OK (${current})`);
-      }
+      const win = res.outcome === pick;
+      $row.attr("data-status", win ? "win" : "loss");
+      changed = true;
+      console.log(
+        `[VERIFY] Event: ${tds.eq(0).text().trim()}\n         URL:   ${url}\n         Pick:  ${pickText} -> ${pick}\n         Cur:   ${current}\n         Score: ${res.score} | outcome=${res.outcome} | OK (${win ? "win" : "loss"})\n`
+      );
     } else if (res.status === "finished" && !res.outcome) {
-      console.log("         Finished, but score not confidently parsed -> leaving as is.");
+      // Finished but no reliable score → keep pending (safer)
+      console.log(
+        `[VERIFY] Event: ${tds.eq(0).text().trim()}\n         URL:   ${url}\n         Pick:  ${pickText} -> ${pick}\n         Cur:   ${current}\n         Finished, but score not confidently parsed -> leaving as is.\n`
+      );
     } else {
-      console.log("         Not finished yet -> leaving as is.");
+      console.log(
+        `[VERIFY] Event: ${tds.eq(0).text().trim()}\n         URL:   ${url}\n         Pick:  ${pickText} -> ${pick}\n         Cur:   ${current}\n         Not finished yet -> leaving as is.\n`
+      );
     }
   }
 
-  // Ticket-level compute & visual — and mark 'changed' if it differs from previous
-  const prev = readExistingTicketStatus($, table);
-  const agg = computeTicketStatus($, table);
-  if (prev !== agg.status) {
-    changed = true;
-    console.log(`\n[TICKET] Overall status: ${prev || "(unknown)"} -> ${agg.status}`);
-  }
-  setTicketStatusVisual($, table, agg.status);
+  // Compute & apply the overall ticket status badge
+  const summary = computeTicketStatus($, table);
+  applyTicketBadge($, summary.status, table);
 
   return { html: $.html(), changed };
 }
@@ -312,8 +312,11 @@ async function runLocal() {
   const html = await fs.readFile(TEST_HTML_PATH, "utf8");
   const { html: out, changed } = await verifyHtmlAndReturn(html);
   await fs.writeFile(OUTPUT_HTML_PATH, out, "utf8");
-  console.log(`Local test -> ${OUTPUT_HTML_PATH} (${changed ? "cu modificări" : "fără modificări"})`);
+  console.log(
+    `Local test -> ${OUTPUT_HTML_PATH} (${changed ? "cu modificări" : "fără modificări"})`
+  );
 }
+
 async function runWP() {
   if (!AUTH) {
     console.error("Lipsesc WP_URL / WP_USER / WP_APP_PASS pentru mod WP.");
