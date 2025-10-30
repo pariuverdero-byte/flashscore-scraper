@@ -1,4 +1,4 @@
-// verify_and_update_wp.js — robust updater with fallback via list pages
+// verify_and_update_wp.js — robust updater with FT-adjacent score & list-page fallback
 
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
@@ -68,16 +68,16 @@ async function updatePost(postId, newContent) {
 }
 
 // ---------- Parsing helpers ----------
-function stripDiacritics(s = "") {
-  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-}
+const stripDiacritics = (s = "") =>
+  s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+const tidy = (s = "") => stripDiacritics(String(s)).replace(/\s+/g, " ").trim();
 
 function parseMarketLabel(text) {
-  const t = stripDiacritics(String(text || "").toUpperCase()).trim();
-  if (/^(1)(\s|$)/.test(t) || /\bGAZDE\b/.test(t)) return "1";
-  if (/^(X)(\s|$)/.test(t) || /\bEGAL\b/.test(t)) return "X";
-  if (/^(2)(\s|$)/.test(t) || /\bOASP/.test(t)) return "2";
-  // extins ulterior: 1X, X2, 12, O/U etc.
+  const t = tidy(text).toUpperCase();
+  if (/^1(\s|$)|\bGAZDE\b/.test(t)) return "1";
+  if (/^X(\s|$)|\bEGAL\b/.test(t)) return "X";
+  if (/^2(\s|$)|\bOASP/.test(t)) return "2"; // OASP(OASPETI)
+  // Extensii viitoare: 1X / X2 / 12 / O-U etc.
   return null;
 }
 
@@ -95,7 +95,8 @@ function extractMatchIdFromUrl(url = "") {
 async function fetchText(url) {
   const r = await fetch(url, {
     headers: {
-      "User-Agent": "Mozilla/5.0",
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome",
       "Accept-Language": "ro,en;q=0.9",
     },
   });
@@ -103,38 +104,48 @@ async function fetchText(url) {
   return await r.text();
 }
 
-// Primary: parse match page
+// Preferă scorul final din zona „header/scoreboard” (primele 6KB) și, dacă se poate,
+// scorul aflat în proximitatea markerilor finali: FT/Finished/Final/AET/AP/Penalties.
+function getFinalScoreFromHtml(html) {
+  if (!html) return null;
+
+  // Simplu detector de finalizare
+  if (!/(Finished|Final|FT\b|After extra time|AET|Penalties|AP)/i.test(html)) {
+    return null;
+  }
+
+  const header = html.slice(0, 6144); // zona cu scoreboard la mobi
+
+  // 1) Caută „blocul final” și un scor în vecinătate
+  const ftBlock =
+    header.match(
+      /(Finished|Final|FT\b|After extra time|AET|Penalties|AP)[^]{0,400}/i
+    )?.[0] || "";
+
+  let m;
+  const nearby = [...ftBlock.matchAll(/(\d{1,2})\s*:\s*(\d{1,2})/g)];
+  if (nearby.length) m = nearby[nearby.length - 1];
+
+  // 2) Fallback: ultimul scor din header (finalul se afișează după HT)
+  if (!m) {
+    const all = [...header.matchAll(/(\d{1,2})\s*:\s*(\d{1,2})/g)];
+    if (all.length) m = all[all.length - 1];
+  }
+
+  if (!m) return null;
+  return { home: parseInt(m[1], 10), away: parseInt(m[2], 10) };
+}
+
+// Primary: parse match page (FT-adjacent logic)
 async function parseMatchPage(url) {
   const html = await fetchText(url);
   if (!html) return { status: "pending" };
 
-  const $ = cheerio.load(html);
-  const bodyTxt = $("body").text();
+  const final = getFinalScoreFromHtml(html);
+  if (!final) return { status: "pending" };
 
-  // Detect finished
-  const finished = /(Finished|FT\b|Final)/i.test(bodyTxt);
-  if (!finished) return { status: "pending" };
-
-  // Try to pick the first score a:b that is not minute/time
-  // Prefer patterns near odds / summary blocks
-  let score = null;
-  const tryAreas = [
-    "p.odds-detail",
-    "#main",
-    "body",
-  ];
-  for (const sel of tryAreas) {
-    const t = $(sel).first().text();
-    const m = t.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
-    if (m) {
-      const home = parseInt(m[1], 10);
-      const away = parseInt(m[2], 10);
-      return { status: "finished", outcome: decideOutcomeFromScore(home, away), score: `${home}:${away}` };
-    }
-  }
-
-  // Fallback: still finished but no parseable score
-  return { status: "finished", outcome: null, score: null };
+  const outcome = decideOutcomeFromScore(final.home, final.away);
+  return { status: "finished", outcome, score: `${final.home}:${final.away}` };
 }
 
 // Fallback: scan list pages for this match ID (-3..+3 days)
@@ -146,23 +157,27 @@ async function parseFromListPages(matchId) {
     if (!html) continue;
 
     const $ = cheerio.load(html);
-    // find anchor to this match id
     const a = $(`a[href*="/match/${matchId}/"]`).first();
     if (!a.length) continue;
 
     const cls = (a.attr("class") || "").toLowerCase(); // live | sched | fin
     const text = a.text().trim();
-    if (cls.includes("fin") || /(\d{1,2})\s*:\s*(\d{1,2})/.test(text)) {
-      const m = text.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
+
+    const m = text.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
+    if (cls.includes("fin") || m) {
       if (m) {
         const home = parseInt(m[1], 10);
         const away = parseInt(m[2], 10);
-        return { status: "finished", outcome: decideOutcomeFromScore(home, away), score: `${home}:${away}` };
+        return {
+          status: "finished",
+          outcome: decideOutcomeFromScore(home, away),
+          score: `${home}:${away}`,
+        };
       }
       // finished but couldn't read score safely
       return { status: "finished", outcome: null, score: null };
     }
-    // sched or live → not finished
+    // sched / live
     return { status: "pending" };
   }
   return { status: "pending" };
@@ -170,20 +185,21 @@ async function parseFromListPages(matchId) {
 
 async function fetchMatchOutcome(url) {
   try {
-    // 1) try the match page
+    // 1) try the match page (better)
     const primary = await parseMatchPage(url);
     if (primary.status === "finished") return primary;
 
-    // 2) fallback via list pages (very robust)
+    // 2) fallback via list pages
     const id = extractMatchIdFromUrl(url);
     const fb = await parseFromListPages(id);
     return fb;
-  } catch {
+  } catch (e) {
+    console.warn("fetchMatchOutcome err:", e?.message || e);
     return { status: "pending" };
   }
 }
 
-// Walks the table, updates data-status and returns updated HTML
+// Walk the table, update data-status and return updated HTML
 async function verifyHtmlAndReturn(html) {
   const $ = cheerio.load(html);
   const table = $("table.bilet-pariu").first();
@@ -204,27 +220,30 @@ async function verifyHtmlAndReturn(html) {
 
     // event link
     const anchor = tds.eq(0).find("a").first();
-    const url = anchor.attr("href");
+    const url = anchor.attr("href") || "";
 
     // pick
-    const pickText = tds.eq(3).text().trim();
+    const pickText = tidy(tds.eq(3).text());
     const pick = parseMarketLabel(pickText);
 
-    const current = ($row.attr("data-status") || "pending").toLowerCase();
-    if (!url || !pick) continue;
+    const current = String($row.attr("data-status") || "pending").toLowerCase();
+
+    if (!url || !pick) {
+      if (DRY_RUN) console.log(`skip row: url=${!!url} pick=${pickText}`);
+      continue;
+    }
     if (current === "win" || current === "loss") continue;
 
     const res = await fetchMatchOutcome(url);
     if (res.status === "finished" && res.outcome) {
       const win = res.outcome === pick;
+      if (DRY_RUN) {
+        console.log(
+          `DEBUG | ${tds.eq(0).text().trim()} | pick=${pick} | score=${res.score} | outcome=${res.outcome} | -> ${win ? "win" : "loss"}`
+        );
+      }
       $row.attr("data-status", win ? "win" : "loss");
       changed = true;
-      console.log(
-        ` - ${tds.eq(0).text().trim()} => ${win ? "win" : "loss"} (${res.score}), pick=${pick}`
-      );
-    } else if (res.status === "finished" && !res.outcome) {
-      // Finished but no score parsed → mark unknown result only if you want, else leave pending
-      // $row.attr("data-status", "pending");
     }
   }
 
@@ -240,7 +259,9 @@ async function runLocal() {
   const html = await fs.readFile(TEST_HTML_PATH, "utf8");
   const { html: out, changed } = await verifyHtmlAndReturn(html);
   await fs.writeFile(OUTPUT_HTML_PATH, out, "utf8");
-  console.log(`Local test -> ${OUTPUT_HTML_PATH} (${changed ? "cu modificări" : "fără modificări"})`);
+  console.log(
+    `Local test -> ${OUTPUT_HTML_PATH} (${changed ? "cu modificări" : "fără modificări"})`
+  );
 }
 
 async function runWP() {
