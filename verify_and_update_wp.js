@@ -1,4 +1,4 @@
-// verify_and_update_wp.js — robust updater with FT-adjacent score & list-page fallback
+// verify_and_update_wp.js — robust updater with final-score parser + verbose logs
 
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
@@ -68,16 +68,17 @@ async function updatePost(postId, newContent) {
 }
 
 // ---------- Parsing helpers ----------
-const stripDiacritics = (s = "") =>
-  s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-const tidy = (s = "") => stripDiacritics(String(s)).replace(/\s+/g, " ").trim();
+function stripDiacritics(s = "") {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
 
+// Accept 1, X, 2 and textual variants in Romanian
 function parseMarketLabel(text) {
-  const t = tidy(text).toUpperCase();
-  if (/^1(\s|$)|\bGAZDE\b/.test(t)) return "1";
-  if (/^X(\s|$)|\bEGAL\b/.test(t)) return "X";
-  if (/^2(\s|$)|\bOASP/.test(t)) return "2"; // OASP(OASPETI)
-  // Extensii viitoare: 1X / X2 / 12 / O-U etc.
+  const t = stripDiacritics(String(text || "").toUpperCase()).trim();
+  if (/^(1)(\s|$)/.test(t) || /\bGAZDE\b/.test(t)) return "1";
+  if (/^(X)(\s|$)/.test(t) || /\bEGAL\b/.test(t)) return "X";
+  if (/^(2)(\s|$)/.test(t) || /\bOASP/.test(t)) return "2";
+  // (extinde aici dacă adaugi 1X, X2, 12, O/U etc.)
   return null;
 }
 
@@ -95,8 +96,7 @@ function extractMatchIdFromUrl(url = "") {
 async function fetchText(url) {
   const r = await fetch(url, {
     headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome",
+      "User-Agent": "Mozilla/5.0",
       "Accept-Language": "ro,en;q=0.9",
     },
   });
@@ -104,48 +104,67 @@ async function fetchText(url) {
   return await r.text();
 }
 
-// Preferă scorul final din zona „header/scoreboard” (primele 6KB) și, dacă se poate,
-// scorul aflat în proximitatea markerilor finali: FT/Finished/Final/AET/AP/Penalties.
+/**
+ * Extract the *final* score from a Flashscore mobi match page.
+ * Logic:
+ *  - ensure page indicates Finished/FT/Final/AET
+ *  - collect all "a:b" scores
+ *  - ignore scores inside parentheses (those are HT, e.g. (1:0))
+ *  - pick the score nearest BEFORE the Finished marker (fallback to last score)
+ */
 function getFinalScoreFromHtml(html) {
   if (!html) return null;
 
-  // Simplu detector de finalizare
-  if (!/(Finished|Final|FT\b|After extra time|AET|Penalties|AP)/i.test(html)) {
-    return null;
+  const text = html.replace(/\s+/g, " ").trim();
+  const finishedIdx = text.search(/(Finished|FT\b|Final|After extra time|AET)/i);
+  if (finishedIdx === -1) return null;
+
+  const allScores = [...text.matchAll(/(\d{1,2})\s*:\s*(\d{1,2})/g)];
+  if (!allScores.length) return null;
+
+  // filter out halftime "(x:y)" by checking surrounding parentheses
+  const filtered = allScores.filter((m) => {
+    const start = Math.max(0, m.index - 1);
+    const end = m.index + m[0].length + 1;
+    const slice = text.slice(start, end);
+    return !slice.includes("("); // drop HT like "(1:0)"
+  });
+
+  if (!filtered.length) return null;
+
+  // choose the last score before "Finished"
+  let chosen = null;
+  for (const m of filtered) {
+    if (m.index < finishedIdx) chosen = m;
   }
+  const finalMatch = chosen || filtered[filtered.length - 1];
+  if (!finalMatch) return null;
 
-  const header = html.slice(0, 6144); // zona cu scoreboard la mobi
-
-  // 1) Caută „blocul final” și un scor în vecinătate
-  const ftBlock =
-    header.match(
-      /(Finished|Final|FT\b|After extra time|AET|Penalties|AP)[^]{0,400}/i
-    )?.[0] || "";
-
-  let m;
-  const nearby = [...ftBlock.matchAll(/(\d{1,2})\s*:\s*(\d{1,2})/g)];
-  if (nearby.length) m = nearby[nearby.length - 1];
-
-  // 2) Fallback: ultimul scor din header (finalul se afișează după HT)
-  if (!m) {
-    const all = [...header.matchAll(/(\d{1,2})\s*:\s*(\d{1,2})/g)];
-    if (all.length) m = all[all.length - 1];
-  }
-
-  if (!m) return null;
-  return { home: parseInt(m[1], 10), away: parseInt(m[2], 10) };
+  const home = parseInt(finalMatch[1], 10);
+  const away = parseInt(finalMatch[2], 10);
+  if (!Number.isFinite(home) || !Number.isFinite(away)) return null;
+  return { home, away };
 }
 
-// Primary: parse match page (FT-adjacent logic)
+// Primary: parse match page with final-score extraction
 async function parseMatchPage(url) {
   const html = await fetchText(url);
   if (!html) return { status: "pending" };
 
-  const final = getFinalScoreFromHtml(html);
-  if (!final) return { status: "pending" };
+  const $ = cheerio.load(html);
+  const bodyTxt = $("body").text();
 
-  const outcome = decideOutcomeFromScore(final.home, final.away);
-  return { status: "finished", outcome, score: `${final.home}:${final.away}` };
+  const finished = /(Finished|FT\b|Final|After extra time|AET)/i.test(bodyTxt);
+  if (!finished) return { status: "pending" };
+
+  const fs = getFinalScoreFromHtml(html);
+  if (fs) {
+    const outcome = decideOutcomeFromScore(fs.home, fs.away);
+    return { status: "finished", outcome, score: `${fs.home}:${fs.away}` };
+  }
+
+  // Fallback: finished but couldn't parse a score
+  return { status: "finished", outcome: null, score: null };
 }
 
 // Fallback: scan list pages for this match ID (-3..+3 days)
@@ -162,22 +181,15 @@ async function parseFromListPages(matchId) {
 
     const cls = (a.attr("class") || "").toLowerCase(); // live | sched | fin
     const text = a.text().trim();
-
-    const m = text.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
-    if (cls.includes("fin") || m) {
+    if (cls.includes("fin") || /(\d{1,2})\s*:\s*(\d{1,2})/.test(text)) {
+      const m = text.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
       if (m) {
         const home = parseInt(m[1], 10);
         const away = parseInt(m[2], 10);
-        return {
-          status: "finished",
-          outcome: decideOutcomeFromScore(home, away),
-          score: `${home}:${away}`,
-        };
+        return { status: "finished", outcome: decideOutcomeFromScore(home, away), score: `${home}:${away}` };
       }
-      // finished but couldn't read score safely
       return { status: "finished", outcome: null, score: null };
     }
-    // sched / live
     return { status: "pending" };
   }
   return { status: "pending" };
@@ -185,21 +197,19 @@ async function parseFromListPages(matchId) {
 
 async function fetchMatchOutcome(url) {
   try {
-    // 1) try the match page (better)
     const primary = await parseMatchPage(url);
     if (primary.status === "finished") return primary;
 
-    // 2) fallback via list pages
     const id = extractMatchIdFromUrl(url);
     const fb = await parseFromListPages(id);
     return fb;
-  } catch (e) {
-    console.warn("fetchMatchOutcome err:", e?.message || e);
+  } catch (err) {
+    console.warn("fetchMatchOutcome error:", err?.message || err);
     return { status: "pending" };
   }
 }
 
-// Walk the table, update data-status and return updated HTML
+// Walks the table, updates data-status and returns updated HTML
 async function verifyHtmlAndReturn(html) {
   const $ = cheerio.load(html);
   const table = $("table.bilet-pariu").first();
@@ -218,32 +228,42 @@ async function verifyHtmlAndReturn(html) {
     const tds = $row.find("td");
     if (tds.length < 4) continue;
 
-    // event link
+    const eventText = tds.eq(0).text().trim();
     const anchor = tds.eq(0).find("a").first();
     const url = anchor.attr("href") || "";
 
-    // pick
-    const pickText = tidy(tds.eq(3).text());
+    const pickText = tds.eq(3).text().trim();
     const pick = parseMarketLabel(pickText);
+    const current = ($row.attr("data-status") || "pending").toLowerCase();
 
-    const current = String($row.attr("data-status") || "pending").toLowerCase();
+    // Verbose log header per row
+    console.log(`\n[VERIFY] Event: ${eventText}`);
+    console.log(`         URL:   ${url || "(no url)"}`);
+    console.log(`         Pick:  ${pickText} -> ${pick || "?"}`);
+    console.log(`         Cur:   ${current}`);
 
     if (!url || !pick) {
-      if (DRY_RUN) console.log(`skip row: url=${!!url} pick=${pickText}`);
+      console.log("         Skip: missing URL or unsupported market.");
       continue;
     }
-    if (current === "win" || current === "loss") continue;
+    if (current === "win" || current === "loss") {
+      console.log("         Skip: already decided.");
+      continue;
+    }
 
     const res = await fetchMatchOutcome(url);
     if (res.status === "finished" && res.outcome) {
       const win = res.outcome === pick;
-      if (DRY_RUN) {
-        console.log(
-          `DEBUG | ${tds.eq(0).text().trim()} | pick=${pick} | score=${res.score} | outcome=${res.outcome} | -> ${win ? "win" : "loss"}`
-        );
-      }
       $row.attr("data-status", win ? "win" : "loss");
       changed = true;
+      console.log(
+        `         Score: ${res.score} | outcome=${res.outcome} | => ${win ? "WIN" : "LOSS"}`
+      );
+    } else if (res.status === "finished" && !res.outcome) {
+      console.log("         Finished, but score not confidently parsed -> leaving pending.");
+      // leave as pending to avoid wrong marking
+    } else {
+      console.log("         Not finished yet.");
     }
   }
 
@@ -259,9 +279,7 @@ async function runLocal() {
   const html = await fs.readFile(TEST_HTML_PATH, "utf8");
   const { html: out, changed } = await verifyHtmlAndReturn(html);
   await fs.writeFile(OUTPUT_HTML_PATH, out, "utf8");
-  console.log(
-    `Local test -> ${OUTPUT_HTML_PATH} (${changed ? "cu modificări" : "fără modificări"})`
-  );
+  console.log(`Local test -> ${OUTPUT_HTML_PATH} (${changed ? "cu modificări" : "fără modificări"})`);
 }
 
 async function runWP() {
