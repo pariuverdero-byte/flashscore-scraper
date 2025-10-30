@@ -1,4 +1,4 @@
-// verify_and_update_wp.js — robust updater with final-score parser + verbose logs
+// verify_and_update_wp.js — re-evaluate all rows + robust final-score parser + verbose logs
 
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
@@ -16,7 +16,7 @@ const DRY_RUN =
   String(process.env.DRY_RUN || "0").toLowerCase() === "1" ||
   String(process.env.DRY_RUN || "").toLowerCase() === "true";
 
-const TEST_HTML_PATH = process.env.TEST_HTML_PATH || ""; // test local pe fișier
+const TEST_HTML_PATH = process.env.TEST_HTML_PATH || ""; // test local pe fișier (ex: cota2.html)
 const OUTPUT_HTML_PATH = process.env.OUTPUT_HTML_PATH || "updated.html";
 const ONLY_POST_ID = process.env.POST_ID ? String(process.env.POST_ID) : "";
 
@@ -72,13 +72,12 @@ function stripDiacritics(s = "") {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
-// Accept 1, X, 2 and textual variants in Romanian
+// Accept 1, X, 2 and textual variants in RO
 function parseMarketLabel(text) {
   const t = stripDiacritics(String(text || "").toUpperCase()).trim();
   if (/^(1)(\s|$)/.test(t) || /\bGAZDE\b/.test(t)) return "1";
   if (/^(X)(\s|$)/.test(t) || /\bEGAL\b/.test(t)) return "X";
-  if (/^(2)(\s|$)/.test(t) || /\bOASP/.test(t)) return "2";
-  // (extinde aici dacă adaugi 1X, X2, 12, O/U etc.)
+  if (/^(2)(\s|$)/.test(t) || /\bOASP/.test(t) || /\bOASPETI\b/.test(t)) return "2";
   return null;
 }
 
@@ -104,17 +103,9 @@ async function fetchText(url) {
   return await r.text();
 }
 
-/**
- * Extract the *final* score from a Flashscore mobi match page.
- * Logic:
- *  - ensure page indicates Finished/FT/Final/AET
- *  - collect all "a:b" scores
- *  - ignore scores inside parentheses (those are HT, e.g. (1:0))
- *  - pick the score nearest BEFORE the Finished marker (fallback to last score)
- */
+/** Find FINAL FT score on a Flashscore mobi match page. */
 function getFinalScoreFromHtml(html) {
   if (!html) return null;
-
   const text = html.replace(/\s+/g, " ").trim();
   const finishedIdx = text.search(/(Finished|FT\b|Final|After extra time|AET)/i);
   if (finishedIdx === -1) return null;
@@ -122,31 +113,27 @@ function getFinalScoreFromHtml(html) {
   const allScores = [...text.matchAll(/(\d{1,2})\s*:\s*(\d{1,2})/g)];
   if (!allScores.length) return null;
 
-  // filter out halftime "(x:y)" by checking surrounding parentheses
+  // drop halftime like "(1:0)"
   const filtered = allScores.filter((m) => {
     const start = Math.max(0, m.index - 1);
     const end = m.index + m[0].length + 1;
     const slice = text.slice(start, end);
-    return !slice.includes("("); // drop HT like "(1:0)"
+    return !slice.includes("(");
   });
-
   if (!filtered.length) return null;
 
-  // choose the last score before "Finished"
+  // prefer last score BEFORE the Finished marker
   let chosen = null;
-  for (const m of filtered) {
-    if (m.index < finishedIdx) chosen = m;
-  }
-  const finalMatch = chosen || filtered[filtered.length - 1];
-  if (!finalMatch) return null;
+  for (const m of filtered) if (m.index < finishedIdx) chosen = m;
+  const fm = chosen || filtered[filtered.length - 1];
 
-  const home = parseInt(finalMatch[1], 10);
-  const away = parseInt(finalMatch[2], 10);
+  const home = parseInt(fm[1], 10);
+  const away = parseInt(fm[2], 10);
   if (!Number.isFinite(home) || !Number.isFinite(away)) return null;
   return { home, away };
 }
 
-// Primary: parse match page with final-score extraction
+// Primary: parse match page for status + score
 async function parseMatchPage(url) {
   const html = await fetchText(url);
   if (!html) return { status: "pending" };
@@ -162,12 +149,10 @@ async function parseMatchPage(url) {
     const outcome = decideOutcomeFromScore(fs.home, fs.away);
     return { status: "finished", outcome, score: `${fs.home}:${fs.away}` };
   }
-
-  // Fallback: finished but couldn't parse a score
   return { status: "finished", outcome: null, score: null };
 }
 
-// Fallback: scan list pages for this match ID (-3..+3 days)
+// Fallback: scan list pages (-3..+3 days)
 async function parseFromListPages(matchId) {
   if (!matchId) return { status: "pending" };
   for (let d = -3; d <= 3; d++) {
@@ -201,15 +186,14 @@ async function fetchMatchOutcome(url) {
     if (primary.status === "finished") return primary;
 
     const id = extractMatchIdFromUrl(url);
-    const fb = await parseFromListPages(id);
-    return fb;
+    return await parseFromListPages(id);
   } catch (err) {
     console.warn("fetchMatchOutcome error:", err?.message || err);
     return { status: "pending" };
   }
 }
 
-// Walks the table, updates data-status and returns updated HTML
+// ---------- Core: verify + update one HTML ----------
 async function verifyHtmlAndReturn(html) {
   const $ = cheerio.load(html);
   const table = $("table.bilet-pariu").first();
@@ -222,7 +206,6 @@ async function verifyHtmlAndReturn(html) {
     const $row = $(tr);
     if ($row.hasClass("total")) continue;
 
-    // ensure data-status exists (so the first row isn’t skipped)
     if (!$row.attr("data-status")) $row.attr("data-status", "pending");
 
     const tds = $row.find("td");
@@ -236,7 +219,6 @@ async function verifyHtmlAndReturn(html) {
     const pick = parseMarketLabel(pickText);
     const current = ($row.attr("data-status") || "pending").toLowerCase();
 
-    // Verbose log header per row
     console.log(`\n[VERIFY] Event: ${eventText}`);
     console.log(`         URL:   ${url || "(no url)"}`);
     console.log(`         Pick:  ${pickText} -> ${pick || "?"}`);
@@ -246,24 +228,25 @@ async function verifyHtmlAndReturn(html) {
       console.log("         Skip: missing URL or unsupported market.");
       continue;
     }
-    if (current === "win" || current === "loss") {
-      console.log("         Skip: already decided.");
-      continue;
-    }
 
+    // ALWAYS re-evaluate; if result contradicts current, flip it.
     const res = await fetchMatchOutcome(url);
+
     if (res.status === "finished" && res.outcome) {
-      const win = res.outcome === pick;
-      $row.attr("data-status", win ? "win" : "loss");
-      changed = true;
-      console.log(
-        `         Score: ${res.score} | outcome=${res.outcome} | => ${win ? "WIN" : "LOSS"}`
-      );
+      const newWin = res.outcome === pick;
+      const newStatus = newWin ? "win" : "loss";
+
+      if (current !== newStatus) {
+        $row.attr("data-status", newStatus);
+        changed = true;
+        console.log(`         Score: ${res.score} | outcome=${res.outcome} | FIX -> ${newStatus.toUpperCase()}`);
+      } else {
+        console.log(`         Score: ${res.score} | outcome=${res.outcome} | OK (${current})`);
+      }
     } else if (res.status === "finished" && !res.outcome) {
-      console.log("         Finished, but score not confidently parsed -> leaving pending.");
-      // leave as pending to avoid wrong marking
+      console.log("         Finished, but score not confidently parsed -> leaving as is.");
     } else {
-      console.log("         Not finished yet.");
+      console.log("         Not finished yet -> leaving as is.");
     }
   }
 
