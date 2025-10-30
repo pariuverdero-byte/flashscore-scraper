@@ -1,4 +1,4 @@
-// verify_and_update_wp.js — rows re-eval + overall ticket status + robust score parse
+// verify_and_update_wp.js — rows re-eval + overall ticket status with proper WP update
 
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
@@ -16,7 +16,7 @@ const DRY_RUN =
   String(process.env.DRY_RUN || "0").toLowerCase() === "1" ||
   String(process.env.DRY_RUN || "").toLowerCase() === "true";
 
-const TEST_HTML_PATH = process.env.TEST_HTML_PATH || ""; // for local tests
+const TEST_HTML_PATH = process.env.TEST_HTML_PATH || "";
 const OUTPUT_HTML_PATH = process.env.OUTPUT_HTML_PATH || "updated.html";
 const ONLY_POST_ID = process.env.POST_ID ? String(process.env.POST_ID) : "";
 
@@ -71,7 +71,6 @@ async function updatePost(postId, newContent) {
 function stripDiacritics(s = "") {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
-
 function parseMarketLabel(text) {
   const t = stripDiacritics(String(text || "").toUpperCase()).trim();
   if (/^(1)(\s|$)/.test(t) || /\bGAZDE\b/.test(t)) return "1";
@@ -79,42 +78,32 @@ function parseMarketLabel(text) {
   if (/^(2)(\s|$)/.test(t) || /\bOASP/.test(t) || /\bOASPETI\b/.test(t)) return "2";
   return null;
 }
-
 function decideOutcomeFromScore(home, away) {
   if (home > away) return "1";
   if (home < away) return "2";
   return "X";
 }
-
 function extractMatchIdFromUrl(url = "") {
   const m = /\/match\/([A-Za-z0-9]+)\//i.exec(url);
   return m ? m[1] : null;
 }
-
 async function fetchText(url) {
   const r = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      "Accept-Language": "ro,en;q=0.9",
-    },
+    headers: { "User-Agent": "Mozilla/5.0", "Accept-Language": "ro,en;q=0.9" },
   });
   if (!r.ok) return null;
   return await r.text();
 }
-
 function getFinalScoreFromHtml(html) {
   if (!html) return null;
   const text = html.replace(/\s+/g, " ").trim();
   const finishedIdx = text.search(/(Finished|FT\b|Final|After extra time|AET)/i);
   if (finishedIdx === -1) return null;
-
   const allScores = [...text.matchAll(/(\d{1,2})\s*:\s*(\d{1,2})/g)];
   if (!allScores.length) return null;
 
   const filtered = allScores.filter((m) => {
-    const start = Math.max(0, m.index - 1);
-    const end = m.index + m[0].length + 1;
-    const slice = text.slice(start, end);
+    const slice = text.slice(Math.max(0, m.index - 1), m.index + m[0].length + 1);
     return !slice.includes("("); // ignore halftime like (1:0)
   });
   if (!filtered.length) return null;
@@ -122,20 +111,16 @@ function getFinalScoreFromHtml(html) {
   let chosen = null;
   for (const m of filtered) if (m.index < finishedIdx) chosen = m;
   const fm = chosen || filtered[filtered.length - 1];
-
   const home = parseInt(fm[1], 10);
   const away = parseInt(fm[2], 10);
   if (!Number.isFinite(home) || !Number.isFinite(away)) return null;
   return { home, away };
 }
-
 async function parseMatchPage(url) {
   const html = await fetchText(url);
   if (!html) return { status: "pending" };
-
   const finished = /(Finished|FT\b|Final|After extra time|AET)/i.test(html);
   if (!finished) return { status: "pending" };
-
   const fs = getFinalScoreFromHtml(html);
   if (fs) {
     const outcome = decideOutcomeFromScore(fs.home, fs.away);
@@ -143,18 +128,15 @@ async function parseMatchPage(url) {
   }
   return { status: "finished", outcome: null, score: null };
 }
-
 async function parseFromListPages(matchId) {
   if (!matchId) return { status: "pending" };
   for (let d = -3; d <= 3; d++) {
     const url = `https://www.flashscore.mobi/?d=${d}&s=1`;
     const html = await fetchText(url);
     if (!html) continue;
-
     const $ = cheerio.load(html);
     const a = $(`a[href*="/match/${matchId}/"]`).first();
     if (!a.length) continue;
-
     const cls = (a.attr("class") || "").toLowerCase();
     const text = a.text().trim();
     if (cls.includes("fin") || /(\d{1,2})\s*:\s*(\d{1,2})/.test(text)) {
@@ -170,7 +152,6 @@ async function parseFromListPages(matchId) {
   }
   return { status: "pending" };
 }
-
 async function fetchMatchOutcome(url) {
   try {
     const primary = await parseMatchPage(url);
@@ -182,25 +163,52 @@ async function fetchMatchOutcome(url) {
   }
 }
 
-// ---------- Ticket-level status ----------
+// ---------- Ticket-level helpers ----------
 function computeTicketStatus($, table) {
   const rows = table.find("tbody > tr").not(".total").toArray();
   let wins = 0, losses = 0, pend = 0, considered = 0;
-
   for (const tr of rows) {
-    const $row = $(tr);
-    const s = ($row.attr("data-status") || "pending").toLowerCase();
-    if (["win", "loss", "pending"].includes(s)) {
+    const s = (cheerio.load(tr)("*").first().parent().attr("data-status") ||
+      cheerio.load(tr)("").root().parent?.attr?.("data-status") ||
+      (cheerio(tr).attr("data-status"))) || "pending";
+    const st = String(s).toLowerCase();
+    if (["win", "loss", "pending"].includes(st)) {
       considered++;
-      if (s === "win") wins++;
-      else if (s === "loss") losses++;
+      if (st === "win") wins++;
+      else if (st === "loss") losses++;
       else pend++;
     }
   }
-
   if (losses > 0) return { status: "loss", wins, losses, pend, considered };
   if (considered > 0 && pend === 0) return { status: "win", wins, losses, pend, considered };
   return { status: "pending", wins, losses, pend, considered };
+}
+
+function readExistingTicketStatus($, table) {
+  const tableAttr = (table.attr("data-ticket-status") || "").toLowerCase();
+  if (["win", "loss", "pending"].includes(tableAttr)) return tableAttr;
+
+  let btn = table.nextAll('div.wp-block-button').first().find('a.wp-block-button__link:contains("Rezultat")').first();
+  if (!btn.length) btn = $('a.wp-block-button__link:contains("Rezultat")').first();
+  if (!btn.length) btn = $('a:contains("Rezultat")').first();
+  if (!btn.length) btn = $('button:contains("Rezultat")').first();
+
+  const txt = (btn.text() || "").toLowerCase();
+  const ds = (btn.attr("data-status") || "").toLowerCase();
+  if (["win", "loss", "pending"].includes(ds)) return ds;
+  if (txt.includes("câștigat")) return "win";
+  if (txt.includes("pierdut")) return "loss";
+  if (txt.includes("așteptare") || txt.includes("asteptare")) return "pending";
+
+  const p = table.nextAll("p.ticket-result").first();
+  const pTxt = (p.text() || "").toLowerCase();
+  const pDs = (p.attr("data-status") || "").toLowerCase();
+  if (["win", "loss", "pending"].includes(pDs)) return pDs;
+  if (pTxt.includes("câștigat")) return "win";
+  if (pTxt.includes("pierdut")) return "loss";
+  if (pTxt.includes("așteptare") || pTxt.includes("asteptare")) return "pending";
+
+  return ""; // unknown
 }
 
 function setTicketStatusVisual($, table, status) {
@@ -210,7 +218,6 @@ function setTicketStatusVisual($, table, status) {
     pending: "Rezultat în așteptare ⏳",
   };
 
-  // Try common WP button markup near the table
   let btn =
     table.nextAll('div.wp-block-button').first().find('a.wp-block-button__link:contains("Rezultat")').first();
   if (!btn.length) btn = $('a.wp-block-button__link:contains("Rezultat")').first();
@@ -221,9 +228,14 @@ function setTicketStatusVisual($, table, status) {
     btn.text(labels[status]);
     btn.attr("data-status", status);
   } else {
-    // Fallback: inject a small paragraph after the table.
-    table.after(`<p class="ticket-result" data-status="${status}">${labels[status]}</p>`);
+    const existingP = table.nextAll("p.ticket-result").first();
+    if (existingP.length) {
+      existingP.text(labels[status]).attr("data-status", status);
+    } else {
+      table.after(`<p class="ticket-result" data-status="${status}">${labels[status]}</p>`);
+    }
   }
+  table.attr("data-ticket-status", status);
 }
 
 // ---------- Core: verify + update ----------
@@ -247,7 +259,6 @@ async function verifyHtmlAndReturn(html) {
     const eventText = tds.eq(0).text().trim();
     const anchor = tds.eq(0).find("a").first();
     const url = anchor.attr("href") || "";
-
     const pickText = tds.eq(3).text().trim();
     const pick = parseMarketLabel(pickText);
     const current = ($row.attr("data-status") || "pending").toLowerCase();
@@ -262,13 +273,10 @@ async function verifyHtmlAndReturn(html) {
       continue;
     }
 
-    // ALWAYS re-evaluate
     const res = await fetchMatchOutcome(url);
 
     if (res.status === "finished" && res.outcome) {
-      const newWin = res.outcome === pick;
-      const newStatus = newWin ? "win" : "loss";
-
+      const newStatus = res.outcome === pick ? "win" : "loss";
       if (current !== newStatus) {
         $row.attr("data-status", newStatus);
         changed = true;
@@ -283,11 +291,14 @@ async function verifyHtmlAndReturn(html) {
     }
   }
 
-  // Ticket-level compute & visual
+  // Ticket-level compute & visual — and mark 'changed' if it differs from previous
+  const prev = readExistingTicketStatus($, table);
   const agg = computeTicketStatus($, table);
+  if (prev !== agg.status) {
+    changed = true;
+    console.log(`\n[TICKET] Overall status: ${prev || "(unknown)"} -> ${agg.status}`);
+  }
   setTicketStatusVisual($, table, agg.status);
-  // also store on table for future runs
-  table.attr("data-ticket-status", agg.status);
 
   return { html: $.html(), changed };
 }
@@ -303,7 +314,6 @@ async function runLocal() {
   await fs.writeFile(OUTPUT_HTML_PATH, out, "utf8");
   console.log(`Local test -> ${OUTPUT_HTML_PATH} (${changed ? "cu modificări" : "fără modificări"})`);
 }
-
 async function runWP() {
   if (!AUTH) {
     console.error("Lipsesc WP_URL / WP_USER / WP_APP_PASS pentru mod WP.");
