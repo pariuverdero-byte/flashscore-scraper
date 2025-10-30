@@ -1,7 +1,7 @@
-// verify_and_update_wp.js — robust updater with fallback via list pages
+// verify_and_update_wp.js — robust updater with correct ticket-badge reassessment
 // - Verifies each event row and sets data-status=win/loss/pending
 // - Computes the whole ticket result and updates the badge/button text
-// - Works against latest N modern Cheerio/Node versions
+// - Triggers post update even if only the badge changed (no row changes)
 
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
@@ -19,7 +19,7 @@ const DRY_RUN =
   String(process.env.DRY_RUN || "0").toLowerCase() === "1" ||
   String(process.env.DRY_RUN || "").toLowerCase() === "true";
 
-const TEST_HTML_PATH = process.env.TEST_HTML_PATH || ""; // local testing on a file
+const TEST_HTML_PATH = process.env.TEST_HTML_PATH || "";
 const OUTPUT_HTML_PATH = process.env.OUTPUT_HTML_PATH || "updated.html";
 const ONLY_POST_ID = process.env.POST_ID ? String(process.env.POST_ID) : "";
 
@@ -80,7 +80,6 @@ function parseMarketLabel(text) {
   if (/^(1)(\s|$)/.test(t) || /\bGAZDE\b/.test(t)) return "1";
   if (/^(X)(\s|$)/.test(t) || /\bEGAL\b/.test(t)) return "X";
   if (/^(2)(\s|$)/.test(t) || /\bOASP/.test(t) || /\bOASPETI\b/.test(t)) return "2";
-  // Extend later: 1X, X2, 12, O/U etc.
   return null;
 }
 
@@ -114,12 +113,9 @@ async function parseMatchPage(url) {
   const $ = cheerio.load(html);
   const bodyTxt = $("body").text();
 
-  // Detect finished
   const finished = /(Finished|FT\b|Final)/i.test(bodyTxt);
   if (!finished) return { status: "pending" };
 
-  // Try to pick the first score a:b that is not minute/time
-  // Prefer patterns near odds / summary blocks
   const tryAreas = ["#tab-mcontent", "p.odds-detail", "#main", "body"];
   for (const sel of tryAreas) {
     const t = $(sel).first().text();
@@ -134,8 +130,6 @@ async function parseMatchPage(url) {
       };
     }
   }
-
-  // Fallback: still finished but no parseable score
   return { status: "finished", outcome: null, score: null };
 }
 
@@ -184,6 +178,21 @@ async function fetchMatchOutcome(url) {
 }
 
 // ---------- Ticket status helpers ----------
+function readPrevTicketStatus($, table) {
+  // Prefer attribute on table or total row
+  const attr = table.attr("data-ticket-status");
+  if (attr) return attr;
+
+  // Fall back to button text
+  const btn =
+    $('a.btn:contains("Rezultat"), button.btn:contains("Rezultat"), .ticket-result').first();
+  const txt = (btn.text() || "").toLowerCase();
+  if (txt.includes("câștigător") || txt.includes("castigator")) return "win";
+  if (txt.includes("pierdut")) return "loss";
+  if (txt.includes("așteptare") || txt.includes("asteptare")) return "pending";
+  return "pending";
+}
+
 function computeTicketStatus($, table) {
   const rows = table.find("tbody > tr").not(".total").toArray();
 
@@ -195,14 +204,11 @@ function computeTicketStatus($, table) {
   for (const tr of rows) {
     const st = (($(tr).attr("data-status")) || "pending").toLowerCase();
     if (st === "win") {
-      wins++;
-      considered++;
+      wins++; considered++;
     } else if (st === "loss") {
-      losses++;
-      considered++;
+      losses++; considered++;
     } else {
-      pend++;
-      considered++;
+      pend++; considered++;
     }
   }
 
@@ -212,7 +218,6 @@ function computeTicketStatus($, table) {
 }
 
 function applyTicketBadge($, status, table) {
-  // Map UI text + bootstrap class
   const map = {
     pending: { text: "Rezultat în așteptare", cls: "btn-warning" },
     win: { text: "Bilet câștigător", cls: "btn-success" },
@@ -220,21 +225,34 @@ function applyTicketBadge($, status, table) {
   };
   const cfg = map[status] || map.pending;
 
-  // Update any visible "Rezultat ..." button/badge
+  let changed = false;
+
+  // Update button/badge
   let $btn =
     $('a.btn:contains("Rezultat"), button.btn:contains("Rezultat"), .ticket-result').first();
   if ($btn.length) {
-    // reset known state classes then add the right one
+    const oldText = ($btn.text() || "").trim();
+    const oldClasses = $btn.attr("class") || "";
+    if (oldText !== cfg.text) changed = true;
+
+    // normalize classes: remove known states then add desired
+    const newClasses = oldClasses
+      .replace(/\bbtn-warning\b|\bbtn-success\b|\bbtn-danger\b/g, "")
+      .trim();
+    if (!newClasses.split(/\s+/).includes(cfg.cls)) changed = true;
+
     $btn.removeClass("btn-warning btn-success btn-danger");
     $btn.addClass(cfg.cls);
     $btn.text(cfg.text);
   }
 
-  // Mark table + total row, so future runs can read this quickly
-  if (table && table.length) {
-    table.attr("data-ticket-status", status);
-    table.find("tr.total").attr("data-status", status);
-  }
+  // Mark table & total row
+  const oldAttr = table.attr("data-ticket-status") || "pending";
+  if (oldAttr !== status) changed = true;
+  table.attr("data-ticket-status", status);
+  table.find("tr.total").attr("data-status", status);
+
+  return changed;
 }
 
 // Walks the table, updates data-status on rows and returns updated HTML
@@ -242,6 +260,8 @@ async function verifyHtmlAndReturn(html) {
   const $ = cheerio.load(html);
   const table = $("table.bilet-pariu").first();
   if (!table.length) return { html, changed: false };
+
+  const prevTicketStatus = readPrevTicketStatus($, table);
 
   const rows = table.find("tbody > tr").toArray();
   let changed = false;
@@ -266,7 +286,7 @@ async function verifyHtmlAndReturn(html) {
 
     if (!url || !pick) continue;
 
-    // If we already have a final state, skip rechecking to save requests
+    // Skip network calls if the row is final
     if (current === "win" || current === "loss") {
       console.log(
         `[VERIFY] Event: ${tds.eq(0).text().trim()}\n         URL:   ${url}\n         Pick:  ${pickText} -> ${pick}\n         Cur:   ${current}\n         Skip: already decided.\n`
@@ -274,7 +294,6 @@ async function verifyHtmlAndReturn(html) {
       continue;
     }
 
-    // Ask Flashscore
     const res = await fetchMatchOutcome(url);
 
     if (res.status === "finished" && res.outcome) {
@@ -285,7 +304,6 @@ async function verifyHtmlAndReturn(html) {
         `[VERIFY] Event: ${tds.eq(0).text().trim()}\n         URL:   ${url}\n         Pick:  ${pickText} -> ${pick}\n         Cur:   ${current}\n         Score: ${res.score} | outcome=${res.outcome} | OK (${win ? "win" : "loss"})\n`
       );
     } else if (res.status === "finished" && !res.outcome) {
-      // Finished but no reliable score → keep pending (safer)
       console.log(
         `[VERIFY] Event: ${tds.eq(0).text().trim()}\n         URL:   ${url}\n         Pick:  ${pickText} -> ${pick}\n         Cur:   ${current}\n         Finished, but score not confidently parsed -> leaving as is.\n`
       );
@@ -298,7 +316,12 @@ async function verifyHtmlAndReturn(html) {
 
   // Compute & apply the overall ticket status badge
   const summary = computeTicketStatus($, table);
-  applyTicketBadge($, summary.status, table);
+  const badgeChanged = applyTicketBadge($, summary.status, table);
+
+  // If the computed status is different from previous, consider as change
+  if (badgeChanged || summary.status !== prevTicketStatus) {
+    changed = true;
+  }
 
   return { html: $.html(), changed };
 }
@@ -332,7 +355,7 @@ async function runWP() {
     const content = p.content?.rendered || "";
     const { html: newHtml, changed } = await verifyHtmlAndReturn(content);
     if (changed) await updatePost(p.id, newHtml);
-    else console.log("Nicio schimbare.");
+    else console.log(`Post #${p.id}: fără schimbări`);
     return;
   }
 
