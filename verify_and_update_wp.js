@@ -1,339 +1,318 @@
-// verify_and_update_wp.js — robust updater with full [status_bilet] + ticket badge sync
-// - Checks each event (row) and updates data-status (win/loss/pending)
-// - Recomputes the overall ticket result (win/loss/pending)
-// - Updates ALL visible ticket status areas: button, badge, shortcode output, etc.
-// - Works with WordPress via REST API (auth required via WP_APP_PASS)
+/**
+ * verify_and_update_wp.js
+ *
+ * Verifies Flashscore outcomes and updates:
+ *  - each event row's data-status + a status icon
+ *  - the ticket badge / [status_bilet] in the same HTML
+ * Writes back to WordPress POSTs and (NEW) to PAGEs (e.g., homepage)
+ *
+ * ENV:
+ *  WP_URL, WP_USER, WP_APP_PASS
+ *  POST_IDS="1255,1256"                 (optional)
+ *  CATEGORY_SLUGS="biletul-zilei,cota-2" (optional fallback to fetch recent posts)
+ *  MAX_POSTS=10                         (optional, per category)
+ *  FRONT_PAGE_IDS="2,123"               (optional, pages to keep in sync)
+ *  DRY_RUN=1                            (optional, print only)
+ */
 
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
-import fs from "fs/promises";
 
-// === ENV ===
-const { WP_URL, WP_USER, WP_APP_PASS } = process.env;
-const AUTH =
-  WP_URL && WP_USER && WP_APP_PASS
-    ? "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASS}`).toString("base64")
-    : null;
-
-const MAX_POSTS_PER_CAT = Number(process.env.MAX_POSTS_PER_CAT || 6);
-const DRY_RUN =
-  String(process.env.DRY_RUN || "0").toLowerCase() === "1" ||
-  String(process.env.DRY_RUN || "").toLowerCase() === "true";
-
-const TEST_HTML_PATH = process.env.TEST_HTML_PATH || "";
-const OUTPUT_HTML_PATH = process.env.OUTPUT_HTML_PATH || "updated.html";
-const ONLY_POST_ID = process.env.POST_ID ? String(process.env.POST_ID) : "";
-
-// ---------- WordPress helpers ----------
-async function getCategoryId(slug) {
-  const r = await fetch(`${WP_URL}/wp-json/wp/v2/categories?slug=${slug}`, {
-    headers: { Authorization: AUTH },
-  });
-  const j = await r.json();
-  return j?.[0]?.id || null;
+// -------------------- ENV --------------------
+const WP_URL = (process.env.WP_URL || "").replace(/\/$/, "");
+const WP_USER = process.env.WP_USER || "";
+const WP_APP_PASS = process.env.WP_APP_PASS || "";
+if (!WP_URL || !WP_USER || !WP_APP_PASS) {
+  console.error("Missing WP_URL / WP_USER / WP_APP_PASS.");
+  process.exit(1);
 }
 
-async function listPostsByCategory(catId, perPage = 6) {
-  const r = await fetch(
-    `${WP_URL}/wp-json/wp/v2/posts?categories=${catId}&per_page=${perPage}&orderby=date&order=desc`,
-    { headers: { Authorization: AUTH } }
-  );
-  if (!r.ok) {
-    console.error("❌ list posts:", r.status, await r.text());
-    return [];
-  }
-  return await r.json();
-}
+const AUTH = "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASS}`).toString("base64");
+const DRY_RUN = process.env.DRY_RUN === "1";
 
-async function readPost(postId) {
-  const r = await fetch(`${WP_URL}/wp-json/wp/v2/posts/${postId}`, {
-    headers: { Authorization: AUTH },
-  });
-  if (!r.ok) return null;
-  return await r.json();
-}
+const POST_IDS = (process.env.POST_IDS || "")
+  .split(",").map(s => s.trim()).filter(Boolean);
 
-async function updatePost(postId, newContent) {
-  if (DRY_RUN) {
-    console.log(`(dry-run) nu actualizez post #${postId}`);
-    return true;
-  }
-  const r = await fetch(`${WP_URL}/wp-json/wp/v2/posts/${postId}`, {
+const CATEGORY_SLUGS = (process.env.CATEGORY_SLUGS || "")
+  .split(",").map(s => s.trim()).filter(Boolean);
+
+const MAX_POSTS = parseInt(process.env.MAX_POSTS || "10", 10) || 10;
+
+const FRONT_PAGE_IDS = (process.env.FRONT_PAGE_IDS || "")
+  .split(",").map(s => s.trim()).filter(Boolean);
+
+// -------------------- WordPress helpers --------------------
+async function wpGetJson(url) {
+  const r = await fetch(url, { headers: { Authorization: AUTH } });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json();
+}
+async function readPost(id) { return wpGetJson(`${WP_URL}/wp-json/wp/v2/posts/${id}`); }
+async function readPage(id) { return wpGetJson(`${WP_URL}/wp-json/wp/v2/pages/${id}`); }
+
+async function updatePost(id, content) {
+  if (DRY_RUN) { console.log(`(dry-run) POST #${id} not updated`); return; }
+  const r = await fetch(`${WP_URL}/wp-json/wp/v2/posts/${id}`, {
     method: "PUT",
     headers: { Authorization: AUTH, "Content-Type": "application/json" },
-    body: JSON.stringify({ content: newContent }),
+    body: JSON.stringify({ content }),
   });
-  if (!r.ok) {
-    console.error(`❌ update ${postId}:`, r.status, await r.text());
-    return false;
-  }
-  console.log(`✅ Actualizat post #${postId}`);
-  return true;
+  if (!r.ok) throw new Error(`Update post ${id} failed: ${r.status} ${await r.text()}`);
+  console.log(`✅ Updated post #${id}`);
 }
-
-// ---------- Parsing helpers ----------
-function stripDiacritics(s = "") {
-  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-}
-
-function parseMarketLabel(text) {
-  const t = stripDiacritics(String(text || "").toUpperCase()).trim();
-  if (/^(1)(\s|$)/.test(t) || /\bGAZDE\b/.test(t)) return "1";
-  if (/^(X)(\s|$)/.test(t) || /\bEGAL\b/.test(t)) return "X";
-  if (/^(2)(\s|$)/.test(t) || /\bOASP/.test(t) || /\bOASPETI\b/.test(t)) return "2";
-  return null;
-}
-
-function decideOutcomeFromScore(home, away) {
-  if (home > away) return "1";
-  if (home < away) return "2";
-  return "X";
-}
-
-function extractMatchIdFromUrl(url = "") {
-  const m = /\/match\/([A-Za-z0-9]+)\//i.exec(url);
-  return m ? m[1] : null;
-}
-
-async function fetchText(url) {
-  const r = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      "Accept-Language": "ro,en;q=0.9",
-    },
+async function updatePage(id, content) {
+  if (DRY_RUN) { console.log(`(dry-run) PAGE #${id} not updated`); return; }
+  const r = await fetch(`${WP_URL}/wp-json/wp/v2/pages/${id}`, {
+    method: "PUT",
+    headers: { Authorization: AUTH, "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
   });
-  if (!r.ok) return null;
-  return await r.text();
+  if (!r.ok) throw new Error(`Update page ${id} failed: ${r.status} ${await r.text()}`);
+  console.log(`✅ Updated page #${id}`);
 }
 
-// Primary: parse match page
-async function parseMatchPage(url) {
-  const html = await fetchText(url);
-  if (!html) return { status: "pending" };
-
-  const $ = cheerio.load(html);
-  const bodyTxt = $("body").text();
-
-  const finished = /(Finished|FT\b|Final)/i.test(bodyTxt);
-  if (!finished) return { status: "pending" };
-
-  const tryAreas = ["#tab-mcontent", "p.odds-detail", "#main", "body"];
-  for (const sel of tryAreas) {
-    const t = $(sel).first().text();
-    const m = t.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
-    if (m) {
-      const home = parseInt(m[1], 10);
-      const away = parseInt(m[2], 10);
-      return {
-        status: "finished",
-        outcome: decideOutcomeFromScore(home, away),
-        score: `${home}:${away}`,
-      };
-    }
-  }
-  return { status: "finished", outcome: null, score: null };
+async function getRecentPostsByCategorySlug(slug, limit = 10) {
+  // 1) slug -> category id
+  const cats = await wpGetJson(`${WP_URL}/wp-json/wp/v2/categories?per_page=100&slug=${encodeURIComponent(slug)}`);
+  if (!cats?.length) return [];
+  const id = cats[0].id;
+  // 2) recent posts
+  const posts = await wpGetJson(`${WP_URL}/wp-json/wp/v2/posts?per_page=${limit}&categories=${id}&orderby=date&order=desc`);
+  return posts.map(p => p.id);
 }
 
-// Fallback: list pages (-3..+3 days)
-async function parseFromListPages(matchId) {
-  if (!matchId) return { status: "pending" };
-  for (let d = -3; d <= 3; d++) {
-    const url = `https://www.flashscore.mobi/?d=${d}&s=1`;
-    const html = await fetchText(url);
-    if (!html) continue;
-
-    const $ = cheerio.load(html);
-    const a = $(`a[href*="/match/${matchId}/"]`).first();
-    if (!a.length) continue;
-
-    const cls = (a.attr("class") || "").toLowerCase();
-    const text = a.text().trim();
-    if (cls.includes("fin") || /(\d{1,2})\s*:\s*(\d{1,2})/.test(text)) {
-      const m = text.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
-      if (m) {
-        const home = parseInt(m[1], 10);
-        const away = parseInt(m[2], 10);
-        return {
-          status: "finished",
-          outcome: decideOutcomeFromScore(home, away),
-          score: `${home}:${away}`,
-        };
-      }
-      return { status: "finished", outcome: null, score: null };
-    }
-  }
-  return { status: "pending" };
-}
-
-async function fetchMatchOutcome(url) {
+// -------------------- Flashscore scraping --------------------
+async function fetchFlashOutcome(mobiUrl) {
+  // Returns { finished, score, outcome }, where outcome = "1"|"2"|"X" or null
   try {
-    const primary = await parseMatchPage(url);
-    if (primary.status === "finished") return primary;
-    const id = extractMatchIdFromUrl(url);
-    const fb = await parseFromListPages(id);
-    return fb;
+    const res = await fetch(mobiUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+    if (!res.ok) return { finished: false, score: null, outcome: null };
+
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const bodyText = $("body").text().replace(/\s+/g, " ").trim();
+
+    const finished =
+      /Finished|FT|AET|After Penalties|Penalties|Final|Ended/i.test(bodyText) ||
+      /Terminat|Finalizat|S-a terminat/i.test(bodyText);
+
+    const m = bodyText.match(/(\d+)\s*:\s*(\d+)/);
+    let score = null, outcome = null;
+    if (m) {
+      const a = parseInt(m[1], 10);
+      const b = parseInt(m[2], 10);
+      score = `${a}:${b}`;
+      outcome = a > b ? "1" : a < b ? "2" : "X";
+    }
+    return { finished, score, outcome };
   } catch {
-    return { status: "pending" };
+    return { finished: false, score: null, outcome: null };
   }
 }
 
-// ---------- Ticket status helpers ----------
-function readPrevTicketStatus($, table) {
-  const attr = table.attr("data-ticket-status");
-  if (attr) return attr;
-  const btn =
-    $('a.btn:contains("Rezultat"), button.btn:contains("Rezultat"), .ticket-result').first();
-  const txt = (btn.text() || "").toLowerCase();
-  if (txt.includes("câștigător") || txt.includes("castigator")) return "win";
-  if (txt.includes("pierdut")) return "loss";
-  if (txt.includes("așteptare") || txt.includes("asteptare")) return "pending";
-  return "pending";
+// -------------------- HTML update helpers --------------------
+function parsePickFromRowText(text) {
+  const m = text.match(/\b(1|2|X)\b/i);
+  return m ? m[1].toUpperCase() : null;
 }
 
-function computeTicketStatus($, table) {
-  const rows = table.find("tbody > tr").not(".total").toArray();
-  let wins = 0,
-    losses = 0,
-    pend = 0;
-  for (const tr of rows) {
-    const st = ($(tr).attr("data-status") || "pending").toLowerCase();
-    if (st === "win") wins++;
-    else if (st === "loss") losses++;
-    else pend++;
+function setRowStatusIcon($, $tr, status) {
+  $tr.attr("data-status", status); // win|loss|pending
+
+  // Try to place/toggle a symbol in the last cell
+  const $cell = $tr.find("td,th").last();
+  const base = ($cell.text() || "").replace(/[✅❌⏳]/g, "").trim();
+  const mark = status === "win" ? " ✅" : status === "loss" ? " ❌" : " ⏳";
+  $cell.text(base + mark);
+
+  // Optional: set a class for styling
+  const cls = ($tr.attr("class") || "").split(/\s+/).filter(Boolean).filter(c => !/^status-/.test(c));
+  cls.push(`status-${status}`);
+  $tr.attr("class", cls.join(" "));
+}
+
+function computeTicketStatus($, $table) {
+  let pending = 0, loss = 0;
+  $table.find("tr").each((_, tr) => {
+    const st = ($(tr).attr("data-status") || "").toLowerCase();
+    if (st === "pending") pending++;
+    else if (st === "loss") loss++;
+  });
+  if (pending > 0) return "in asteptare";
+  if (loss > 0) return "pierdut";
+  return "castigator";
+}
+
+function updateTicketBadgeAndShortcode($, $table, status) {
+  // 1) Replace any [status_bilet] text nodes in the whole document
+  $("*").contents().each((_, node) => {
+    if (node.type === "text" && /\[status_bilet\]/.test(node.data || "")) {
+      node.data = node.data.replace(/\[status_bilet\]/g, status);
+    }
+  });
+
+  // 2) Also put a small symbol on "Cota totală" row if present
+  const $total = $table.find("tr").filter((_, r) => {
+    const txt = $(r).text().toLowerCase();
+    return /cota total|cotă total/.test(txt);
+  }).first();
+
+  if ($total.length) {
+    const $td = $total.find("td,th").last();
+    const clean = ($td.text() || "").replace(/[✅❌⏳]/g, "").trim();
+    const mark = status === "castigator" ? " ✅" : status === "pierdut" ? " ❌" : " ⏳";
+    $td.text(clean + mark);
   }
-  if (losses > 0) return { status: "loss" };
-  if (pend === 0 && wins > 0) return { status: "win" };
-  return { status: "pending" };
 }
 
-function applyTicketBadge($, status, table) {
-  const map = {
-    pending: { text: "Rezultat în așteptare", cls: "btn-warning" },
-    win: { text: "Bilet câștigător", cls: "btn-success" },
-    loss: { text: "Bilet pierdut", cls: "btn-danger" },
-  };
-  const cfg = map[status] || map.pending;
-  let changed = false;
-
-  // --- update all shortcode / badge / button variants ---
-  const allSelectors = `
-    .status-bilet, .status_bilet, .ticket-result, .ticket-status,
-    a.btn:contains("Rezultat"), button.btn:contains("Rezultat"),
-    a.btn:contains("Bilet"), button.btn:contains("Bilet")
-  `;
-  const elements = $(allSelectors).toArray();
-
-  for (const el of elements) {
-    const $el = $(el);
-    const oldText = ($el.text() || "").trim();
-    const oldClasses = $el.attr("class") || "";
-    if (oldText !== cfg.text) changed = true;
-    const clean = oldClasses
-      .replace(/\bbtn-warning\b|\bbtn-success\b|\bbtn-danger\b/g, "")
-      .trim();
-    if (!clean.split(/\s+/).includes(cfg.cls)) changed = true;
-
-    $el.removeClass("btn-warning btn-success btn-danger");
-    $el.addClass(cfg.cls);
-    $el.text(cfg.text);
-    $el.attr("data-ticket-status", status);
-  }
-
-  // --- update table marker & total row ---
-  const oldAttr = table.attr("data-ticket-status") || "pending";
-  if (oldAttr !== status) changed = true;
-  table.attr("data-ticket-status", status);
-  table.find("tr.total").attr("data-status", status);
-
-  return changed;
-}
-
-// ---------- Main verification ----------
+// Verify tables inside HTML; return { html, changed, debugLog }
 async function verifyHtmlAndReturn(html) {
-  const $ = cheerio.load(html);
-  const table = $("table.bilet-pariu").first();
-  if (!table.length) return { html, changed: false };
+  const $ = cheerio.load(html, { decodeEntities: false });
 
-  const prevTicketStatus = readPrevTicketStatus($, table);
   let changed = false;
+  let debug = [];
 
-  for (const tr of table.find("tbody > tr").toArray()) {
-    const $row = $(tr);
-    if ($row.hasClass("total")) continue;
+  // Process every table that contains a Flashscore mobile link
+  $("table").each((_, table) => {
+    const $table = $(table);
+    const rows = $table.find("tr").filter((__, tr) =>
+      $(tr).find("a[href*='flashscore.mobi']").length > 0
+    );
 
-    if (!$row.attr("data-status")) $row.attr("data-status", "pending");
-    const tds = $row.find("td");
-    if (tds.length < 4) continue;
+    if (!rows.length) return;
 
-    const anchor = tds.eq(0).find("a").first();
-    const url = anchor.attr("href");
-    const pickText = tds.eq(3).text().trim();
-    const pick = parseMarketLabel(pickText);
-    const current = ($row.attr("data-status") || "pending").toLowerCase();
+    const rowPromises = [];
+    rows.each((__, tr) => rowPromises.push((async () => {
+      const $tr = $(tr);
+      const rowText = $tr.text().replace(/\s+/g, " ").trim();
+      const link = $tr.find("a[href*='flashscore.mobi']").first().attr("href");
+      const pick = parsePickFromRowText(rowText);
 
-    if (!url || !pick) continue;
-    if (current === "win" || current === "loss") continue;
+      debug.push(`[VERIFY] Event: ${rowText.slice(0, 80)}\n         URL:   ${link}\n         Pick:  ${pick || "?"}`);
 
-    const res = await fetchMatchOutcome(url);
-    if (res.status === "finished" && res.outcome) {
-      const win = res.outcome === pick;
-      $row.attr("data-status", win ? "win" : "loss");
-      changed = true;
-    }
-  }
+      if (!link) {
+        debug.push("         Cur:   pending\n         No link -> leaving as is.");
+        if (($tr.attr("data-status") || "") !== "pending") {
+          setRowStatusIcon($, $tr, "pending");
+          changed = true;
+        }
+        return;
+      }
 
-  const summary = computeTicketStatus($, table);
-  const badgeChanged = applyTicketBadge($, summary.status, table);
-  if (badgeChanged || summary.status !== prevTicketStatus) changed = true;
+      const { finished, score, outcome } = await fetchFlashOutcome(link);
 
-  return { html: $.html(), changed };
+      if (!finished || !outcome) {
+        debug.push("         Cur:   pending\n         Not finished yet -> leaving as is.");
+        if (($tr.attr("data-status") || "") !== "pending") {
+          setRowStatusIcon($, $tr, "pending");
+          changed = true;
+        }
+        return;
+      }
+
+      if (!pick) {
+        // Unknown pick -> mark as pending to avoid wrong grading
+        debug.push(`         Cur:   pending\n         Score: ${score || "?"} | outcome=${outcome} | Missing pick -> leaving as pending`);
+        if (($tr.attr("data-status") || "") !== "pending") {
+          setRowStatusIcon($, $tr, "pending");
+          changed = true;
+        }
+        return;
+      }
+
+      const status = (pick === outcome) ? "win" : "loss";
+      const prev = ($tr.attr("data-status") || "").toLowerCase();
+      debug.push(`         Cur:   ${status}\n         Score: ${score || "?"} | outcome=${outcome} | OK (${status})`);
+
+      if (prev !== status) {
+        setRowStatusIcon($, $tr, status);
+        changed = true;
+      }
+    })()));
+
+    rowPromises.push(Promise.resolve());
+    // After all rows in this table, compute ticket
+    rowPromises.push((async () => {
+      // wait for row updates to finish (simple chaining)
+    })());
+
+    // Wait rows, then compute ticket status & update badges
+    (async () => {
+      await Promise.all(rowPromises);
+      const status = computeTicketStatus($, $table);
+      updateTicketBadgeAndShortcode($, $table, status);
+    })();
+  });
+
+  // Ensure all async inside .each are done by re-wrapping with a microtask tick
+  await new Promise(r => setTimeout(r, 0));
+
+  return { html: $.root().html(), changed, debug: debug.join("\n") };
 }
 
-// ---------- Modes ----------
-async function runLocal() {
-  if (!TEST_HTML_PATH) {
-    console.error("Setează TEST_HTML_PATH pentru test local");
-    process.exit(1);
+// -------------------- Driver --------------------
+async function collectTargetPostIds() {
+  if (POST_IDS.length) return POST_IDS.map(id => parseInt(id, 10)).filter(Boolean);
+  // Fallback: categories
+  const ids = new Set();
+  for (const slug of CATEGORY_SLUGS) {
+    try {
+      const list = await getRecentPostsByCategorySlug(slug, MAX_POSTS);
+      list.forEach(id => ids.add(id));
+    } catch (e) {
+      console.error(`Failed to fetch posts for category '${slug}':`, e.message);
+    }
   }
-  const html = await fs.readFile(TEST_HTML_PATH, "utf8");
-  const { html: out, changed } = await verifyHtmlAndReturn(html);
-  await fs.writeFile(OUTPUT_HTML_PATH, out, "utf8");
-  console.log(`Local test -> ${OUTPUT_HTML_PATH} (${changed ? "cu modificări" : "fără modificări"})`);
+  return Array.from(ids);
 }
 
-async function runWP() {
-  if (!AUTH) {
-    console.error("Lipsesc WP_URL / WP_USER / WP_APP_PASS pentru mod WP.");
-    process.exit(1);
-  }
+async function processOnePost(postId) {
+  const post = await readPost(postId);
+  const orig = post?.content?.rendered || "";
+  const { html, changed, debug } = await verifyHtmlAndReturn(orig);
 
-  if (ONLY_POST_ID) {
-    const p = await readPost(ONLY_POST_ID);
-    if (!p) {
-      console.error("Post inexistent");
-      return;
-    }
-    const { html: newHtml, changed } = await verifyHtmlAndReturn(p.content?.rendered || "");
-    if (changed) await updatePost(p.id, newHtml);
-    else console.log(`Post #${p.id}: fără schimbări`);
+  console.log(debug || "");
+  if (!changed) {
+    console.log(`Post #${postId}: fără schimbări`);
     return;
   }
+  await updatePost(postId, html);
+}
 
-  const catSlugs = ["cota-2", "biletul-zilei"];
-  for (const slug of catSlugs) {
-    const id = await getCategoryId(slug);
-    if (!id) continue;
-    const posts = await listPostsByCategory(id, MAX_POSTS_PER_CAT);
-    for (const p of posts) {
-      const { html: newHtml, changed } = await verifyHtmlAndReturn(p.content?.rendered || "");
-      if (changed) await updatePost(p.id, newHtml);
-      else console.log(`Post #${p.id}: fără schimbări`);
-    }
+async function processOnePage(pageId) {
+  const page = await readPage(pageId);
+  const orig = page?.content?.rendered || "";
+  const { html, changed, debug } = await verifyHtmlAndReturn(orig);
+
+  // Print a short header to make it obvious this was a PAGE
+  if (debug) {
+    console.log(`\n=== PAGE #${pageId} ===`);
+    console.log(debug);
+  }
+
+  if (!changed) {
+    console.log(`Pagina #${pageId}: fără schimbări`);
+    return;
+  }
+  await updatePage(pageId, html);
+}
+
+async function run() {
+  // 1) Posts
+  const targets = await collectTargetPostIds();
+  for (const id of targets) {
+    try { await processOnePost(id); }
+    catch (e) { console.error(`Post #${id} error:`, e.message); }
+  }
+
+  // 2) Front page / other pages
+  for (const pid of FRONT_PAGE_IDS) {
+    try { await processOnePage(parseInt(pid, 10)); }
+    catch (e) { console.error(`Page #${pid} error:`, e.message); }
   }
 }
 
-// ---------- Entry ----------
-(async () => {
-  if (TEST_HTML_PATH) await runLocal();
-  else await runWP();
-})();
+run().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
