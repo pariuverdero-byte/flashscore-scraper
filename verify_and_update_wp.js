@@ -1,318 +1,277 @@
-/**
- * verify_and_update_wp.js
- *
- * Verifies Flashscore outcomes and updates:
- *  - each event row's data-status + a status icon
- *  - the ticket badge / [status_bilet] in the same HTML
- * Writes back to WordPress POSTs and (NEW) to PAGEs (e.g., homepage)
- *
- * ENV:
- *  WP_URL, WP_USER, WP_APP_PASS
- *  POST_IDS="1255,1256"                 (optional)
- *  CATEGORY_SLUGS="biletul-zilei,cota-2" (optional fallback to fetch recent posts)
- *  MAX_POSTS=10                         (optional, per category)
- *  FRONT_PAGE_IDS="2,123"               (optional, pages to keep in sync)
- *  DRY_RUN=1                            (optional, print only)
- */
+// verify_and_update_wp.js
+// Node 18/20 compatible
 
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
 
-// -------------------- ENV --------------------
-const WP_URL = (process.env.WP_URL || "").replace(/\/$/, "");
-const WP_USER = process.env.WP_USER || "";
-const WP_APP_PASS = process.env.WP_APP_PASS || "";
-if (!WP_URL || !WP_USER || !WP_APP_PASS) {
-  console.error("Missing WP_URL / WP_USER / WP_APP_PASS.");
-  process.exit(1);
-}
+/** =========================
+ *  CONFIG
+ *  ========================= */
+const WP_BASE = process.env.WP_BASE;              // e.g. https://pariuverde.ro
+const WP_USER = process.env.WP_USER;              // REST user
+const WP_APP_PASSWORD = process.env.WP_APP_PASS;  // Application Password
+const HOMEPAGE_ID = 11;                           // Home page post id
+const POSTS_TO_CHECK = [
+  // Add/keep your post IDs here; the script can also auto-discover by category if you prefer
+  1303,1297,1292,1285,1281,1257,1255,1253,1304,1298,1293,1286,1282,1258,1256,
+];
 
-const AUTH = "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASS}`).toString("base64");
-const DRY_RUN = process.env.DRY_RUN === "1";
+const authHeader = "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString("base64");
 
-const POST_IDS = (process.env.POST_IDS || "")
-  .split(",").map(s => s.trim()).filter(Boolean);
+const FS_BASE = "https://www.flashscore.mobi/match/";
+const PENDING = "pending", WIN = "win", LOSS = "loss";
 
-const CATEGORY_SLUGS = (process.env.CATEGORY_SLUGS || "")
-  .split(",").map(s => s.trim()).filter(Boolean);
+/** =========================
+ *  HELPERS
+ *  ========================= */
+const get = (url) =>
+  fetch(url, { headers: { Authorization: authHeader, "Content-Type": "application/json" } });
 
-const MAX_POSTS = parseInt(process.env.MAX_POSTS || "10", 10) || 10;
-
-const FRONT_PAGE_IDS = (process.env.FRONT_PAGE_IDS || "")
-  .split(",").map(s => s.trim()).filter(Boolean);
-
-// -------------------- WordPress helpers --------------------
-async function wpGetJson(url) {
-  const r = await fetch(url, { headers: { Authorization: AUTH } });
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
-  return r.json();
-}
-async function readPost(id) { return wpGetJson(`${WP_URL}/wp-json/wp/v2/posts/${id}`); }
-async function readPage(id) { return wpGetJson(`${WP_URL}/wp-json/wp/v2/pages/${id}`); }
-
-async function updatePost(id, content) {
-  if (DRY_RUN) { console.log(`(dry-run) POST #${id} not updated`); return; }
-  const r = await fetch(`${WP_URL}/wp-json/wp/v2/posts/${id}`, {
+const put = (url, body) =>
+  fetch(url, {
     method: "PUT",
-    headers: { Authorization: AUTH, "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+    headers: { Authorization: authHeader, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(`Update post ${id} failed: ${r.status} ${await r.text()}`);
-  console.log(`✅ Updated post #${id}`);
-}
-async function updatePage(id, content) {
-  if (DRY_RUN) { console.log(`(dry-run) PAGE #${id} not updated`); return; }
-  const r = await fetch(`${WP_URL}/wp-json/wp/v2/pages/${id}`, {
-    method: "PUT",
-    headers: { Authorization: AUTH, "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
-  });
-  if (!r.ok) throw new Error(`Update page ${id} failed: ${r.status} ${await r.text()}`);
-  console.log(`✅ Updated page #${id}`);
+
+function outcomeFromScoreText(scoreText, pickMarket, pickSide) {
+  // scoreText like "2:1" or "0:0 (pens 4:5)"; keep it simple
+  const m = scoreText.trim().match(/(\d+)\s*:\s*(\d+)/);
+  if (!m) return null;
+  const h = parseInt(m[1], 10), a = parseInt(m[2], 10);
+  let outcome;
+  if (h > a) outcome = "1";
+  else if (h < a) outcome = "2";
+  else outcome = "X";
+
+  // current impl supports 1X2 (market "1")
+  if (pickMarket === "1") {
+    if (pickSide === "1") return outcome === "1" ? WIN : (outcome === "X" || outcome === "2") ? LOSS : null;
+    if (pickSide === "2") return outcome === "2" ? WIN : (outcome === "1" || outcome === "X") ? LOSS : null;
+    if (pickSide?.toUpperCase() === "X") return outcome === "X" ? WIN : LOSS;
+  }
+  return null;
 }
 
-async function getRecentPostsByCategorySlug(slug, limit = 10) {
-  // 1) slug -> category id
-  const cats = await wpGetJson(`${WP_URL}/wp-json/wp/v2/categories?per_page=100&slug=${encodeURIComponent(slug)}`);
-  if (!cats?.length) return [];
-  const id = cats[0].id;
-  // 2) recent posts
-  const posts = await wpGetJson(`${WP_URL}/wp-json/wp/v2/posts?per_page=${limit}&categories=${id}&orderby=date&order=desc`);
-  return posts.map(p => p.id);
-}
-
-// -------------------- Flashscore scraping --------------------
-async function fetchFlashOutcome(mobiUrl) {
-  // Returns { finished, score, outcome }, where outcome = "1"|"2"|"X" or null
+async function fetchFlashscoreOutcome(matchId) {
   try {
-    const res = await fetch(mobiUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-    if (!res.ok) return { finished: false, score: null, outcome: null };
-
+    const url = `${FS_BASE}${matchId}/?s=5&d=0`;
+    const res = await fetch(url);
     const html = await res.text();
+    // crude parse: find something like <div class="...">FT ... 2:0</div>
     const $ = cheerio.load(html);
-    const bodyText = $("body").text().replace(/\s+/g, " ").trim();
-
-    const finished =
-      /Finished|FT|AET|After Penalties|Penalties|Final|Ended/i.test(bodyText) ||
-      /Terminat|Finalizat|S-a terminat/i.test(bodyText);
-
-    const m = bodyText.match(/(\d+)\s*:\s*(\d+)/);
-    let score = null, outcome = null;
-    if (m) {
-      const a = parseInt(m[1], 10);
-      const b = parseInt(m[2], 10);
-      score = `${a}:${b}`;
-      outcome = a > b ? "1" : a < b ? "2" : "X";
-    }
-    return { finished, score, outcome };
+    const text = $("body").text();
+    // prefer last score pattern
+    const m = text.match(/(\d+)\s*:\s*(\d+)/g);
+    if (!m || m.length === 0) return { finished: false };
+    const score = m[m.length - 1];
+    // detect finished keywords
+    const finished = /FT|Full\s*Time|Ended|Final/.test(text) || /min\.\)/i.test(text) === false;
+    return { finished, scoreText: score };
   } catch {
-    return { finished: false, score: null, outcome: null };
+    return { finished: false };
   }
 }
 
-// -------------------- HTML update helpers --------------------
-function parsePickFromRowText(text) {
-  const m = text.match(/\b(1|2|X)\b/i);
-  return m ? m[1].toUpperCase() : null;
-}
-
-function setRowStatusIcon($, $tr, status) {
-  $tr.attr("data-status", status); // win|loss|pending
-
-  // Try to place/toggle a symbol in the last cell
-  const $cell = $tr.find("td,th").last();
-  const base = ($cell.text() || "").replace(/[✅❌⏳]/g, "").trim();
-  const mark = status === "win" ? " ✅" : status === "loss" ? " ❌" : " ⏳";
-  $cell.text(base + mark);
-
-  // Optional: set a class for styling
-  const cls = ($tr.attr("class") || "").split(/\s+/).filter(Boolean).filter(c => !/^status-/.test(c));
-  cls.push(`status-${status}`);
-  $tr.attr("class", cls.join(" "));
-}
-
-function computeTicketStatus($, $table) {
-  let pending = 0, loss = 0;
-  $table.find("tr").each((_, tr) => {
-    const st = ($(tr).attr("data-status") || "").toLowerCase();
-    if (st === "pending") pending++;
-    else if (st === "loss") loss++;
+function computeTicketStatusFromTable($table) {
+  let hasPending = false, hasLoss = false;
+  $table.find("tbody tr[data-status]").each((_, tr) => {
+    const s = $table($(tr)).attr("data-status");
+    if (s === PENDING) hasPending = true;
+    else if (s === LOSS) hasLoss = true;
   });
-  if (pending > 0) return "in asteptare";
-  if (loss > 0) return "pierdut";
-  return "castigator";
+  if (hasPending) return PENDING;
+  if (hasLoss) return LOSS;
+  return WIN;
 }
 
-function updateTicketBadgeAndShortcode($, $table, status) {
-  // 1) Replace any [status_bilet] text nodes in the whole document
-  $("*").contents().each((_, node) => {
-    if (node.type === "text" && /\[status_bilet\]/.test(node.data || "")) {
-      node.data = node.data.replace(/\[status_bilet\]/g, status);
-    }
-  });
-
-  // 2) Also put a small symbol on "Cota totală" row if present
-  const $total = $table.find("tr").filter((_, r) => {
-    const txt = $(r).text().toLowerCase();
-    return /cota total|cotă total/.test(txt);
-  }).first();
-
-  if ($total.length) {
-    const $td = $total.find("td,th").last();
-    const clean = ($td.text() || "").replace(/[✅❌⏳]/g, "").trim();
-    const mark = status === "castigator" ? " ✅" : status === "pierdut" ? " ❌" : " ⏳";
-    $td.text(clean + mark);
+function paintIconCell($, row, status) {
+  // ensure 6th cell exists and show matching icon
+  const $row = $(row);
+  let $cells = $row.find("td");
+  if ($cells.length < 6) {
+    $row.append(`<td style="text-align:center;font-weight:bold;"></td>`);
+    $cells = $row.find("td");
   }
+  const $iconTd = $cells.eq(5);
+  $iconTd.attr("style", "text-align:center;font-weight:bold;");
+  if (status === WIN) $iconTd.html("✅");
+  else if (status === LOSS) $iconTd.html("❌");
+  else $iconTd.html("⏳");
 }
 
-// Verify tables inside HTML; return { html, changed, debugLog }
-async function verifyHtmlAndReturn(html) {
-  const $ = cheerio.load(html, { decodeEntities: false });
+/** =========================
+ *  MAIN: verify posts, then sync homepage
+ *  ========================= */
+async function verifyOnePost(postId, statusCache) {
+  const res = await get(`${WP_BASE}/wp-json/wp/v2/posts/${postId}?context=edit`);
+  if (!res.ok) throw new Error(`Cannot load post ${postId}`);
+  const post = await res.json();
+  const $ = cheerio.load(post.content?.rendered || post.content?.raw || "");
 
   let changed = false;
-  let debug = [];
 
-  // Process every table that contains a Flashscore mobile link
-  $("table").each((_, table) => {
-    const $table = $(table);
-    const rows = $table.find("tr").filter((__, tr) =>
-      $(tr).find("a[href*='flashscore.mobi']").length > 0
-    );
+  // For every event row
+  const rows = $("table.bilet-pariu tbody tr[data-id]");
+  for (const row of rows.toArray()) {
+    const $row = $(row);
+    const matchId = $row.attr("data-id");
+    const current = $row.attr("data-status") || PENDING;
+    const market = $row.attr("data-market") || "1";
+    const pickText = ($row.find("td").eq(3).text() || "").trim(); // e.g., "1 (gazde)"
+    const pickSide = pickText[0] === "1" ? "1" : pickText[0] === "2" ? "2" : pickText[0]?.toUpperCase();
 
-    if (!rows.length) return;
+    // If already decided, just cache and move on
+    if (current === WIN || current === LOSS) {
+      statusCache[matchId] = current;
+      continue;
+    }
 
-    const rowPromises = [];
-    rows.each((__, tr) => rowPromises.push((async () => {
-      const $tr = $(tr);
-      const rowText = $tr.text().replace(/\s+/g, " ").trim();
-      const link = $tr.find("a[href*='flashscore.mobi']").first().attr("href");
-      const pick = parsePickFromRowText(rowText);
-
-      debug.push(`[VERIFY] Event: ${rowText.slice(0, 80)}\n         URL:   ${link}\n         Pick:  ${pick || "?"}`);
-
-      if (!link) {
-        debug.push("         Cur:   pending\n         No link -> leaving as is.");
-        if (($tr.attr("data-status") || "") !== "pending") {
-          setRowStatusIcon($, $tr, "pending");
-          changed = true;
-        }
-        return;
-      }
-
-      const { finished, score, outcome } = await fetchFlashOutcome(link);
-
-      if (!finished || !outcome) {
-        debug.push("         Cur:   pending\n         Not finished yet -> leaving as is.");
-        if (($tr.attr("data-status") || "") !== "pending") {
-          setRowStatusIcon($, $tr, "pending");
-          changed = true;
-        }
-        return;
-      }
-
-      if (!pick) {
-        // Unknown pick -> mark as pending to avoid wrong grading
-        debug.push(`         Cur:   pending\n         Score: ${score || "?"} | outcome=${outcome} | Missing pick -> leaving as pending`);
-        if (($tr.attr("data-status") || "") !== "pending") {
-          setRowStatusIcon($, $tr, "pending");
-          changed = true;
-        }
-        return;
-      }
-
-      const status = (pick === outcome) ? "win" : "loss";
-      const prev = ($tr.attr("data-status") || "").toLowerCase();
-      debug.push(`         Cur:   ${status}\n         Score: ${score || "?"} | outcome=${outcome} | OK (${status})`);
-
-      if (prev !== status) {
-        setRowStatusIcon($, $tr, status);
-        changed = true;
-      }
-    })()));
-
-    rowPromises.push(Promise.resolve());
-    // After all rows in this table, compute ticket
-    rowPromises.push((async () => {
-      // wait for row updates to finish (simple chaining)
-    })());
-
-    // Wait rows, then compute ticket status & update badges
-    (async () => {
-      await Promise.all(rowPromises);
-      const status = computeTicketStatus($, $table);
-      updateTicketBadgeAndShortcode($, $table, status);
-    })();
-  });
-
-  // Ensure all async inside .each are done by re-wrapping with a microtask tick
-  await new Promise(r => setTimeout(r, 0));
-
-  return { html: $.root().html(), changed, debug: debug.join("\n") };
-}
-
-// -------------------- Driver --------------------
-async function collectTargetPostIds() {
-  if (POST_IDS.length) return POST_IDS.map(id => parseInt(id, 10)).filter(Boolean);
-  // Fallback: categories
-  const ids = new Set();
-  for (const slug of CATEGORY_SLUGS) {
-    try {
-      const list = await getRecentPostsByCategorySlug(slug, MAX_POSTS);
-      list.forEach(id => ids.add(id));
-    } catch (e) {
-      console.error(`Failed to fetch posts for category '${slug}':`, e.message);
+    // Query Flashscore
+    const info = await fetchFlashscoreOutcome(matchId);
+    if (!info.finished) {
+      statusCache[matchId] = current; // pending
+      continue;
+    }
+    const verdict = outcomeFromScoreText(info.scoreText, market, pickSide);
+    if (verdict && verdict !== current) {
+      $row.attr("data-status", verdict);
+      paintIconCell($, row, verdict);
+      statusCache[matchId] = verdict;
+      changed = true;
+      const title = $("h1,h2,h3").first().text() || post.title?.rendered;
+      console.log(`[VERIFY] ${title} :: ${matchId} -> ${verdict}`);
     }
   }
-  return Array.from(ids);
-}
 
-async function processOnePost(postId) {
-  const post = await readPost(postId);
-  const orig = post?.content?.rendered || "";
-  const { html, changed, debug } = await verifyHtmlAndReturn(orig);
+  // Ensure header ✔ column exists
+  $("table.bilet-pariu").each((_, t) => {
+    const $t = $(t);
+    const ths = $t.find("thead tr th");
+    if (ths.length < 6) {
+      $t.find("thead tr").append(`<th>✔</th>`);
+    }
+    // paint icon cells for existing statuses
+    $t.find("tbody tr[data-status]").each((_, tr) => {
+      paintIconCell($, tr, $(tr).attr("data-status"));
+    });
+    // Update the ticket badge above table (div with the emoji)
+    const ticketWrap = $t.closest("div");
+    const status = computeTicketStatusFromTable($t);
+    const badge = ticketWrap.find("div")
+      .filter((_, el) => $(el).text().match(/În așteptare|Câștigat|Pierdut|⏳|✅|❌/)).first();
+    if (badge.length) {
+      if (status === WIN) badge.html(`✅ Câștigat`).attr("style", (badge.attr("style")||"").replace(/background-color:[^;]+;/,'') + " background-color:#4CAF50; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;");
+      else if (status === LOSS) badge.html(`❌ Pierdut`).attr("style", (badge.attr("style")||"").replace(/background-color:[^;]+;/,'') + " background-color:#F44336; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;");
+      else badge.html(`⏳ În așteptare`).attr("style", (badge.attr("style")||"").replace(/background-color:[^;]+;/,'') + " background-color:#FFC107; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;");
+    }
+  });
 
-  console.log(debug || "");
-  if (!changed) {
+  if (changed) {
+    // Update post content
+    const newHtml = $.html();
+    await put(`${WP_BASE}/wp-json/wp/v2/posts/${postId}`, { content: newHtml });
+    console.log(`Post #${postId}: actualizat`);
+  } else {
     console.log(`Post #${postId}: fără schimbări`);
+  }
+}
+
+function recalcAndBadge($, $table) {
+  const status = computeTicketStatusFromTable($table);
+  const ticketWrap = $table.closest("div");
+  const badge = ticketWrap.find("div")
+    .filter((_, el) => $(el).text().match(/În așteptare|Câștigat|Pierdut|⏳|✅|❌/)).first();
+  if (badge.length) {
+    if (status === WIN) badge.html(`✅ Câștigat`).attr("style", (badge.attr("style")||"").replace(/background-color:[^;]+;/,'') + " background-color:#4CAF50; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;");
+    else if (status === LOSS) badge.html(`❌ Pierdut`).attr("style", (badge.attr("style")||"").replace(/background-color:[^;]+;/,'') + " background-color:#F44336; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;");
+    else badge.html(`⏳ În așteptare`).attr("style", (badge.attr("style")||"").replace(/background-color:[^;]+;/,'') + " background-color:#FFC107; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;");
+  }
+}
+
+async function syncHomepage(statusCache) {
+  const res = await get(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}?context=edit`);
+  if (!res.ok) {
+    console.log(`Homepage (${HOMEPAGE_ID}) not accessible`);
     return;
   }
-  await updatePost(postId, html);
+  const page = await res.json();
+  const raw = page.content?.raw || page.content?.rendered || "";
+  const $ = cheerio.load(raw);
+
+  let changed = false;
+  // Update every event row found on homepage
+  $("table.bilet-pariu tbody tr[data-id]").each((_, tr) => {
+    const $tr = $(tr);
+    const id = $tr.attr("data-id");
+    const cur = $tr.attr("data-status") || PENDING;
+    const newS = statusCache[id];
+    if (!newS) return;
+    if (newS !== cur) {
+      $tr.attr("data-status", newS);
+      paintIconCell($, tr, newS);
+      changed = true;
+    } else {
+      // ensure icon exists even if same status
+      paintIconCell($, tr, cur);
+    }
+  });
+
+  // Recompute ticket badges for each table block
+  $("table.bilet-pariu").each((_, t) => recalcAndBadge($, $(t)));
+
+  // If any decided exists, replace “Niciun eveniment finalizat.”
+  const anyDecided = $("table.bilet-pariu tbody tr[data-status='win'], table.bilet-pariu tbody tr[data-status='loss']").length > 0;
+  if (anyDecided) {
+    $(`.elementor-shortcode:contains("Niciun eveniment finalizat.")`).each((_, el) => {
+      const p = $(el).find("p");
+      if (p.length) {
+        p.text("Evenimentele au fost actualizate.");
+        changed = true;
+      }
+    });
+  }
+
+  if (changed) {
+    const newHtml = $.html();
+    await put(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}`, { content: newHtml });
+    console.log(`Homepage #${HOMEPAGE_ID}: sincronizat cu rezultatele.`);
+  } else {
+    console.log(`Homepage #${HOMEPAGE_ID}: fără schimbări`);
+  }
 }
 
-async function processOnePage(pageId) {
-  const page = await readPage(pageId);
-  const orig = page?.content?.rendered || "";
-  const { html, changed, debug } = await verifyHtmlAndReturn(orig);
-
-  // Print a short header to make it obvious this was a PAGE
-  if (debug) {
-    console.log(`\n=== PAGE #${pageId} ===`);
-    console.log(debug);
+(async function run() {
+  if (!WP_BASE || !WP_USER || !WP_APP_PASSWORD) {
+    console.error("Set WP_BASE, WP_USER, WP_APP_PASS env vars.");
+    process.exit(1);
   }
 
-  if (!changed) {
-    console.log(`Pagina #${pageId}: fără schimbări`);
-    return;
-  }
-  await updatePage(pageId, html);
-}
+  const statusCache = {}; // matchId -> status
 
-async function run() {
-  // 1) Posts
-  const targets = await collectTargetPostIds();
-  for (const id of targets) {
-    try { await processOnePost(id); }
-    catch (e) { console.error(`Post #${id} error:`, e.message); }
+  for (const id of POSTS_TO_CHECK) {
+    try {
+      await verifyOnePost(id, statusCache);
+    } catch (e) {
+      console.error(`Eroare la post ${id}:`, e.message);
+    }
   }
 
-  // 2) Front page / other pages
-  for (const pid of FRONT_PAGE_IDS) {
-    try { await processOnePage(parseInt(pid, 10)); }
-    catch (e) { console.error(`Page #${pid} error:`, e.message); }
-  }
-}
+  // also try to auto-discover newest posts in the two series, in case the list above lags
+  try {
+    const q1 = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=6&search=Bilet%20Cota%202`);
+    const q2 = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=6&search=Biletul%20Zilei`);
+    for (const r of [q1, q2]) {
+      if (r.ok) {
+        const items = await r.json();
+        for (const p of items) {
+          if (!POSTS_TO_CHECK.includes(p.id)) {
+            await verifyOnePost(p.id, statusCache);
+          }
+        }
+      }
+    }
+  } catch {}
 
-run().catch(err => {
-  console.error(err);
-  process.exit(1);
-});
+  await syncHomepage(statusCache);
+})();
