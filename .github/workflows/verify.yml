@@ -33,6 +33,7 @@ jobs:
       - name: Verify and update posts
         env:
           WP_URL: ${{ secrets.WP_URL }}
+          WP_BASE: ${{ secrets.WP_URL }}  
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
           MAX_POSTS_PER_CAT: "8"
