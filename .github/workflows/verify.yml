@@ -2,6 +2,14 @@ name: Verify tickets & update WP
 
 on:
   workflow_dispatch:
+    inputs:
+      recheck:
+        description: 'Re-check already decided rows on the newest posts?'
+        type: boolean
+        default: false
+      recheck_last_n:
+        description: 'How many newest posts to re-scan'
+        default: '15'
   schedule:
     # Din oră în oră noaptea + o rulare dimineața (tunează după nevoie)
     - cron: "0 18-23 * * *"   # 21:00-00:00 RO (UTC+3 ⇒ 18-21 UTC)
@@ -30,14 +38,25 @@ jobs:
         run: |
           npm install cheerio@^1.0.0-rc.12 node-fetch@^3 --no-fund --no-audit --prefer-offline
 
-     - name: Verify and update posts
-  run: node verify_and_update_wp.js
-  env:
-    WP_BASE: ${{ secrets.WP_URL }}
-    WP_USER: ${{ secrets.WP_USER }}
-    WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
-    RECHECK_ONCE: '1'        # << re-check already decided rows
-    RECHECK_LAST_N: '15'     # << how many newest posts to re-scan
-
+      # Normal (scheduled) run – no recheck
+      - name: Verify and update posts (scheduled)
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        env:
+          WP_BASE: ${{ secrets.WP_URL }}
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
           MAX_POSTS_PER_CAT: "8"
+          RECHECK_ONCE: "0"
+        run: node verify_and_update_wp.js
+
+      # Manual run – optional one-time recheck of newest N posts
+      - name: Verify and update posts (manual recheck)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          WP_BASE: ${{ secrets.WP_URL }}
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+          MAX_POSTS_PER_CAT: "8"
+          RECHECK_ONCE: ${{ inputs.recheck && '1' || '0' }}
+          RECHECK_LAST_N: ${{ inputs.recheck_last_n }}
         run: node verify_and_update_wp.js
