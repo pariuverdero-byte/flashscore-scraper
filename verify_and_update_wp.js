@@ -1,5 +1,5 @@
 // verify_and_update_wp.js
-// Node 18/20 compatible
+// Node 18/20 compatible (ESM)
 
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
@@ -7,12 +7,13 @@ import * as cheerio from "cheerio";
 /** =========================
  *  CONFIG
  *  ========================= */
-const WP_BASE = process.env.WP_BASE;              // e.g. https://pariuverde.ro
-const WP_USER = process.env.WP_USER;              // REST user
-const WP_APP_PASSWORD = process.env.WP_APP_PASS;  // Application Password
-const HOMEPAGE_ID = 11;                           // Home page post id
+// Accept WP_BASE or WP_URL (fallback to WP_URL for backward compat)
+const WP_BASE = process.env.WP_BASE || process.env.WP_URL;     // e.g. https://pariuverde.ro
+const WP_USER = process.env.WP_USER;                           // REST user
+const WP_APP_PASSWORD = process.env.WP_APP_PASS;               // Application Password
+const HOMEPAGE_ID = Number(process.env.WP_HOMEPAGE_ID || 11);  // Home page post id
+
 const POSTS_TO_CHECK = [
-  // Add/keep your post IDs here; the script can also auto-discover by category if you prefer
   1303,1297,1292,1285,1281,1257,1255,1253,1304,1298,1293,1286,1282,1258,1256,
 ];
 
@@ -22,7 +23,7 @@ const FS_BASE = "https://www.flashscore.mobi/match/";
 const PENDING = "pending", WIN = "win", LOSS = "loss";
 
 /** =========================
- *  HELPERS
+ *  HTTP helpers
  *  ========================= */
 const get = (url) =>
   fetch(url, { headers: { Authorization: authHeader, "Content-Type": "application/json" } });
@@ -34,8 +35,10 @@ const put = (url, body) =>
     body: JSON.stringify(body),
   });
 
+/** =========================
+ *  Flashscore parsing helpers
+ *  ========================= */
 function outcomeFromScoreText(scoreText, pickMarket, pickSide) {
-  // scoreText like "2:1" or "0:0 (pens 4:5)"; keep it simple
   const m = scoreText.trim().match(/(\d+)\s*:\s*(\d+)/);
   if (!m) return null;
   const h = parseInt(m[1], 10), a = parseInt(m[2], 10);
@@ -44,10 +47,9 @@ function outcomeFromScoreText(scoreText, pickMarket, pickSide) {
   else if (h < a) outcome = "2";
   else outcome = "X";
 
-  // current impl supports 1X2 (market "1")
   if (pickMarket === "1") {
-    if (pickSide === "1") return outcome === "1" ? WIN : (outcome === "X" || outcome === "2") ? LOSS : null;
-    if (pickSide === "2") return outcome === "2" ? WIN : (outcome === "1" || outcome === "X") ? LOSS : null;
+    if (pickSide === "1") return outcome === "1" ? WIN : LOSS;
+    if (pickSide === "2") return outcome === "2" ? WIN : LOSS;
     if (pickSide?.toUpperCase() === "X") return outcome === "X" ? WIN : LOSS;
   }
   return null;
@@ -58,25 +60,27 @@ async function fetchFlashscoreOutcome(matchId) {
     const url = `${FS_BASE}${matchId}/?s=5&d=0`;
     const res = await fetch(url);
     const html = await res.text();
-    // crude parse: find something like <div class="...">FT ... 2:0</div>
     const $ = cheerio.load(html);
     const text = $("body").text();
-    // prefer last score pattern
     const m = text.match(/(\d+)\s*:\s*(\d+)/g);
     if (!m || m.length === 0) return { finished: false };
     const score = m[m.length - 1];
-    // detect finished keywords
-    const finished = /FT|Full\s*Time|Ended|Final/.test(text) || /min\.\)/i.test(text) === false;
+
+    // Very loose finished heuristics (works well enough for mobi pages)
+    const finished = /FT|Full\s*Time|Ended|Final/i.test(text) || !/\b\d{1,2}\s*min\./i.test(text);
     return { finished, scoreText: score };
   } catch {
     return { finished: false };
   }
 }
 
+/** =========================
+ *  DOM helpers
+ *  ========================= */
 function computeTicketStatusFromTable($table) {
   let hasPending = false, hasLoss = false;
   $table.find("tbody tr[data-status]").each((_, tr) => {
-    const s = $table($(tr)).attr("data-status");
+    const s = $table(tr).attr("data-status");
     if (s === PENDING) hasPending = true;
     else if (s === LOSS) hasLoss = true;
   });
@@ -86,7 +90,6 @@ function computeTicketStatusFromTable($table) {
 }
 
 function paintIconCell($, row, status) {
-  // ensure 6th cell exists and show matching icon
   const $row = $(row);
   let $cells = $row.find("td");
   if ($cells.length < 6) {
@@ -100,8 +103,25 @@ function paintIconCell($, row, status) {
   else $iconTd.html("⏳");
 }
 
+function recalcAndBadge($, $table) {
+  const status = computeTicketStatusFromTable($table);
+  const ticketWrap = $table.closest("div");
+  const badge = ticketWrap.find("div")
+    .filter((_, el) => $(el).text().match(/În așteptare|Câștigat|Pierdut|⏳|✅|❌/)).first();
+
+  const paint = (html, bg) =>
+    (badge.attr("style") || "").replace(/background-color:[^;]+;/, "") +
+    ` background-color:${bg}; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;`;
+
+  if (badge.length) {
+    if (status === WIN) badge.html("✅ Câștigat").attr("style", paint(badge.html(), "#4CAF50"));
+    else if (status === LOSS) badge.html("❌ Pierdut").attr("style", paint(badge.html(), "#F44336"));
+    else badge.html("⏳ În așteptare").attr("style", paint(badge.html(), "#FFC107"));
+  }
+}
+
 /** =========================
- *  MAIN: verify posts, then sync homepage
+ *  Verify a post, then sync homepage
  *  ========================= */
 async function verifyOnePost(postId, statusCache) {
   const res = await get(`${WP_BASE}/wp-json/wp/v2/posts/${postId}?context=edit`);
@@ -111,26 +131,23 @@ async function verifyOnePost(postId, statusCache) {
 
   let changed = false;
 
-  // For every event row
   const rows = $("table.bilet-pariu tbody tr[data-id]");
   for (const row of rows.toArray()) {
     const $row = $(row);
     const matchId = $row.attr("data-id");
     const current = $row.attr("data-status") || PENDING;
     const market = $row.attr("data-market") || "1";
-    const pickText = ($row.find("td").eq(3).text() || "").trim(); // e.g., "1 (gazde)"
+    const pickText = ($row.find("td").eq(3).text() || "").trim();
     const pickSide = pickText[0] === "1" ? "1" : pickText[0] === "2" ? "2" : pickText[0]?.toUpperCase();
 
-    // If already decided, just cache and move on
     if (current === WIN || current === LOSS) {
       statusCache[matchId] = current;
       continue;
     }
 
-    // Query Flashscore
     const info = await fetchFlashscoreOutcome(matchId);
     if (!info.finished) {
-      statusCache[matchId] = current; // pending
+      statusCache[matchId] = current;
       continue;
     }
     const verdict = outcomeFromScoreText(info.scoreText, market, pickSide);
@@ -144,48 +161,21 @@ async function verifyOnePost(postId, statusCache) {
     }
   }
 
-  // Ensure header ✔ column exists
+  // Ensure ✔ column + badges
   $("table.bilet-pariu").each((_, t) => {
     const $t = $(t);
     const ths = $t.find("thead tr th");
-    if (ths.length < 6) {
-      $t.find("thead tr").append(`<th>✔</th>`);
-    }
-    // paint icon cells for existing statuses
-    $t.find("tbody tr[data-status]").each((_, tr) => {
-      paintIconCell($, tr, $(tr).attr("data-status"));
-    });
-    // Update the ticket badge above table (div with the emoji)
-    const ticketWrap = $t.closest("div");
-    const status = computeTicketStatusFromTable($t);
-    const badge = ticketWrap.find("div")
-      .filter((_, el) => $(el).text().match(/În așteptare|Câștigat|Pierdut|⏳|✅|❌/)).first();
-    if (badge.length) {
-      if (status === WIN) badge.html(`✅ Câștigat`).attr("style", (badge.attr("style")||"").replace(/background-color:[^;]+;/,'') + " background-color:#4CAF50; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;");
-      else if (status === LOSS) badge.html(`❌ Pierdut`).attr("style", (badge.attr("style")||"").replace(/background-color:[^;]+;/,'') + " background-color:#F44336; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;");
-      else badge.html(`⏳ În așteptare`).attr("style", (badge.attr("style")||"").replace(/background-color:[^;]+;/,'') + " background-color:#FFC107; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;");
-    }
+    if (ths.length < 6) $t.find("thead tr").append(`<th>✔</th>`);
+    $t.find("tbody tr[data-status]").each((_, tr) => paintIconCell($, tr, $(tr).attr("data-status")));
+    recalcAndBadge($, $t);
   });
 
   if (changed) {
-    // Update post content
     const newHtml = $.html();
     await put(`${WP_BASE}/wp-json/wp/v2/posts/${postId}`, { content: newHtml });
     console.log(`Post #${postId}: actualizat`);
   } else {
     console.log(`Post #${postId}: fără schimbări`);
-  }
-}
-
-function recalcAndBadge($, $table) {
-  const status = computeTicketStatusFromTable($table);
-  const ticketWrap = $table.closest("div");
-  const badge = ticketWrap.find("div")
-    .filter((_, el) => $(el).text().match(/În așteptare|Câștigat|Pierdut|⏳|✅|❌/)).first();
-  if (badge.length) {
-    if (status === WIN) badge.html(`✅ Câștigat`).attr("style", (badge.attr("style")||"").replace(/background-color:[^;]+;/,'') + " background-color:#4CAF50; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;");
-    else if (status === LOSS) badge.html(`❌ Pierdut`).attr("style", (badge.attr("style")||"").replace(/background-color:[^;]+;/,'') + " background-color:#F44336; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;");
-    else badge.html(`⏳ În așteptare`).attr("style", (badge.attr("style")||"").replace(/background-color:[^;]+;/,'') + " background-color:#FFC107; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;");
   }
 }
 
@@ -200,7 +190,7 @@ async function syncHomepage(statusCache) {
   const $ = cheerio.load(raw);
 
   let changed = false;
-  // Update every event row found on homepage
+
   $("table.bilet-pariu tbody tr[data-id]").each((_, tr) => {
     const $tr = $(tr);
     const id = $tr.attr("data-id");
@@ -212,15 +202,12 @@ async function syncHomepage(statusCache) {
       paintIconCell($, tr, newS);
       changed = true;
     } else {
-      // ensure icon exists even if same status
       paintIconCell($, tr, cur);
     }
   });
 
-  // Recompute ticket badges for each table block
   $("table.bilet-pariu").each((_, t) => recalcAndBadge($, $(t)));
 
-  // If any decided exists, replace “Niciun eveniment finalizat.”
   const anyDecided = $("table.bilet-pariu tbody tr[data-status='win'], table.bilet-pariu tbody tr[data-status='loss']").length > 0;
   if (anyDecided) {
     $(`.elementor-shortcode:contains("Niciun eveniment finalizat.")`).each((_, el) => {
@@ -241,9 +228,16 @@ async function syncHomepage(statusCache) {
   }
 }
 
+/** =========================
+ *  Runner
+ *  ========================= */
 (async function run() {
-  if (!WP_BASE || !WP_USER || !WP_APP_PASSWORD) {
-    console.error("Set WP_BASE, WP_USER, WP_APP_PASS env vars.");
+  const missing = [];
+  if (!WP_BASE) missing.push("WP_BASE or WP_URL");
+  if (!WP_USER) missing.push("WP_USER");
+  if (!WP_APP_PASSWORD) missing.push("WP_APP_PASS");
+  if (missing.length) {
+    console.error("Missing required env vars:", missing.join(", "));
     process.exit(1);
   }
 
@@ -257,7 +251,6 @@ async function syncHomepage(statusCache) {
     }
   }
 
-  // also try to auto-discover newest posts in the two series, in case the list above lags
   try {
     const q1 = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=6&search=Bilet%20Cota%202`);
     const q2 = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=6&search=Biletul%20Zilei`);
