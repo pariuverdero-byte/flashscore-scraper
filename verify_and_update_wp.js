@@ -1,30 +1,32 @@
 // verify_and_update_wp.js
-// Node 18/20 compatible (ESM)
+// Node 18/20 (ESM)
 
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
 
-/** =========================
- *  CONFIG
- *  ========================= */
-// Accept WP_BASE or WP_URL (fallback to WP_URL for backward compat)
-const WP_BASE = process.env.WP_BASE || process.env.WP_URL;     // e.g. https://pariuverde.ro
-const WP_USER = process.env.WP_USER;                           // REST user
-const WP_APP_PASSWORD = process.env.WP_APP_PASS;               // Application Password
-const HOMEPAGE_ID = Number(process.env.WP_HOMEPAGE_ID || 11);  // Home page post id
+/* =========================
+   CONFIG
+   ========================= */
+// Accept WP_BASE or WP_URL for compatibility
+const WP_BASE = process.env.WP_BASE || process.env.WP_URL;
+const WP_USER = process.env.WP_USER;
+const WP_APP_PASSWORD = process.env.WP_APP_PASS;
+const HOMEPAGE_ID = Number(process.env.WP_HOMEPAGE_ID || 11);
 
+// Posts to verify (plus we also auto-discover the latest by search)
 const POSTS_TO_CHECK = [
   1303,1297,1292,1285,1281,1257,1255,1253,1304,1298,1293,1286,1282,1258,1256,
 ];
 
-const authHeader = "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString("base64");
+const authHeader =
+  "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString("base64");
 
 const FS_BASE = "https://www.flashscore.mobi/match/";
 const PENDING = "pending", WIN = "win", LOSS = "loss";
 
-/** =========================
- *  HTTP helpers
- *  ========================= */
+/* =========================
+   HTTP helpers
+   ========================= */
 const get = (url) =>
   fetch(url, { headers: { Authorization: authHeader, "Content-Type": "application/json" } });
 
@@ -35,22 +37,19 @@ const put = (url, body) =>
     body: JSON.stringify(body),
   });
 
-/** =========================
- *  Flashscore parsing helpers
- *  ========================= */
+/* =========================
+   Flashscore helpers
+   ========================= */
 function outcomeFromScoreText(scoreText, pickMarket, pickSide) {
   const m = scoreText.trim().match(/(\d+)\s*:\s*(\d+)/);
   if (!m) return null;
-  const h = parseInt(m[1], 10), a = parseInt(m[2], 10);
-  let outcome;
-  if (h > a) outcome = "1";
-  else if (h < a) outcome = "2";
-  else outcome = "X";
+  const h = +m[1], a = +m[2];
+  const outcome = h > a ? "1" : h < a ? "2" : "X";
 
   if (pickMarket === "1") {
     if (pickSide === "1") return outcome === "1" ? WIN : LOSS;
     if (pickSide === "2") return outcome === "2" ? WIN : LOSS;
-    if (pickSide?.toUpperCase() === "X") return outcome === "X" ? WIN : LOSS;
+    if ((pickSide || "").toUpperCase() === "X") return outcome === "X" ? WIN : LOSS;
   }
   return null;
 }
@@ -62,25 +61,27 @@ async function fetchFlashscoreOutcome(matchId) {
     const html = await res.text();
     const $ = cheerio.load(html);
     const text = $("body").text();
+
     const m = text.match(/(\d+)\s*:\s*(\d+)/g);
     if (!m || m.length === 0) return { finished: false };
     const score = m[m.length - 1];
 
-    // Very loose finished heuristics (works well enough for mobi pages)
-    const finished = /FT|Full\s*Time|Ended|Final/i.test(text) || !/\b\d{1,2}\s*min\./i.test(text);
+    const finished =
+      /FT|Full\s*Time|Ended|Final/i.test(text) || !/\b\d{1,2}\s*min\./i.test(text);
+
     return { finished, scoreText: score };
   } catch {
     return { finished: false };
   }
 }
 
-/** =========================
- *  DOM helpers
- *  ========================= */
-function computeTicketStatusFromTable($table) {
+/* =========================
+   DOM helpers
+   ========================= */
+function computeTicketStatusFromTable($, $table) {
   let hasPending = false, hasLoss = false;
   $table.find("tbody tr[data-status]").each((_, tr) => {
-    const s = $table(tr).attr("data-status");
+    const s = $(tr).attr("data-status");     // ← FIX: use $(tr), not $table(...)
     if (s === PENDING) hasPending = true;
     else if (s === LOSS) hasLoss = true;
   });
@@ -104,25 +105,26 @@ function paintIconCell($, row, status) {
 }
 
 function recalcAndBadge($, $table) {
-  const status = computeTicketStatusFromTable($table);
+  const status = computeTicketStatusFromTable($, $table);
   const ticketWrap = $table.closest("div");
   const badge = ticketWrap.find("div")
-    .filter((_, el) => $(el).text().match(/În așteptare|Câștigat|Pierdut|⏳|✅|❌/)).first();
+    .filter((_, el) => $(el).text().match(/În așteptare|Câștigat|Pierdut|⏳|✅|❌/))
+    .first();
 
-  const paint = (html, bg) =>
+  const paintStyle = (bg) =>
     (badge.attr("style") || "").replace(/background-color:[^;]+;/, "") +
     ` background-color:${bg}; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;`;
 
   if (badge.length) {
-    if (status === WIN) badge.html("✅ Câștigat").attr("style", paint(badge.html(), "#4CAF50"));
-    else if (status === LOSS) badge.html("❌ Pierdut").attr("style", paint(badge.html(), "#F44336"));
-    else badge.html("⏳ În așteptare").attr("style", paint(badge.html(), "#FFC107"));
+    if (status === WIN) badge.html("✅ Câștigat").attr("style", paintStyle("#4CAF50"));
+    else if (status === LOSS) badge.html("❌ Pierdut").attr("style", paintStyle("#F44336"));
+    else badge.html("⏳ În așteptare").attr("style", paintStyle("#FFC107"));
   }
 }
 
-/** =========================
- *  Verify a post, then sync homepage
- *  ========================= */
+/* =========================
+   Verify a post
+   ========================= */
 async function verifyOnePost(postId, statusCache) {
   const res = await get(`${WP_BASE}/wp-json/wp/v2/posts/${postId}?context=edit`);
   if (!res.ok) throw new Error(`Cannot load post ${postId}`);
@@ -138,7 +140,7 @@ async function verifyOnePost(postId, statusCache) {
     const current = $row.attr("data-status") || PENDING;
     const market = $row.attr("data-market") || "1";
     const pickText = ($row.find("td").eq(3).text() || "").trim();
-    const pickSide = pickText[0] === "1" ? "1" : pickText[0] === "2" ? "2" : pickText[0]?.toUpperCase();
+    const pickSide = pickText[0] === "1" ? "1" : pickText[0] === "2" ? "2" : (pickText[0] || "").toUpperCase();
 
     if (current === WIN || current === LOSS) {
       statusCache[matchId] = current;
@@ -166,7 +168,9 @@ async function verifyOnePost(postId, statusCache) {
     const $t = $(t);
     const ths = $t.find("thead tr th");
     if (ths.length < 6) $t.find("thead tr").append(`<th>✔</th>`);
-    $t.find("tbody tr[data-status]").each((_, tr) => paintIconCell($, tr, $(tr).attr("data-status")));
+    $t.find("tbody tr[data-status]").each((_, tr) =>
+      paintIconCell($, tr, $(tr).attr("data-status"))
+    );
     recalcAndBadge($, $t);
   });
 
@@ -179,6 +183,9 @@ async function verifyOnePost(postId, statusCache) {
   }
 }
 
+/* =========================
+   Sync homepage tables
+   ========================= */
 async function syncHomepage(statusCache) {
   const res = await get(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}?context=edit`);
   if (!res.ok) {
@@ -208,7 +215,9 @@ async function syncHomepage(statusCache) {
 
   $("table.bilet-pariu").each((_, t) => recalcAndBadge($, $(t)));
 
-  const anyDecided = $("table.bilet-pariu tbody tr[data-status='win'], table.bilet-pariu tbody tr[data-status='loss']").length > 0;
+  const anyDecided =
+    $("table.bilet-pariu tbody tr[data-status='win'], table.bilet-pariu tbody tr[data-status='loss']").length > 0;
+
   if (anyDecided) {
     $(`.elementor-shortcode:contains("Niciun eveniment finalizat.")`).each((_, el) => {
       const p = $(el).find("p");
@@ -228,9 +237,9 @@ async function syncHomepage(statusCache) {
   }
 }
 
-/** =========================
- *  Runner
- *  ========================= */
+/* =========================
+   Runner
+   ========================= */
 (async function run() {
   const missing = [];
   if (!WP_BASE) missing.push("WP_BASE or WP_URL");
@@ -251,6 +260,7 @@ async function syncHomepage(statusCache) {
     }
   }
 
+  // auto-discover newest posts
   try {
     const q1 = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=6&search=Bilet%20Cota%202`);
     const q2 = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=6&search=Biletul%20Zilei`);
