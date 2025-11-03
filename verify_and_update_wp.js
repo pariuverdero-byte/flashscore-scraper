@@ -1,128 +1,103 @@
-// verify_and_update_wp.js
-// Node 18/20 (ESM)
-
+// verify_and_update_wp.js  — Node 18/20
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
 
-/* =========================
-   CONFIG
-   ========================= */
-const WP_BASE = process.env.WP_BASE || process.env.WP_URL; // allow either name
-const WP_USER = process.env.WP_USER;
-const WP_APP_PASSWORD = process.env.WP_APP_PASS;
-const HOMEPAGE_ID = Number(process.env.WP_HOMEPAGE_ID || 11);
+/* ================= CONFIG ================= */
+const WP_BASE       = process.env.WP_BASE;            // e.g. https://pariuverde.ro
+const WP_USER       = process.env.WP_USER;
+const WP_APP_PASS   = process.env.WP_APP_PASS;
+const HOMEPAGE_ID   = 11;
 
-// Usual quick list (kept for speed on normal runs)
-const POSTS_TO_CHECK = [
-  1303,1297,1292,1285,1281,1257,1255,1253,1304,1298,1293,1286,1282,1258,1256,
-];
+// One-off rescue mode: recheck already-decided rows for the most recent N posts.
+// Use in CI env for a single run: RECHECK_ONCE=1 RECHECK_LAST_N=15
+const RECHECK_ONCE  = /^(1|true|yes)$/i.test(process.env.RECHECK_ONCE || "");
+const RECHECK_LAST_N = parseInt(process.env.RECHECK_LAST_N || "15", 10);
 
-const BACKFILL_MARK = "<!-- pv_backfill_done -->";
-
-const authHeader =
-  "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString("base64");
+// You can keep some fixed IDs; auto-discovery will also add the newest posts:
+const STATIC_POSTS = [1303,1297,1292,1285,1281,1257,1255,1253,1304,1298,1293,1286,1282,1258,1256];
 
 const FS_BASE = "https://www.flashscore.mobi/match/";
-const PENDING = "pending", WIN = "win", LOSS = "loss";
 
-/* =========================
-   HTTP
-   ========================= */
-const get = (url) =>
-  fetch(url, { headers: { Authorization: authHeader, "Content-Type": "application/json" } });
+const PENDING = "pending";
+const WIN     = "win";
+const LOSS    = "loss";
 
+const authHeader = "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASS}`).toString("base64");
+
+const get = (url) => fetch(url, { headers: { Authorization: authHeader, "Content-Type": "application/json" } });
 const put = (url, body) =>
-  fetch(url, {
-    method: "PUT",
-    headers: { Authorization: authHeader, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  fetch(url, { method: "PUT", headers: { Authorization: authHeader, "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
-/* =========================
-   Flashscore parsing (robust)
-   ========================= */
-function extractScoreFromTitle(title) {
-  if (!title) return null;
-  const m = title.match(/(\d+)\s*:\s*(\d+)/);
-  return m ? `${m[1]}:${m[2]}` : null;
-}
-function containsLiveMinute(txt) {
-  return (
-    /\b\d{1,3}\s*’|\b\d{1,3}\s*\+\s*\d{1,2}\s*’|\(\s*\d{1,3}\.\s*min\s*\)/i.test(txt) ||
-    /\bmin\./i.test(txt)
-  );
-}
-function extractHeaderScore($) {
-  const cand = $("header, .duel, .detail, .participant__score, .score, .result, .current-result, h1, h2, h3")
-    .first()
-    .text();
-  const m = cand && cand.match(/(\d+)\s*:\s*(\d+)/);
-  return m ? `${m[1]}:${m[2]}` : null;
-}
-async function fetchFlashscoreOutcome(matchId) {
-  try {
-    const url = `${FS_BASE}${matchId}/?s=5&d=0`;
-    const res = await fetch(url);
-    const html = await res.text();
-    const $ = cheerio.load(html);
-    const title = $("title").text().trim();
-    const bodyText = $("body").text().replace(/\s+/g, " ");
-
-    let score = extractScoreFromTitle(title);
-    if (!score) score = extractHeaderScore($);
-    if (!score) {
-      const all = bodyText.match(/(\d+)\s*:\s*(\d+)/g);
-      if (all && all.length) score = all[all.length - 1];
-    }
-
-    const hasFinalFlag = /FT|Full\s*Time|Final|Ended|Match\s*finished/i.test(bodyText);
-    const looksLive = containsLiveMinute(bodyText) || containsLiveMinute(title);
-    const finished = hasFinalFlag || (!!score && !looksLive);
-
-    return { finished, scoreText: score || null };
-  } catch {
-    return { finished: false, scoreText: null };
-  }
-}
-
-/* =========================
-   1X2 outcome
-   ========================= */
-function outcomeFromScoreText(scoreText, pickMarket, pickSide) {
-  if (!scoreText) return null;
-  const m = scoreText.trim().match(/(\d+)\s*:\s*(\d+)/);
+/* ================ FLASHCORE PARSER (robust) =================
+   Only decide a match if we positively detect a finished signal.
+   Score extraction avoids odds like 1.53 / 3.85 / 6.50.
+---------------------------------------------------------------- */
+function outcomeFromScore(scoreText, market, side) {
+  const m = scoreText.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
   if (!m) return null;
   const h = +m[1], a = +m[2];
-  const outcome = h > a ? "1" : h < a ? "2" : "X";
-  if (pickMarket === "1") {
-    if (pickSide === "1") return outcome === "1" ? WIN : LOSS;
-    if (pickSide === "2") return outcome === "2" ? WIN : LOSS;
-    if ((pickSide || "").toUpperCase() === "X") return outcome === "X" ? WIN : LOSS;
+  const result = h > a ? "1" : h < a ? "2" : "X";
+  if (market === "1") {
+    if (side === "1") return result === "1" ? WIN : LOSS;
+    if (side === "2") return result === "2" ? WIN : LOSS;
+    if ((side || "").toUpperCase() === "X") return result === "X" ? WIN : LOSS;
   }
   return null;
 }
 
-/* =========================
-   DOM helpers
-   ========================= */
+async function fetchFlashscoreOutcome(matchId) {
+  try {
+    const url = `${FS_BASE}${matchId}/?s=5&d=0`;
+    const res = await fetch(url);
+    if (!res.ok) return { finished: false };
+    const html = await res.text();
+    const $ = cheerio.load(html);
+
+    // Normalize body text for reliable searching
+    const text = $("body").text().replace(/\s+/g, " ").trim();
+
+    // 1) Finished signal
+    const finishRe = /\b(Finished|Full\s*Time|After\s*Extra\s*Time|AET|After\s*penalties|Penalties|Abandoned|Awarded)\b/i;
+    const finishedIdx = text.search(finishRe);
+    if (finishedIdx < 0) return { finished: false };
+
+    // 2) Extract a score NEAR the finished token (±200 chars) and NOT part of decimals
+    const near = text.slice(Math.max(0, finishedIdx - 200), finishedIdx + 200);
+    // Require non-digit-or-dot before and not followed by digit or dot after
+    const scoreRe = /(?:^|[^0-9.])(\d{1,2}\s*:\s*\d{1,2})(?![0-9.])/g;
+    let match, lastScore = null;
+    while ((match = scoreRe.exec(near)) !== null) lastScore = match[1];
+    if (!lastScore) {
+      // fallback: try header big score (frequently in the first lines)
+      const headerText = ($("h1,h2,h3").first().text() + " " + $(".participant__score").text()).replace(/\s+/g, " ");
+      const m2 = headerText.match(/(\d{1,2}\s*:\s*\d{1,2})(?![0-9.])/);
+      if (m2) lastScore = m2[1];
+    }
+
+    if (!lastScore) return { finished: false };
+    return { finished: true, scoreText: lastScore };
+  } catch {
+    return { finished: false };
+  }
+}
+
+/* ================== DOM HELPERS ================== */
 function paintIconCell($, row, status) {
   const $row = $(row);
   let $cells = $row.find("td");
   if ($cells.length < 6) {
-    $row.append(`<td style="text-align:center;font-weight:bold;"></td>`);
+    $row.append('<td style="text-align:center;font-weight:bold;"></td>');
     $cells = $row.find("td");
   }
   const $iconTd = $cells.eq(5);
   $iconTd.attr("style", "text-align:center;font-weight:bold;");
-  if (status === WIN) $iconTd.html("✅");
-  else if (status === LOSS) $iconTd.html("❌");
-  else $iconTd.html("⏳");
+  $iconTd.html(status === WIN ? "✅" : status === LOSS ? "❌" : "⏳");
 }
 
-function computeTicketStatusFromTable($, $table) {
+function computeTicketStatusFromTable($table) {
   let hasPending = false, hasLoss = false;
   $table.find("tbody tr[data-status]").each((_, tr) => {
-    const s = $(tr).attr("data-status");
+    const s = (typeof $table === "function" ? $table(tr) : $table.find(tr)).attr("data-status");
     if (s === PENDING) hasPending = true;
     else if (s === LOSS) hasLoss = true;
   });
@@ -132,44 +107,40 @@ function computeTicketStatusFromTable($, $table) {
 }
 
 function recalcAndBadge($, $table) {
-  const status = computeTicketStatusFromTable($, $table);
-  const ticketWrap = $table.closest("div");
-  const badge = ticketWrap.find("div")
-    .filter((_, el) => $(el).text().match(/În așteptare|Câștigat|Pierdut|⏳|✅|❌/))
-    .first();
-
-  const paintStyle = (bg) =>
-    (badge.attr("style") || "").replace(/background-color:[^;]+;/, "") +
-    ` background-color:${bg}; color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;`;
-
+  const status = computeTicketStatusFromTable($table);
+  const badge = $table.closest("div").find("div")
+    .filter((_, el) => $(el).text().match(/În așteptare|Câștigat|Pierdut|⏳|✅|❌/)).first();
+  const styleBase = " color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;";
   if (badge.length) {
-    if (status === WIN) badge.html("✅ Câștigat").attr("style", paintStyle("#4CAF50"));
-    else if (status === LOSS) badge.html("❌ Pierdut").attr("style", paintStyle("#F44336"));
-    else badge.html("⏳ În așteptare").attr("style", paintStyle("#FFC107"));
+    if (status === WIN)  badge.html("✅ Câștigat").attr("style", "background-color:#4CAF50;" + styleBase);
+    else if (status === LOSS) badge.html("❌ Pierdut").attr("style", "background-color:#F44336;" + styleBase);
+    else                   badge.html("⏳ În așteptare").attr("style", "background-color:#FFC107;" + styleBase);
   }
 }
 
-/* =========================
-   Verify one post
-   ========================= */
-async function verifyOnePost(postId, statusCache) {
+/* ================= VERIFY ONE POST ================= */
+async function verifyOnePost(post, statusCache, allowRecheck) {
+  const postId = typeof post === "number" ? post : post.id;
   const res = await get(`${WP_BASE}/wp-json/wp/v2/posts/${postId}?context=edit`);
   if (!res.ok) throw new Error(`Cannot load post ${postId}`);
-  const post = await res.json();
-  const $ = cheerio.load(post.content?.rendered || post.content?.raw || "");
+  const data = await res.json();
+  const raw = data.content?.rendered || data.content?.raw || "";
+  const $ = cheerio.load(raw);
 
   let changed = false;
 
-  const rows = $("table.bilet-pariu tbody tr[data-id]");
-  for (const row of rows.toArray()) {
+  // rows
+  const rows = $("table.bilet-pariu tbody tr[data-id]").toArray();
+  for (const row of rows) {
     const $row = $(row);
     const matchId = $row.attr("data-id");
     const current = $row.attr("data-status") || PENDING;
-    const market = $row.attr("data-market") || "1";
-    const pickText = ($row.find("td").eq(3).text() || "").trim();
-    const pickSide = pickText[0] === "1" ? "1" : pickText[0] === "2" ? "2" : (pickText[0] || "").toUpperCase();
+    const market  = $row.attr("data-market") || "1";
+    const pickTxt = ($row.find("td").eq(3).text() || "").trim();
+    const side = pickTxt.startsWith("1") ? "1" : pickTxt.startsWith("2") ? "2" : (pickTxt[0] || "").toUpperCase();
 
-    if (current === WIN || current === LOSS) {
+    // Skip decided unless recheck is permitted (one-off)
+    if (!allowRecheck && (current === WIN || current === LOSS)) {
       statusCache[matchId] = current;
       continue;
     }
@@ -180,48 +151,39 @@ async function verifyOnePost(postId, statusCache) {
       continue;
     }
 
-    const verdict = outcomeFromScoreText(info.scoreText, market, pickSide);
+    const verdict = outcomeFromScore(info.scoreText, market, side);
     if (verdict && verdict !== current) {
       $row.attr("data-status", verdict);
       paintIconCell($, row, verdict);
       statusCache[matchId] = verdict;
       changed = true;
-      const title = $("h1,h2,h3").first().text() || post.title?.rendered;
-      console.log(`[VERIFY] ${title} :: ${matchId} -> ${verdict}`);
-    } else if (verdict) {
-      statusCache[matchId] = verdict;
+      console.log(`[VERIFY] ${data.slug} :: ${matchId} -> ${verdict}`);
+    } else {
+      statusCache[matchId] = current;
+      paintIconCell($, row, current);
     }
   }
 
-  // ensure ✔ column + badge
+  // header ✔ column + ticket badge(s)
   $("table.bilet-pariu").each((_, t) => {
     const $t = $(t);
-    const ths = $t.find("thead tr th");
-    if (ths.length < 6) $t.find("thead tr").append(`<th>✔</th>`);
-    $t.find("tbody tr[data-status]").each((_, tr) =>
-      paintIconCell($, tr, $(tr).attr("data-status"))
-    );
+    if ($t.find("thead tr th").length < 6) $t.find("thead tr").append("<th>✔</th>");
+    $t.find("tbody tr[data-status]").each((_, tr) => paintIconCell($, tr, $(tr).attr("data-status")));
     recalcAndBadge($, $t);
   });
 
   if (changed) {
-    const newHtml = $.html();
-    await put(`${WP_BASE}/wp-json/wp/v2/posts/${postId}`, { content: newHtml });
+    await put(`${WP_BASE}/wp-json/wp/v2/posts/${postId}`, { content: $.html() });
     console.log(`Post #${postId}: actualizat`);
   } else {
     console.log(`Post #${postId}: fără schimbări`);
   }
 }
 
-/* =========================
-   Homepage sync
-   ========================= */
+/* ================= SYNC HOMEPAGE ================= */
 async function syncHomepage(statusCache) {
   const res = await get(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}?context=edit`);
-  if (!res.ok) {
-    console.log(`Homepage (${HOMEPAGE_ID}) not accessible`);
-    return;
-  }
+  if (!res.ok) return console.log(`Homepage (${HOMEPAGE_ID}) not accessible`);
   const page = await res.json();
   const raw = page.content?.raw || page.content?.rendered || "";
   const $ = cheerio.load(raw);
@@ -232,129 +194,60 @@ async function syncHomepage(statusCache) {
     const $tr = $(tr);
     const id = $tr.attr("data-id");
     const cur = $tr.attr("data-status") || PENDING;
-    const newS = statusCache[id];
-    if (!newS) return;
-    if (newS !== cur) {
-      $tr.attr("data-status", newS);
-      paintIconCell($, tr, newS);
+    const next = statusCache[id];
+    if (!next) return;
+    if (cur !== next) {
+      $tr.attr("data-status", next);
       changed = true;
-    } else {
-      paintIconCell($, tr, cur);
     }
+    paintIconCell($, tr, $tr.attr("data-status"));
   });
 
   $("table.bilet-pariu").each((_, t) => recalcAndBadge($, $(t)));
 
-  const anyDecided =
-    $("table.bilet-pariu tbody tr[data-status='win'], table.bilet-pariu tbody tr[data-status='loss']").length > 0;
-
-  if (anyDecided) {
-    $(`.elementor-shortcode:contains("Niciun eveniment finalizat.")`).each((_, el) => {
-      const p = $(el).find("p");
-      if (p.length) {
-        p.text("Evenimentele au fost actualizate.");
-        changed = true;
-      }
-    });
-  }
-
   if (changed) {
-    const newHtml = $.html();
-    await put(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}`, { content: newHtml });
+    await put(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}`, { content: $.html() });
     console.log(`Homepage #${HOMEPAGE_ID}: sincronizat cu rezultatele.`);
   } else {
     console.log(`Homepage #${HOMEPAGE_ID}: fără schimbări`);
   }
 }
 
-/* =========================
-   ONE-TIME backfill (latest 15 posts)
-   ========================= */
-async function maybeBackfillOnce(statusCache) {
-  // read homepage raw to see if marker exists
-  const res = await get(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}?context=edit`);
-  if (!res.ok) return;
-  const page = await res.json();
-  const raw = page.content?.raw || page.content?.rendered || "";
-  if (raw.includes(BACKFILL_MARK)) {
-    // already done
-    return;
-  }
-
-  console.log("Backfill: running one-time deep verification for latest 15 posts…");
-
-  // Fetch newest posts (larger page, then filter down)
-  const pr = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=50&orderby=date&order=desc&status=publish`);
-  if (!pr.ok) return;
-  const list = await pr.json();
-
-  // Filter to series + take first 15 unique ids
-  const ids = [];
-  for (const p of list) {
-    const title = (p.title?.rendered || "").toLowerCase();
-    if (title.includes("biletul zilei") || title.includes("bilet cota 2")) {
-      if (!ids.includes(p.id)) ids.push(p.id);
-    }
-    if (ids.length >= 15) break;
-  }
-
-  for (const id of ids) {
-    try {
-      await verifyOnePost(id, statusCache);
-    } catch (e) {
-      console.error(`Backfill error at post ${id}:`, e.message);
-    }
-  }
-
-  // append marker to homepage (hidden comment)
-  const $ = cheerio.load(raw || "");
-  $("body").append(BACKFILL_MARK);
-  await put(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}`, { content: $.html() });
-  console.log("Backfill: done and marker written.");
-}
-
-/* =========================
-   Runner
-   ========================= */
+/* ================= RUN ================= */
 (async function run() {
-  const missing = [];
-  if (!WP_BASE) missing.push("WP_BASE or WP_URL");
-  if (!WP_USER) missing.push("WP_USER");
-  if (!WP_APP_PASSWORD) missing.push("WP_APP_PASS");
-  if (missing.length) {
-    console.error("Missing required env vars:", missing.join(", "));
+  if (!WP_BASE || !WP_USER || !WP_APP_PASS) {
+    console.error("Set WP_BASE, WP_USER, WP_APP_PASS env vars.");
     process.exit(1);
   }
 
   const statusCache = {};
 
-  // ONE-TIME deep backfill
-  await maybeBackfillOnce(statusCache);
+  // 1) Build the list of posts: static + newest (to cover day-by-day)
+  const postsSet = new Set(STATIC_POSTS);
+  try {
+    // pull newest 20 posts that likely include “Biletul Zilei” or “Bilet Cota 2”
+    const q1 = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=20&orderby=date&order=desc&search=Bilet`);
+    if (q1.ok) for (const p of await q1.json()) postsSet.add(p.id);
+  } catch {}
 
-  // Usual quick pass on known IDs
-  for (const id of POSTS_TO_CHECK) {
+  const ids = [...postsSet];
+
+  // 2) If RECHECK_ONCE=true, figure out newest N posts and force recheck for them
+  let newestIds = [];
+  if (RECHECK_ONCE) {
     try {
-      await verifyOnePost(id, statusCache);
-    } catch (e) {
-      console.error(`Eroare la post ${id}:`, e.message);
-    }
+      const r = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=${RECHECK_LAST_N}&orderby=date&order=desc`);
+      if (r.ok) newestIds = (await r.json()).map(p => p.id);
+    } catch {}
   }
 
-  // Auto-discover a few recent posts in case list lags
-  try {
-    const q1 = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=6&search=Bilet%20Cota%202`);
-    const q2 = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=6&search=Biletul%20Zilei`);
-    for (const r of [q1, q2]) {
-      if (r.ok) {
-        const items = await r.json();
-        for (const p of items) {
-          if (!POSTS_TO_CHECK.includes(p.id)) {
-            await verifyOnePost(p.id, statusCache);
-          }
-        }
-      }
+  for (const id of ids) {
+    try {
+      await verifyOnePost(id, statusCache, RECHECK_ONCE && newestIds.includes(id));
+    } catch (e) {
+      console.error(`Eroare la post ${id}: ${e.message}`);
     }
-  } catch {}
+  }
 
   await syncHomepage(statusCache);
 })();
