@@ -138,8 +138,6 @@ function computeTicketStatusFromTable($, $table) {
 
 function recalcAndBadge($, $table) {
   const status = computeTicketStatusFromTable($, $table);
-
-  // Badge de deasupra tabelului (⏳ / ✅ / ❌)
   const badge = $table
     .closest("div")
     .find("div")
@@ -156,6 +154,68 @@ function recalcAndBadge($, $table) {
     else
       badge.html("⏳ În așteptare").attr("style", "background-color:#FFC107;" + styleBase);
   }
+}
+
+/**
+ * Șterge toate paragrafele / heading-urile care conțin textele de analiză
+ * gen „Everton – Nottingham — selecție: 1 (gazde)…”
+ */
+function cleanupSelectionAnalysis($) {
+  let removed = false;
+  $("p,h2,h3,h4").each((_, el) => {
+    const txt = $(el).text().trim();
+    if (
+      /Analiza selec(ți|t)ilor/i.test(txt) ||
+      /selec(ți|t)ie\s*:/i.test(txt)    // „— selecție: …”
+    ) {
+      $(el).remove();
+      removed = true;
+    }
+  });
+  return removed;
+}
+
+/**
+ * Actualizează box-ul galben de status global al biletului
+ * (.pv-status-bilet) în funcție de rezultatul calculat din tabel.
+ */
+function updateGlobalTicketStatusBox($) {
+  const $mainTable = $("table.bilet-pariu").first();
+  if (!$mainTable.length) return false;
+
+  const status = computeTicketStatusFromTable($, $mainTable);
+  const $box = $(".pv-status-bilet").first();
+  if (!$box.length) return false;
+
+  let target = {
+    cls: "pv-status-yellow",
+    icon: "⏳",
+    label: "Rezultat în așteptare",
+  };
+
+  if (status === WIN) {
+    target = {
+      cls: "pv-status-green",
+      icon: "✅",
+      label: "Bilet câștigat",
+    };
+  } else if (status === LOSS) {
+    target = {
+      cls: "pv-status-red",
+      icon: "❌",
+      label: "Bilet pierdut",
+    };
+  }
+
+  const currentLabel = $box.find(".pv-status-label").text().trim();
+  const currentIcon  = $box.find(".pv-status-icon").text().trim();
+
+  $box.removeClass("pv-status-yellow pv-status-green pv-status-red")
+      .addClass(target.cls);
+  $box.find(".pv-status-icon").text(target.icon);
+  $box.find(".pv-status-label").text(target.label);
+
+  return currentLabel !== target.label || currentIcon !== target.icon;
 }
 
 /* ================= VERIFY ONE POST ================= */
@@ -217,39 +277,14 @@ async function verifyOnePost(post, statusCache, allowRecheck) {
     recalcAndBadge($, $t);
   });
 
-  /* ======== 1) ȘTERGERE COMPLETĂ „Analiza selecțiilor” ======== */
-  // Ștergem heading-ul dacă există
-  $("*").filter((_, el) =>
-    /^Analiza selecțiilor$/i.test($(el).text().trim())
-  ).remove();
+  // 1) Curăță complet blocul de „Analiza selecțiilor”
+  if (cleanupSelectionAnalysis($)) {
+    changed = true;
+  }
 
-  // Ștergem TOATE paragrafele cu „— selecție:” sau „Link meci:”
-  $("p").filter((_, el) => {
-    const txt = $(el).text();
-    return /—\s*selecție:/i.test(txt) || /Link mec[i]?:/i.test(txt);
-  }).remove();
-
-  /* ======== 2) UPDATE BUTON „Rezultat în așteptare” ======== */
-  // Presupunem un singur bilet per post -> prima masă este biletul
-  const $mainTable = $("table.bilet-pariu").first();
-  if ($mainTable.length) {
-    const ticketStatus = computeTicketStatusFromTable($, $mainTable);
-
-    const resultBtn = $("a,button").filter((_, el) => {
-      const txt = $(el).text().trim();
-      return /Rezultat în așteptare|Bilet câștigător|Bilet pierdut/i.test(txt);
-    }).first();
-
-    if (resultBtn.length) {
-      if (ticketStatus === WIN) {
-        resultBtn.text("✅ Bilet câștigător");
-      } else if (ticketStatus === LOSS) {
-        resultBtn.text("❌ Bilet pierdut");
-      } else {
-        resultBtn.text("⏳ Rezultat în așteptare");
-      }
-      changed = true;
-    }
+  // 2) Actualizează box-ul mare de rezultat al biletului
+  if (updateGlobalTicketStatusBox($)) {
+    changed = true;
   }
 
   if (changed) {
