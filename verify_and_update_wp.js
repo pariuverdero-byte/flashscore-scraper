@@ -35,6 +35,23 @@ const put = (url, body) =>
     body: JSON.stringify(body),
   });
 
+/* ====== SAFE JSON HELPER (handles sgcaptcha HTML) ====== */
+async function fetchJson(url) {
+  const res = await get(url);
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status} for ${url} – body: ${txt.slice(0,120)}...`);
+  }
+  const ct = res.headers.get("content-type") || "";
+  if (!ct.includes("application/json")) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(
+      `Non-JSON response (content-type=${ct || "unknown"}) for ${url} – first 120 chars: ${txt.slice(0,120)}...`
+    );
+  }
+  return res.json();
+}
+
 /* ================= FLASHSCORE PARSER =================
    Considerăm meciul "finished" doar dacă apare un text clar
    de final: Finished / After Extra Time / After Penalties etc.
@@ -64,10 +81,9 @@ async function fetchFlashscoreOutcome(matchId) {
     const html = await res.text();
     const $ = cheerio.load(html);
 
-    // Normalizăm tot textul din body
+    // Normalizăm textul
     const text = $("body").text().replace(/\s+/g, " ").trim();
 
-    // Căutăm diverse variante de "meci terminat"
     const finishMarkers = [
       "Finished",
       "After Extra Time",
@@ -83,28 +99,17 @@ async function fetchFlashscoreOutcome(matchId) {
         finishedIdx = idx;
       }
     }
+    if (finishedIdx < 0) return { finished: false };
 
-    if (finishedIdx < 0) {
-      // nu avem niciun marker de final — tratăm ca nefinalizat
-      return { finished: false };
-    }
-
-    // Fereastră în jurul textului de "Finished"
     const windowStart = Math.max(0, finishedIdx - 200);
     const windowEnd   = Math.min(text.length, finishedIdx + 200);
     const near = text.slice(windowStart, windowEnd);
 
-    // Căutăm toate pattern-urile gen 1:0, 3:3 etc. din această zonă
     const scoreRe = /(\d{1,2})\s*:\s*(\d{1,2})/g;
     let m, lastScore = null;
-    while ((m = scoreRe.exec(near)) !== null) {
-      lastScore = m[0];   // ultimul e cel final (ex. 1:0 (0:0,1:0))
-    }
+    while ((m = scoreRe.exec(near)) !== null) lastScore = m[0];
 
-    if (!lastScore) {
-      return { finished: false };
-    }
-
+    if (!lastScore) return { finished: false };
     return { finished: true, scoreText: lastScore };
   } catch (e) {
     console.error("⚠️ Flashscore parse error:", e.message);
@@ -128,7 +133,7 @@ function paintIconCell($, row, status) {
 function computeTicketStatusFromTable($table) {
   let hasPending = false, hasLoss = false;
   $table.find("tbody tr[data-status]").each((_, tr) => {
-    const s = $(tr).attr("data-status");
+    const s = $table(tr).attr("data-status");
     if (s === PENDING) hasPending = true;
     else if (s === LOSS) hasLoss = true;
   });
@@ -160,9 +165,11 @@ function recalcAndBadge($, $table) {
 /* ================= VERIFY ONE POST ================= */
 async function verifyOnePost(post, statusCache, allowRecheck) {
   const postId = typeof post === "number" ? post : post.id;
-  const res = await get(`${WP_BASE}/wp-json/wp/v2/posts/${postId}?context=edit`);
-  if (!res.ok) throw new Error(`Cannot load post ${postId}`);
-  const data = await res.json();
+
+  const data = await fetchJson(
+    `${WP_BASE}/wp-json/wp/v2/posts/${postId}?context=edit`
+  );
+
   const raw = data.content?.rendered || data.content?.raw || "";
   const $ = cheerio.load(raw);
 
@@ -225,50 +232,53 @@ async function verifyOnePost(post, statusCache, allowRecheck) {
 
 /* ================= SYNC HOMEPAGE ================= */
 async function syncHomepage(statusCache) {
-  const res = await get(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}?context=edit`);
-  if (!res.ok) {
-    console.log(`Homepage (${HOMEPAGE_ID}) not accessible`);
-    return;
-  }
-  const page = await res.json();
-  let raw  = page.content?.raw || page.content?.rendered || "";
-  const $  = cheerio.load(raw);
+  try {
+    const page = await fetchJson(
+      `${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}?context=edit`
+    );
 
-  let changed = false;
+    let raw  = page.content?.raw || page.content?.rendered || "";
+    const $  = cheerio.load(raw);
 
-  $("table.bilet-pariu tbody tr[data-id]").each((_, tr) => {
-    const $tr = $(tr);
-    const id  = $tr.attr("data-id");
-    const cur = $tr.attr("data-status") || PENDING;
-    const next = statusCache[id];
-    if (!next) {
-      paintIconCell($, tr, cur);
-      return;
+    let changed = false;
+
+    $("table.bilet-pariu tbody tr[data-id]").each((_, tr) => {
+      const $tr = $(tr);
+      const id  = $tr.attr("data-id");
+      const cur = $tr.attr("data-status") || PENDING;
+      const next = statusCache[id];
+      if (!next) {
+        paintIconCell($, tr, cur);
+        return;
+      }
+      if (cur !== next) {
+        $tr.attr("data-status", next);
+        changed = true;
+      }
+      paintIconCell($, tr, $tr.attr("data-status"));
+    });
+
+    $("table.bilet-pariu").each((_, t) => recalcAndBadge($, $(t)));
+
+    // cache-buster pentru shortcodes
+    const marker = "<!-- pv-last-sync:";
+    const nowStr = new Date().toISOString();
+    if (raw.includes(marker)) {
+      raw = raw.replace(
+        /<!-- pv-last-sync:[^>]*-->/,
+        `<!-- pv-last-sync:${nowStr}-->`
+      );
+    } else {
+      raw += `\n<!-- pv-last-sync:${nowStr}-->`;
     }
-    if (cur !== next) {
-      $tr.attr("data-status", next);
-      changed = true;
-    }
-    paintIconCell($, tr, $tr.attr("data-status"));
-  });
 
-  $("table.bilet-pariu").each((_, t) => recalcAndBadge($, $(t)));
-
-  // mic "cache-buster" pentru Elementor / shortcodes, chiar dacă nu s-au schimbat tabelele
-  // (adăugăm sau actualizăm un comentariu invizibil cu timestamp)
-  const marker = "<!-- pv-last-sync:";
-  const nowStr = new Date().toISOString();
-  if (raw.includes(marker)) {
-    raw = raw.replace(/<!-- pv-last-sync:[^>]*-->/, `<!-- pv-last-sync:${nowStr}-->`);
-  } else {
-    raw += `\n<!-- pv-last-sync:${nowStr}-->`;
-  }
-
-  if (changed || !page.content?.raw?.includes(nowStr)) {
     await put(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}`, { content: raw });
-    console.log(`Homepage #${HOMEPAGE_ID}: cache-busted to refresh shortcodes.`);
-  } else {
-    console.log(`Homepage #${HOMEPAGE_ID}: fără schimbări`);
+
+    console.log(
+      `Homepage #${HOMEPAGE_ID}: cache-busted to refresh shortcodes.`
+    );
+  } catch (e) {
+    console.error("Homepage sync error:", e.message);
   }
 }
 
@@ -284,10 +294,13 @@ async function syncHomepage(statusCache) {
   // 1) Build the list of posts: static + newest (covers day-by-day)
   const postsSet = new Set(STATIC_POSTS);
   try {
-    // pull newest 20 posts that likely include "Biletul Zilei" or "Bilet Cota 2"
-    const q1 = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=20&orderby=date&order=desc&search=Bilet`);
-    if (q1.ok) for (const p of await q1.json()) postsSet.add(p.id);
-  } catch {}
+    const q1 = await fetchJson(
+      `${WP_BASE}/wp-json/wp/v2/posts?per_page=20&orderby=date&order=desc&search=Bilet`
+    );
+    for (const p of q1) postsSet.add(p.id);
+  } catch (e) {
+    console.error("Error auto-discovering posts:", e.message);
+  }
 
   const ids = [...postsSet];
 
@@ -295,9 +308,13 @@ async function syncHomepage(statusCache) {
   let newestIds = [];
   if (RECHECK_ONCE) {
     try {
-      const r = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=${RECHECK_LAST_N}&orderby=date&order=desc`);
-      if (r.ok) newestIds = (await r.json()).map(p => p.id);
-    } catch {}
+      const r = await fetchJson(
+        `${WP_BASE}/wp-json/wp/v2/posts?per_page=${RECHECK_LAST_N}&orderby=date&order=desc`
+      );
+      newestIds = r.map((p) => p.id);
+    } catch (e) {
+      console.error("Error fetching newest posts for recheck:", e.message);
+    }
   }
 
   for (const id of ids) {
