@@ -33,11 +33,7 @@ const put = (url, body) =>
     body: JSON.stringify(body),
   });
 
-/* ================= FLASHCORE PARSER (robust) =================
-   We ONLY decide a match when we positively see a "Finished" detail
-   and extract the final score from the dedicated <div class="detail"><b>…</b></div>.
-   This prevents false matches with odds like 1.53 / 3.85 / 6.50, etc.
-================================================================ */
+/* ================= FLASHCORE PARSER (robust) ================= */
 function outcomeFromScore(scoreText, market, side) {
   const m = scoreText.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
   if (!m) return null;
@@ -70,7 +66,6 @@ async function fetchFlashscoreOutcome(matchId) {
     // 2) Final score is the <b> inside a detail div (first occurrence)
     const scoreText = $("div.detail b").first().text().trim();
 
-    // score must look like “1:0”
     if (!/^\d{1,2}\s*:\s*\d{1,2}$/.test(scoreText)) return { finished: false };
 
     return { finished: true, scoreText };
@@ -93,7 +88,7 @@ function paintIconCell($, row, status) {
   $iconTd.html(status === WIN ? "✅" : status === LOSS ? "❌" : "⏳");
 }
 
-function computeTicketStatusFromTable($table) {
+function computeTicketStatusFromTable($, $table) {
   let hasPending = false, hasLoss = false;
   $table.find("tbody tr[data-status]").each((_, tr) => {
     const s = $(tr).attr("data-status");
@@ -106,7 +101,7 @@ function computeTicketStatusFromTable($table) {
 }
 
 function recalcAndBadge($, $table) {
-  const status = computeTicketStatusFromTable($table);
+  const status = computeTicketStatusFromTable($, $table);
   const badge = $table
     .closest("div")
     .find("div")
@@ -138,16 +133,16 @@ async function verifyOnePost(post, statusCache, allowRecheck) {
 
   const rows = $("table.bilet-pariu tbody tr[data-id]").toArray();
   for (const row of rows) {
-    const $row   = $(row);
+    const $row    = $(row);
     const matchId = $row.attr("data-id");
     const current = $row.attr("data-status") || PENDING;
     const market  = $row.attr("data-market") || "1";
     const pickTxt = ($row.find("td").eq(3).text() || "").trim();
-    const side    = pickTxt.startsWith("1") ? "1" :
-                    pickTxt.startsWith("2") ? "2" :
-                    (pickTxt[0] || "").toUpperCase();
+    const side    = pickTxt.startsWith("1") ? "1"
+                    : pickTxt.startsWith("2") ? "2"
+                    : (pickTxt[0] || "").toUpperCase();
 
-    // Skip already decided rows unless this is the one-off rescue pass
+    // Skip rows already decided unless this is the one-off rescue pass
     if (!allowRecheck && (current === WIN || current === LOSS)) {
       statusCache[matchId] = current;
       continue;
@@ -156,7 +151,6 @@ async function verifyOnePost(post, statusCache, allowRecheck) {
     const info = await fetchFlashscoreOutcome(matchId);
     if (!info.finished) {
       statusCache[matchId] = current;
-      // still ensure the icon exists for the current state
       paintIconCell($, row, current);
       continue;
     }
@@ -206,9 +200,9 @@ async function syncHomepage(statusCache) {
   let changed = false;
 
   $("table.bilet-pariu tbody tr[data-id]").each((_, tr) => {
-    const $tr = $(tr);
-    const id  = $tr.attr("data-id");
-    const cur = $tr.attr("data-status") || PENDING;
+    const $tr  = $(tr);
+    const id   = $tr.attr("data-id");
+    const cur  = $tr.attr("data-status") || PENDING;
     const next = statusCache[id];
     if (!next) {
       paintIconCell($, tr, cur);
