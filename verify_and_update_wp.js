@@ -14,7 +14,9 @@ const RECHECK_ONCE   = /^(1|true|yes)$/i.test(process.env.RECHECK_ONCE || "");
 const RECHECK_LAST_N = parseInt(process.env.RECHECK_LAST_N || "15", 10);
 
 // Some fixed older IDs; auto-discovery will also add newest posts:
-const STATIC_POSTS = [1303,1297,1292,1285,1281,1257,1255,1253,1304,1298,1293,1286,1282,1258,1256];
+const STATIC_POSTS = [
+  1303,1297,1292,1285,1281,1257,1255,1253,1304,1298,1293,1286,1282,1258,1256
+];
 
 const FS_BASE  = "https://www.flashscore.mobi/match/";
 const PENDING  = "pending";
@@ -33,9 +35,11 @@ const put = (url, body) =>
     body: JSON.stringify(body),
   });
 
-/* ================= FLASHCORE PARSER (robust) =================
-   Decide only when match is clearly finished AND we can extract a final score.
-   Avoid matching odds (1.53 / 3.85 / 6.50) by requiring non-decimal context.
+/* ================= FLASHSCORE PARSER =================
+   Considerăm meciul "finished" doar dacă apare un text clar
+   de final: Finished / After Extra Time / After Penalties etc.
+   Scorul îl luăm dintr-o fereastră ±200 caractere în jurul
+   acelui text, ca să evităm orele de tip 16:00.
 ================================================================ */
 function outcomeFromScore(scoreText, market, side) {
   const m = scoreText.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
@@ -60,51 +64,48 @@ async function fetchFlashscoreOutcome(matchId) {
     const html = await res.text();
     const $ = cheerio.load(html);
 
-    // Normalize body text once
-    const fullText = $("body").text().replace(/\s+/g, " ").trim();
+    // Normalizăm tot textul din body
+    const text = $("body").text().replace(/\s+/g, " ").trim();
 
-    // 1) Strong finished signals
-    const finishedSignals = [
-      "Finished", "Full Time", "After Extra Time", "AET",
-      "After penalties", "Penalties", "Abandoned", "Awarded"
+    // Căutăm diverse variante de "meci terminat"
+    const finishMarkers = [
+      "Finished",
+      "After Extra Time",
+      "After Penalties",
+      "AET",
+      "FT"
     ];
-    const isFinished =
-      $("div.detail").filter((_, el) => {
-        const t = $(el).text().trim().toLowerCase();
-        return finishedSignals.some(s => t === s.toLowerCase());
-      }).length > 0
-      || finishedSignals.some(s => new RegExp(`\\b${s}\\b`, "i").test(fullText));
 
-    if (!isFinished) return { finished: false };
-
-    // 2) Try canonical place first: <div class="detail"><b>score</b></div>
-    let scoreText = $("div.detail b").first().text().trim();
-    const scoreRegexSafe = /(?:^|[^0-9.])(\d{1,2}\s*:\s*\d{1,2})(?![0-9.])/;
-
-    if (!scoreRegexSafe.test(scoreText)) {
-      // 3) Try header/score blocks often used by FS
-      const header = ($("h1,h2,h3").first().text() + " " + $(".participant__score").text())
-        .replace(/\s+/g, " ");
-      const mh = header.match(scoreRegexSafe);
-      if (mh) scoreText = mh[1];
-    }
-
-    if (!scoreRegexSafe.test(scoreText)) {
-      // 4) Fallback: search near the "finished" marker window (±250 chars)
-      const idx = finishedSignals
-        .map(s => fullText.search(new RegExp(`\\b${s}\\b`, "i")))
-        .filter(i => i >= 0)
-        .sort((a,b) => a-b)[0] ?? -1;
-
-      if (idx >= 0) {
-        const near = fullText.slice(Math.max(0, idx - 250), idx + 250);
-        const m = [...near.matchAll(new RegExp(scoreRegexSafe, "g"))];
-        if (m.length) scoreText = m[m.length - 1][1];
+    let finishedIdx = -1;
+    for (const marker of finishMarkers) {
+      const idx = text.toLowerCase().indexOf(marker.toLowerCase());
+      if (idx >= 0 && (finishedIdx === -1 || idx < finishedIdx)) {
+        finishedIdx = idx;
       }
     }
 
-    if (!scoreRegexSafe.test(scoreText)) return { finished: false };
-    return { finished: true, scoreText: scoreText.match(scoreRegexSafe)[1] };
+    if (finishedIdx < 0) {
+      // nu avem niciun marker de final — tratăm ca nefinalizat
+      return { finished: false };
+    }
+
+    // Fereastră în jurul textului de "Finished"
+    const windowStart = Math.max(0, finishedIdx - 200);
+    const windowEnd   = Math.min(text.length, finishedIdx + 200);
+    const near = text.slice(windowStart, windowEnd);
+
+    // Căutăm toate pattern-urile gen 1:0, 3:3 etc. din această zonă
+    const scoreRe = /(\d{1,2})\s*:\s*(\d{1,2})/g;
+    let m, lastScore = null;
+    while ((m = scoreRe.exec(near)) !== null) {
+      lastScore = m[0];   // ultimul e cel final (ex. 1:0 (0:0,1:0))
+    }
+
+    if (!lastScore) {
+      return { finished: false };
+    }
+
+    return { finished: true, scoreText: lastScore };
   } catch (e) {
     console.error("⚠️ Flashscore parse error:", e.message);
     return { finished: false };
@@ -124,7 +125,7 @@ function paintIconCell($, row, status) {
   $iconTd.html(status === WIN ? "✅" : status === LOSS ? "❌" : "⏳");
 }
 
-function computeTicketStatusFromTable($, $table) {
+function computeTicketStatusFromTable($table) {
   let hasPending = false, hasLoss = false;
   $table.find("tbody tr[data-status]").each((_, tr) => {
     const s = $(tr).attr("data-status");
@@ -137,7 +138,7 @@ function computeTicketStatusFromTable($, $table) {
 }
 
 function recalcAndBadge($, $table) {
-  const status = computeTicketStatusFromTable($, $table);
+  const status = computeTicketStatusFromTable($table);
   const badge = $table
     .closest("div")
     .find("div")
@@ -169,19 +170,18 @@ async function verifyOnePost(post, statusCache, allowRecheck) {
 
   const rows = $("table.bilet-pariu tbody tr[data-id]").toArray();
   for (const row of rows) {
-    const $row   = $(row);
+    const $row    = $(row);
     const matchId = $row.attr("data-id");
     const current = $row.attr("data-status") || PENDING;
     const market  = $row.attr("data-market") || "1";
     const pickTxt = ($row.find("td").eq(3).text() || "").trim();
-    const side    = pickTxt.startsWith("1") ? "1" :
-                    pickTxt.startsWith("2") ? "2" :
-                    (pickTxt[0] || "").toUpperCase();
+    const side    = pickTxt.startsWith("1") ? "1"
+                    : pickTxt.startsWith("2") ? "2"
+                    : (pickTxt[0] || "").toUpperCase();
 
     // Skip already decided rows unless this is the one-off rescue pass
     if (!allowRecheck && (current === WIN || current === LOSS)) {
       statusCache[matchId] = current;
-      paintIconCell($, row, current);
       continue;
     }
 
@@ -223,11 +223,7 @@ async function verifyOnePost(post, statusCache, allowRecheck) {
   }
 }
 
-/* ================= SYNC HOMEPAGE =================
-   Elementor/shortcodes render on the frontend; we can’t safely edit rendered HTML.
-   Instead, if we don’t find any tables in the raw content, we bump a cache-buster
-   comment to force a fresh render from caches.
-=================================================== */
+/* ================= SYNC HOMEPAGE ================= */
 async function syncHomepage(statusCache) {
   const res = await get(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}?context=edit`);
   if (!res.ok) {
@@ -236,45 +232,44 @@ async function syncHomepage(statusCache) {
   }
   const page = await res.json();
   let raw  = page.content?.raw || page.content?.rendered || "";
-  let $    = cheerio.load(raw);
+  const $  = cheerio.load(raw);
+
   let changed = false;
 
-  const hasTables = $("table.bilet-pariu").length > 0;
-
-  if (hasTables) {
-    // Legacy path: if the homepage really contains tables in the editable HTML.
-    $("table.bilet-pariu tbody tr[data-id]").each((_, tr) => {
-      const $tr = $(tr);
-      const id  = $tr.attr("data-id");
-      const cur = $tr.attr("data-status") || PENDING;
-      const next = statusCache[id];
-      if (!next) {
-        paintIconCell($, tr, cur);
-        return;
-      }
-      if (cur !== next) {
-        $tr.attr("data-status", next);
-        changed = true;
-      }
-      paintIconCell($, tr, $tr.attr("data-status"));
-    });
-    $("table.bilet-pariu").each((_, t) => recalcAndBadge($, $(t)));
-    if (changed) {
-      await put(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}`, { content: $.html() });
-      console.log(`Homepage #${HOMEPAGE_ID}: sincronizat cu rezultatele (inline tables).`);
+  $("table.bilet-pariu tbody tr[data-id]").each((_, tr) => {
+    const $tr = $(tr);
+    const id  = $tr.attr("data-id");
+    const cur = $tr.attr("data-status") || PENDING;
+    const next = statusCache[id];
+    if (!next) {
+      paintIconCell($, tr, cur);
       return;
     }
+    if (cur !== next) {
+      $tr.attr("data-status", next);
+      changed = true;
+    }
+    paintIconCell($, tr, $tr.attr("data-status"));
+  });
+
+  $("table.bilet-pariu").each((_, t) => recalcAndBadge($, $(t)));
+
+  // mic "cache-buster" pentru Elementor / shortcodes, chiar dacă nu s-au schimbat tabelele
+  // (adăugăm sau actualizăm un comentariu invizibil cu timestamp)
+  const marker = "<!-- pv-last-sync:";
+  const nowStr = new Date().toISOString();
+  if (raw.includes(marker)) {
+    raw = raw.replace(/<!-- pv-last-sync:[^>]*-->/, `<!-- pv-last-sync:${nowStr}-->`);
+  } else {
+    raw += `\n<!-- pv-last-sync:${nowStr}-->`;
   }
 
-  // Cache-buster (Elementor/shortcodes path)
-  const stamp = `<!-- pv-cache-buster:${Date.now()} -->`;
-  if (raw.includes("pv-cache-buster")) {
-    raw = raw.replace(/<!--\s*pv-cache-buster:\d+\s*-->/, stamp);
+  if (changed || !page.content?.raw?.includes(nowStr)) {
+    await put(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}`, { content: raw });
+    console.log(`Homepage #${HOMEPAGE_ID}: cache-busted to refresh shortcodes.`);
   } else {
-    raw = raw + "\n" + stamp;
+    console.log(`Homepage #${HOMEPAGE_ID}: fără schimbări`);
   }
-  await put(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}`, { content: raw });
-  console.log(`Homepage #${HOMEPAGE_ID}: cache-busted to refresh shortcodes.`);
 }
 
 /* ================= RUN ================= */
