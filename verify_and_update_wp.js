@@ -139,7 +139,7 @@ function computeTicketStatusFromTable($, $table) {
 function recalcAndBadge($, $table) {
   const status = computeTicketStatusFromTable($, $table);
 
-  // 1) Badge de deasupra tabelului (⏳ / ✅ / ❌)
+  // Badge de deasupra tabelului (⏳ / ✅ / ❌)
   const badge = $table
     .closest("div")
     .find("div")
@@ -155,25 +155,6 @@ function recalcAndBadge($, $table) {
       badge.html("❌ Pierdut").attr("style", "background-color:#F44336;" + styleBase);
     else
       badge.html("⏳ În așteptare").attr("style", "background-color:#FFC107;" + styleBase);
-  }
-
-  // 2) Butonul galben „Rezultat în așteptare” (post & homepage)
-  const resultBtn = $table
-    .closest("section,div")
-    .find("a,button")
-    .filter((_, el) =>
-      $(el).text().match(/Rezultat în așteptare|Bilet câștigător|Bilet pierdut/i)
-    )
-    .first();
-
-  if (resultBtn.length) {
-    if (status === WIN) {
-      resultBtn.html("✅ Bilet câștigător");
-    } else if (status === LOSS) {
-      resultBtn.html("❌ Bilet pierdut");
-    } else {
-      resultBtn.html("⏳ Rezultat în așteptare");
-    }
   }
 }
 
@@ -236,35 +217,39 @@ async function verifyOnePost(post, statusCache, allowRecheck) {
     recalcAndBadge($, $t);
   });
 
-  // === Remove "Analiza selecțiilor" block ===
-  let removedAnalysis = false;
-  // găsim un element al cărui text conține exact titlul
-  $("*").each((_, el) => {
-    const txt = $(el).text().trim();
-    if (/^Analiza selecțiilor$/i.test(txt)) {
-      // urcă la cel mai apropiat div/section – acolo sunt și paragrafele + butonul inițial
-      const container = $(el).closest("section,div");
-      if (container.length) {
-        container.remove();
-        removedAnalysis = true;
-      } else {
-        // fallback: ștergem doar elementul și următoarele 5 paragrafe
-        let $next = $(el);
-        for (let i = 0; i < 6; i++) {
-          const tmp = $next.next();
-          if (!tmp.length) break;
-          $next = tmp;
-          $next.remove();
-        }
-        $(el).remove();
-        removedAnalysis = true;
-      }
-    }
-  });
+  /* ======== 1) ȘTERGERE COMPLETĂ „Analiza selecțiilor” ======== */
+  // Ștergem heading-ul dacă există
+  $("*").filter((_, el) =>
+    /^Analiza selecțiilor$/i.test($(el).text().trim())
+  ).remove();
 
-  if (removedAnalysis) {
-    changed = true;
-    console.log(`Post #${postId}: bloc "Analiza selecțiilor" eliminat`);
+  // Ștergem TOATE paragrafele cu „— selecție:” sau „Link meci:”
+  $("p").filter((_, el) => {
+    const txt = $(el).text();
+    return /—\s*selecție:/i.test(txt) || /Link mec[i]?:/i.test(txt);
+  }).remove();
+
+  /* ======== 2) UPDATE BUTON „Rezultat în așteptare” ======== */
+  // Presupunem un singur bilet per post -> prima masă este biletul
+  const $mainTable = $("table.bilet-pariu").first();
+  if ($mainTable.length) {
+    const ticketStatus = computeTicketStatusFromTable($, $mainTable);
+
+    const resultBtn = $("a,button").filter((_, el) => {
+      const txt = $(el).text().trim();
+      return /Rezultat în așteptare|Bilet câștigător|Bilet pierdut/i.test(txt);
+    }).first();
+
+    if (resultBtn.length) {
+      if (ticketStatus === WIN) {
+        resultBtn.text("✅ Bilet câștigător");
+      } else if (ticketStatus === LOSS) {
+        resultBtn.text("❌ Bilet pierdut");
+      } else {
+        resultBtn.text("⏳ Rezultat în așteptare");
+      }
+      changed = true;
+    }
   }
 
   if (changed) {
