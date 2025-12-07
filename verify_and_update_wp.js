@@ -52,12 +52,7 @@ async function fetchJson(url) {
   return res.json();
 }
 
-/* ================= FLASHSCORE PARSER =================
-   Considerăm meciul "finished" doar dacă apare un text clar
-   de final: Finished / After Extra Time / After Penalties etc.
-   Scorul îl luăm dintr-o fereastră ±200 caractere în jurul
-   acelui text, ca să evităm orele de tip 16:00.
-================================================================ */
+/* ================= FLASHSCORE PARSER ================= */
 function outcomeFromScore(scoreText, market, side) {
   const m = scoreText.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
   if (!m) return null;
@@ -130,10 +125,10 @@ function paintIconCell($, row, status) {
   $iconTd.html(status === WIN ? "✅" : status === LOSS ? "❌" : "⏳");
 }
 
-function computeTicketStatusFromTable($table) {
+function computeTicketStatusFromTable($, $table) {
   let hasPending = false, hasLoss = false;
   $table.find("tbody tr[data-status]").each((_, tr) => {
-    const s = $table(tr).attr("data-status");
+    const s = $(tr).attr("data-status");
     if (s === PENDING) hasPending = true;
     else if (s === LOSS) hasLoss = true;
   });
@@ -143,7 +138,7 @@ function computeTicketStatusFromTable($table) {
 }
 
 function recalcAndBadge($, $table) {
-  const status = computeTicketStatusFromTable($table);
+  const status = computeTicketStatusFromTable($, $table);
   const badge = $table
     .closest("div")
     .find("div")
