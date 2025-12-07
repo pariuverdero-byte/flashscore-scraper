@@ -3,60 +3,70 @@ import fetch from "node-fetch";
 import * as cheerio from "cheerio";
 
 /* ================= CONFIG ================= */
-const WP_BASE       = process.env.WP_BASE;            // e.g. https://pariuverde.ro
-const WP_USER       = process.env.WP_USER;
-const WP_APP_PASS   = process.env.WP_APP_PASS;
-const HOMEPAGE_ID   = 11;
+const WP_BASE     = process.env.WP_BASE;      // ex: https://pariuverde.ro
+const WP_USER     = process.env.WP_USER;
+const WP_APP_PASS = process.env.WP_APP_PASS;
+const HOMEPAGE_ID = 11;
 
-// One-off rescue mode: re-check already-decided rows for the most recent N posts.
-// Use in CI for a single run: RECHECK_ONCE=1 RECHECK_LAST_N=15
-const RECHECK_ONCE   = /^(1|true|yes)$/i.test(process.env.RECHECK_ONCE || "");
-const RECHECK_LAST_N = parseInt(process.env.RECHECK_LAST_N || "15", 10);
-
-// Some fixed older IDs; auto-discovery will also add newest posts:
+// Liste vechi fixe (nu se strică, dar nici nu se mai reevaluează)
 const STATIC_POSTS = [
   1303,1297,1292,1285,1281,1257,1255,1253,1304,1298,1293,1286,1282,1258,1256
 ];
 
-const FS_BASE  = "https://www.flashscore.mobi/match/";
-const PENDING  = "pending";
-const WIN      = "win";
-const LOSS     = "loss";
+const FS_BASE = "https://www.flashscore.mobi/match/";
+const PENDING = "pending";
+const WIN     = "win";
+const LOSS    = "loss";
 
-const authHeader = "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASS}`).toString("base64");
+const authHeader =
+  "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASS}`).toString("base64");
 
 const get = (url) =>
-  fetch(url, { headers: { Authorization: authHeader, "Content-Type": "application/json" } });
+  fetch(url, {
+    headers: {
+      Authorization: authHeader,
+      "Content-Type": "application/json",
+    },
+  });
 
 const put = (url, body) =>
   fetch(url, {
     method: "PUT",
-    headers: { Authorization: authHeader, "Content-Type": "application/json" },
+    headers: {
+      Authorization: authHeader,
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify(body),
   });
 
-/* ====== SAFE JSON HELPER (handles sgcaptcha HTML) ====== */
+/* ========== helper: JSON cu protecție la HTML/captcha ========= */
 async function fetchJson(url) {
   const res = await get(url);
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status} for ${url} – body: ${txt.slice(0,120)}...`);
+    throw new Error(
+      `HTTP ${res.status} for ${url} – first 120: ${txt.slice(0, 120)}`
+    );
   }
   const ct = res.headers.get("content-type") || "";
   if (!ct.includes("application/json")) {
     const txt = await res.text().catch(() => "");
     throw new Error(
-      `Non-JSON response (content-type=${ct || "unknown"}) for ${url} – first 120 chars: ${txt.slice(0,120)}...`
+      `Non-JSON for ${url} (content-type=${ct}) – first 120: ${txt.slice(
+        0,
+        120
+      )}`
     );
   }
   return res.json();
 }
 
-/* ================= FLASHSCORE PARSER ================= */
+/* ================= FLASHCORE PARSER ================= */
 function outcomeFromScore(scoreText, market, side) {
   const m = scoreText.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
   if (!m) return null;
-  const h = +m[1], a = +m[2];
+  const h = +m[1],
+    a = +m[2];
   const result = h > a ? "1" : h < a ? "2" : "X";
 
   if (market === "1") {
@@ -76,7 +86,6 @@ async function fetchFlashscoreOutcome(matchId) {
     const html = await res.text();
     const $ = cheerio.load(html);
 
-    // Normalizăm textul
     const text = $("body").text().replace(/\s+/g, " ").trim();
 
     const finishMarkers = [
@@ -84,30 +93,28 @@ async function fetchFlashscoreOutcome(matchId) {
       "After Extra Time",
       "After Penalties",
       "AET",
-      "FT"
+      "FT",
     ];
-
-    let finishedIdx = -1;
-    for (const marker of finishMarkers) {
-      const idx = text.toLowerCase().indexOf(marker.toLowerCase());
-      if (idx >= 0 && (finishedIdx === -1 || idx < finishedIdx)) {
-        finishedIdx = idx;
-      }
+    let finishIdx = -1;
+    for (const m of finishMarkers) {
+      const idx = text.toLowerCase().indexOf(m.toLowerCase());
+      if (idx >= 0 && (finishIdx === -1 || idx < finishIdx)) finishIdx = idx;
     }
-    if (finishedIdx < 0) return { finished: false };
+    if (finishIdx < 0) return { finished: false };
 
-    const windowStart = Math.max(0, finishedIdx - 200);
-    const windowEnd   = Math.min(text.length, finishedIdx + 200);
+    const windowStart = Math.max(0, finishIdx - 200);
+    const windowEnd = Math.min(text.length, finishIdx + 200);
     const near = text.slice(windowStart, windowEnd);
 
     const scoreRe = /(\d{1,2})\s*:\s*(\d{1,2})/g;
-    let m, lastScore = null;
+    let m,
+      lastScore = null;
     while ((m = scoreRe.exec(near)) !== null) lastScore = m[0];
 
     if (!lastScore) return { finished: false };
     return { finished: true, scoreText: lastScore };
   } catch (e) {
-    console.error("⚠️ Flashscore parse error:", e.message);
+    console.error("Flashscore parse error:", e.message);
     return { finished: false };
   }
 }
@@ -125,8 +132,9 @@ function paintIconCell($, row, status) {
   $iconTd.html(status === WIN ? "✅" : status === LOSS ? "❌" : "⏳");
 }
 
-function computeTicketStatusFromTable($, $table) {
-  let hasPending = false, hasLoss = false;
+function computeTicketStatusFromTable($table, $) {
+  let hasPending = false,
+    hasLoss = false;
   $table.find("tbody tr[data-status]").each((_, tr) => {
     const s = $(tr).attr("data-status");
     if (s === PENDING) hasPending = true;
@@ -137,12 +145,14 @@ function computeTicketStatusFromTable($, $table) {
   return WIN;
 }
 
-function recalcAndBadge($, $table) {
-  const status = computeTicketStatusFromTable($, $table);
+function recalcAndBadge($table, $) {
+  const status = computeTicketStatusFromTable($table, $);
   const badge = $table
     .closest("div")
     .find("div")
-    .filter((_, el) => $(el).text().match(/În așteptare|Câștigat|Pierdut|⏳|✅|❌/))
+    .filter((_, el) =>
+      $(el).text().match(/În așteptare|Câștigat|Pierdut|⏳|✅|❌/)
+    )
     .first();
 
   const styleBase =
@@ -158,9 +168,8 @@ function recalcAndBadge($, $table) {
 }
 
 /* ================= VERIFY ONE POST ================= */
-async function verifyOnePost(post, statusCache, allowRecheck) {
-  const postId = typeof post === "number" ? post : post.id;
-
+// IMPORTANT: nu schimbă niciodată rânduri deja decise (win/loss)
+async function verifyOnePost(postId, statusCache) {
   const data = await fetchJson(
     `${WP_BASE}/wp-json/wp/v2/posts/${postId}?context=edit`
   );
@@ -172,18 +181,22 @@ async function verifyOnePost(post, statusCache, allowRecheck) {
 
   const rows = $("table.bilet-pariu tbody tr[data-id]").toArray();
   for (const row of rows) {
-    const $row    = $(row);
+    const $row = $(row);
     const matchId = $row.attr("data-id");
     const current = $row.attr("data-status") || PENDING;
-    const market  = $row.attr("data-market") || "1";
+    const market = $row.attr("data-market") || "1";
     const pickTxt = ($row.find("td").eq(3).text() || "").trim();
-    const side    = pickTxt.startsWith("1") ? "1"
-                    : pickTxt.startsWith("2") ? "2"
-                    : (pickTxt[0] || "").toUpperCase();
+    const side =
+      pickTxt.startsWith("1")
+        ? "1"
+        : pickTxt.startsWith("2")
+        ? "2"
+        : (pickTxt[0] || "").toUpperCase();
 
-    // Skip already decided rows unless this is the one-off rescue pass
-    if (!allowRecheck && (current === WIN || current === LOSS)) {
+    // dacă e deja decis, nu mai umblăm la el
+    if (current === WIN || current === LOSS) {
       statusCache[matchId] = current;
+      paintIconCell($, row, current);
       continue;
     }
 
@@ -207,14 +220,16 @@ async function verifyOnePost(post, statusCache, allowRecheck) {
     }
   }
 
-  // Ensure ✔ column and ticket badge(s)
+  // asigurăm coloana ✔ și badge-ul de bilet
   $("table.bilet-pariu").each((_, t) => {
     const $t = $(t);
-    if ($t.find("thead tr th").length < 6) $t.find("thead tr").append("<th>✔</th>");
+    if ($t.find("thead tr th").length < 6) {
+      $t.find("thead tr").append("<th>✔</th>");
+    }
     $t.find("tbody tr[data-status]").each((_, tr) =>
       paintIconCell($, tr, $(tr).attr("data-status"))
     );
-    recalcAndBadge($, $t);
+    recalcAndBadge($t, $);
   });
 
   if (changed) {
@@ -231,21 +246,22 @@ async function syncHomepage(statusCache) {
     const page = await fetchJson(
       `${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}?context=edit`
     );
-
-    let raw  = page.content?.raw || page.content?.rendered || "";
-    const $  = cheerio.load(raw);
+    let raw = page.content?.raw || page.content?.rendered || "";
+    const $ = cheerio.load(raw);
 
     let changed = false;
 
     $("table.bilet-pariu tbody tr[data-id]").each((_, tr) => {
       const $tr = $(tr);
-      const id  = $tr.attr("data-id");
+      const id = $tr.attr("data-id");
       const cur = $tr.attr("data-status") || PENDING;
       const next = statusCache[id];
+
       if (!next) {
         paintIconCell($, tr, cur);
         return;
       }
+
       if (cur !== next) {
         $tr.attr("data-status", next);
         changed = true;
@@ -253,9 +269,11 @@ async function syncHomepage(statusCache) {
       paintIconCell($, tr, $tr.attr("data-status"));
     });
 
-    $("table.bilet-pariu").each((_, t) => recalcAndBadge($, $(t)));
+    $("table.bilet-pariu").each((_, t) => {
+      recalcAndBadge($(t), $);
+    });
 
-    // cache-buster pentru shortcodes
+    // cache-buster pentru shortcodes (ca înainte)
     const marker = "<!-- pv-last-sync:";
     const nowStr = new Date().toISOString();
     if (raw.includes(marker)) {
@@ -268,10 +286,7 @@ async function syncHomepage(statusCache) {
     }
 
     await put(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}`, { content: raw });
-
-    console.log(
-      `Homepage #${HOMEPAGE_ID}: cache-busted to refresh shortcodes.`
-    );
+    console.log(`Homepage #${HOMEPAGE_ID}: cache-busted to refresh shortcodes.`);
   } catch (e) {
     console.error("Homepage sync error:", e.message);
   }
@@ -286,35 +301,22 @@ async function syncHomepage(statusCache) {
 
   const statusCache = {};
 
-  // 1) Build the list of posts: static + newest (covers day-by-day)
+  // posturi: lista fixă + ultimele 20 cu "Bilet" în titlu/conținut
   const postsSet = new Set(STATIC_POSTS);
   try {
-    const q1 = await fetchJson(
+    const newest = await fetchJson(
       `${WP_BASE}/wp-json/wp/v2/posts?per_page=20&orderby=date&order=desc&search=Bilet`
     );
-    for (const p of q1) postsSet.add(p.id);
+    for (const p of newest) postsSet.add(p.id);
   } catch (e) {
     console.error("Error auto-discovering posts:", e.message);
   }
 
   const ids = [...postsSet];
 
-  // 2) If RECHECK_ONCE=true, get newest N posts and force recheck for them
-  let newestIds = [];
-  if (RECHECK_ONCE) {
-    try {
-      const r = await fetchJson(
-        `${WP_BASE}/wp-json/wp/v2/posts?per_page=${RECHECK_LAST_N}&orderby=date&order=desc`
-      );
-      newestIds = r.map((p) => p.id);
-    } catch (e) {
-      console.error("Error fetching newest posts for recheck:", e.message);
-    }
-  }
-
   for (const id of ids) {
     try {
-      await verifyOnePost(id, statusCache, RECHECK_ONCE && newestIds.includes(id));
+      await verifyOnePost(id, statusCache);
     } catch (e) {
       console.error(`Eroare la post ${id}: ${e.message}`);
     }
