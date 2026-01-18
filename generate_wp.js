@@ -1,5 +1,5 @@
 // generate_wp.js
-// FINAL FIX — correct "Pariu propus" + pending status support
+// FINAL — no duplicate titles, correct "Pariu propus", pending status ready
 
 import fs from "fs/promises";
 
@@ -7,9 +7,6 @@ const TICKETS_FILE = "tickets.json";
 
 /**
  * Renders a single table row (one selection)
- * IMPORTANT:
- * - "Pariu propus" uses HUMAN text (meta.bet_text)
- * - status starts as "pending"
  */
 function renderRow(sel) {
   const betText =
@@ -39,16 +36,14 @@ function renderRow(sel) {
 }
 
 /**
- * Renders one ticket table (Cota 2 / Biletul Zilei)
+ * Renders ticket table ONLY (NO TITLE!)
  */
-function renderTicket(title, ticket) {
+function renderTicket(ticket) {
   if (!ticket || !ticket.selections?.length) {
-    return `<h2>${title}</h2><p>(Nu a fost generat)</p>`;
+    return `<p>(Nu a fost generat)</p>`;
   }
 
   return `
-<h2>${title}</h2>
-
 <table class="pv-ticket">
   <thead>
     <tr>
@@ -75,14 +70,14 @@ function renderTicket(title, ticket) {
 }
 
 /**
- * Shared CSS (inline or move to theme later)
+ * Shared CSS
  */
 const STYLE = `
 <style>
 .pv-ticket {
   width: 100%;
   border-collapse: collapse;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 .pv-ticket th, .pv-ticket td {
   border: 1px solid #ddd;
@@ -90,23 +85,16 @@ const STYLE = `
 }
 .pv-ticket th {
   background: #f4f4f4;
-  text-align: left;
 }
 .pv-status {
   font-size: 18px;
 }
 [data-status="pending"] .pv-win,
-[data-status="pending"] .pv-loss {
-  display: none;
-}
+[data-status="pending"] .pv-loss { display:none; }
 [data-status="win"] .pv-pending,
-[data-status="win"] .pv-loss {
-  display: none;
-}
+[data-status="win"] .pv-loss { display:none; }
 [data-status="loss"] .pv-pending,
-[data-status="loss"] .pv-win {
-  display: none;
-}
+[data-status="loss"] .pv-win { display:none; }
 </style>
 `;
 
@@ -116,26 +104,14 @@ const STYLE = `
 
   // ---- COTA 2 ----
   if (data.bilet_cota2) {
-    const html =
-      STYLE +
-      renderTicket("Cota 2 – Pronosticuri fotbal azi", data.bilet_cota2);
-
+    const html = STYLE + renderTicket(data.bilet_cota2);
     await fs.writeFile("cota2.html", html, "utf8");
     console.log("[WP] cota2.html generated");
   }
 
   // ---- BILETUL ZILEI ----
   if (data.biletul_zilei) {
-    const size = data.biletul_zilei.selections.length;
-    const title =
-      size === 1 ? "Pontul Zilei" :
-      size === 2 ? "Combo Zilnic" :
-      "Biletul Zilei";
-
-    const html =
-      STYLE +
-      renderTicket(title, data.biletul_zilei);
-
+    const html = STYLE + renderTicket(data.biletul_zilei);
     await fs.writeFile("biletul-zilei.html", html, "utf8");
     console.log("[WP] biletul-zilei.html generated");
   }
