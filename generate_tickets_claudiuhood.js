@@ -1,5 +1,6 @@
 // generate_tickets_claudiuhood.js
 // FINAL VERSION — Flashscore-driven team detection + Claudiu text markets
+// with SINGLE-TEAM fallback + relaxed fallback condition
 
 import fs from "fs/promises";
 import * as cheerio from "cheerio";
@@ -83,14 +84,13 @@ function extractFromText(html, matches) {
   const text = $("body").text().replace(/\s+/g, " ").toLowerCase();
 
   log(`Extracted text length: ${text.length}`);
-  log(`TEXT SAMPLE (first 300 chars):`);
-  console.log(text.slice(0, 300));
 
   const results = [];
 
   const MARKET_REGEX =
     /(1x|x2|12|\b1\b|\bx\b|\b2\b|peste\s*\d+\.5|sub\s*\d+\.5).*?cota[: ]+([\d.]+)/i;
 
+  // ---------- FULL TEAM PAIR ----------
   for (const match of matches) {
     if (!match.teams) continue;
 
@@ -100,24 +100,46 @@ function extractFromText(html, matches) {
     const na = normalize(teamA);
     const nb = normalize(teamB);
 
-    // both teams must be mentioned in article text
     if (!text.includes(na) || !text.includes(nb)) continue;
 
     const m = MARKET_REGEX.exec(text);
     if (!m) continue;
 
-    const marketRaw = m[1];
-    const odd = Number(m[2]);
-    if (!odd || odd < 1.01) continue;
-
-    log(`MATCH VIA TEXT → ${teamA} - ${teamB} | ${marketRaw} | ${odd}`);
-
     results.push({
       teamA,
       teamB,
-      market_raw: marketRaw,
-      odd
+      market_raw: m[1],
+      odd: Number(m[2])
     });
+
+    log(`MATCH VIA TEXT → ${teamA} - ${teamB} | ${m[1]} | ${m[2]}`);
+  }
+
+  // ---------- SINGLE TEAM FALLBACK (for Cota 2) ----------
+  if (!results.length) {
+    for (const match of matches) {
+      if (!match.teams) continue;
+
+      const [teamA, teamB] = match.teams.split(" - ").map(t => t?.trim());
+      if (!teamA || !teamB) continue;
+
+      const na = normalize(teamA);
+      const nb = normalize(teamB);
+
+      if (!text.includes(na) && !text.includes(nb)) continue;
+
+      const m = MARKET_REGEX.exec(text);
+      if (!m) continue;
+
+      results.push({
+        teamA,
+        teamB,
+        market_raw: m[1],
+        odd: Number(m[2])
+      });
+
+      log(`SINGLE-TEAM MATCH → ${teamA} - ${teamB} | ${m[1]} | ${m[2]}`);
+    }
   }
 
   log(`Total matches detected via Claudiu text: ${results.length}`);
@@ -200,13 +222,14 @@ function mapToFlashscore(selections, matches) {
   const selZi = extractFromText(htmlZi, matches);
 
   if (!selC2.length && !selZi.length)
-    fallback("No matches detected in Claudiu articles");
+    fallback("No valid Claudiu tickets generated");
 
   const mapC2 = mapToFlashscore(selC2.slice(0,2), matches);
   const mapZi = mapToFlashscore(selZi.slice(0,4), matches);
 
-  if (mapC2.length < 2 || mapZi.length < 4)
-    fallback("Mapping incomplete after extraction");
+  // ✅ relaxed condition: allow either ticket
+  if (!mapC2.length && !mapZi.length)
+    fallback("No mapped tickets after extraction");
 
   const tickets = {
     date: new Date().toISOString().slice(0,10),
