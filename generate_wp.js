@@ -1,5 +1,5 @@
 // generate_wp.js
-// FINAL FIX — always extract Flashscore match ID (no more undefined)
+// FINAL — RO hour aligned + event date displayed (homepage-safe)
 
 import fs from "fs/promises";
 
@@ -8,15 +8,17 @@ const TICKETS_FILE = "tickets.json";
 /* ================= HELPERS ================= */
 
 /**
- * Extract Flashscore match ID from URL
+ * Add +1 hour to match time (RO alignment)
  */
-function extractMatchId(url = "") {
-  const m = url.match(/\/match\/([A-Za-z0-9]+)\//);
-  return m ? m[1] : "";
+function addOneHour(timeStr) {
+  if (!timeStr || !/^\d{1,2}:\d{2}$/.test(timeStr)) return timeStr || "-";
+  const [h, m] = timeStr.split(":").map(Number);
+  const nh = (h + 1) % 24;
+  return `${String(nh).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
 /**
- * Detect bet type + build verification metadata
+ * Build verification meta (used by verify flow)
  */
 function buildVerificationMeta(sel) {
   let market = "1";
@@ -27,37 +29,30 @@ function buildVerificationMeta(sel) {
   const txt =
     sel.meta?.bet_text?.toLowerCase() ||
     sel.meta?.market_text?.toLowerCase() ||
-    sel.market_raw?.toLowerCase() ||
     "";
 
-  // BTTS
-  if (/ambele.*marcheaz|btts/i.test(txt)) {
-    return { market: "STAT", stat: "btts", side: "yes", threshold: "" };
-  }
-
-  // OVER / UNDER
-  if (/over|under|minim|maxim|peste|sub/i.test(txt)) {
-    market = "stat";
-
-    if (/gol/i.test(txt)) stat = "goals";
-    else if (/corner/i.test(txt)) stat = "corners";
-    else if (/șut|sut|shot/i.test(txt)) stat = "shots_on_target";
-
-    side = /sub|under/i.test(txt) ? "under" : "over";
+  // Goals over / under
+  if (txt.includes("gol")) {
+    market = "STAT";
+    stat = "goals";
+    side = txt.includes("sub") ? "under" : "over";
 
     const m = txt.match(/(\d+(\.\d+)?)/);
     if (m) threshold = m[1];
   }
 
+  // BTTS
+  if (txt.includes("ambele") && txt.includes("marche")) {
+    market = "BTTS";
+    stat = "btts";
+    side = "yes";
+  }
+
   return { market, stat, side, threshold };
 }
 
-/* ================= RENDER ================= */
-
+/* ================= ROW ================= */
 function renderRow(sel) {
-  const matchId = sel.id || extractMatchId(sel.url);
-  if (!matchId) return ""; // safety
-
   const betText =
     sel.meta?.bet_text ||
     sel.meta?.market_text ||
@@ -66,10 +61,11 @@ function renderRow(sel) {
     "Pariu special";
 
   const meta = buildVerificationMeta(sel);
+  const timeRO = addOneHour(sel.time);
 
   return `
 <tr
-  data-id="${matchId}"
+  data-id="${sel.id}"
   data-status="pending"
   data-market="${meta.market}"
   ${meta.stat ? `data-stat="${meta.stat}"` : ""}
@@ -82,14 +78,15 @@ function renderRow(sel) {
     </a>
   </td>
   <td>${sel.country} / ${sel.competition}</td>
-  <td>${sel.time || "-"}</td>
+  <td>${timeRO}</td>
   <td><strong>${betText}</strong></td>
-  <td><strong>${Number(sel.odd).toFixed(2)}</strong></td>
+  <td><strong>${sel.odd}</strong></td>
   <td style="text-align:center;font-weight:bold;">⏳</td>
 </tr>`;
 }
 
-function renderTicket(ticket) {
+/* ================= TABLE ================= */
+function renderTicket(ticket, dateLabel) {
   if (!ticket || !ticket.selections?.length) {
     return `<p>(Nu a fost generat)</p>`;
   }
@@ -116,15 +113,21 @@ function renderTicket(ticket) {
       <td></td>
     </tr>
   </tfoot>
-</table>`;
+</table>
+
+<div class="pv-ticket-date">
+  📅 Evenimentele sunt programate pentru <strong>${dateLabel}</strong>
+</div>
+`;
 }
 
+/* ================= CSS ================= */
 const STYLE = `
 <style>
 .bilet-pariu {
   width:100%;
   border-collapse:collapse;
-  margin-bottom:24px;
+  margin-bottom:16px;
 }
 .bilet-pariu th,
 .bilet-pariu td {
@@ -134,30 +137,39 @@ const STYLE = `
 .bilet-pariu th {
   background:#f4f4f4;
 }
+.pv-ticket-date {
+  font-size:14px;
+  color:#555;
+  margin-bottom:24px;
+}
 </style>
 `;
 
 /* ================= MAIN ================= */
-
 (async () => {
   const raw = await fs.readFile(TICKETS_FILE, "utf8");
   const data = JSON.parse(raw);
 
+  const dateRO = new Date(data.date).toLocaleDateString("ro-RO", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+
   if (data.bilet_cota2) {
-    await fs.writeFile(
-      "cota2.html",
-      STYLE + renderTicket(data.bilet_cota2),
-      "utf8"
-    );
-    console.log("[OK] cota2.html generated");
+    const html = STYLE + renderTicket(data.bilet_cota2, dateRO);
+    await fs.writeFile("cota2.html", html, "utf8");
+    console.log("[WP] cota2.html generated");
   }
 
   if (data.biletul_zilei) {
-    await fs.writeFile(
-      "biletul-zilei.html",
-      STYLE + renderTicket(data.biletul_zilei),
-      "utf8"
-    );
-    console.log("[OK] biletul-zilei.html generated");
+    const html = STYLE + renderTicket(data.biletul_zilei, dateRO);
+    await fs.writeFile("biletul-zilei.html", html, "utf8");
+    console.log("[WP] biletul-zilei.html generated");
+  }
+
+  if (!data.bilet_cota2 && !data.biletul_zilei) {
+    console.log("[WP] Nothing to publish today.");
   }
 })();
