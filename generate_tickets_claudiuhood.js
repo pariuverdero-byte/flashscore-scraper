@@ -35,11 +35,22 @@ function buildDate(offset) {
 
 function buildUrls() {
   const { day, dd, mm, monthName, year } = buildDate(DAY_OFFSET);
-  return {
-    cota2: `https://www.claudiuhood.ro/cota-2-zilnica-${day}-${monthName}-${year}/`,
+
+  // sanitize month name (remove hidden unicode chars)
+  const safeMonth = monthName
+    .normalize("NFKD")
+    .replace(/[^\w]/g, "")
+    .toLowerCase();
+
+  const urls = {
+    cota2: `https://www.claudiuhood.ro/cota-2-zilnica-${day}-${safeMonth}-${year}/`,
     zi: `https://www.claudiuhood.ro/biletul-zilei-${dd}-${mm}-${year}/`
   };
+
+  console.log("[claudiu][DEBUG] Using URLs:", urls);
+  return urls;
 }
+
 
 async function fetchHtml(url) {
   log(`Fetching URL: ${url}`);
