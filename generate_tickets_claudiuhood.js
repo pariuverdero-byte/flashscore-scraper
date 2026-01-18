@@ -1,5 +1,5 @@
 // generate_tickets_claudiuhood.js
-// FINAL DEBUG VERSION — strict team-pair + single-team fallback
+// FINAL VERSION — Flashscore-driven team detection + Claudiu text markets
 
 import fs from "fs/promises";
 import * as cheerio from "cheerio";
@@ -12,10 +12,6 @@ const RO_MONTH = [
   "ianuarie","februarie","martie","aprilie","mai","iunie",
   "iulie","august","septembrie","octombrie","noiembrie","decembrie"
 ];
-
-// 🚫 Noise / marketing / article words to exclude
-const NOISE_PAT =
-  /(cota\s*2|biletul\s*zilei|claudiu\s*hood|facebook|unibet|pariuri|pariori|publicitate|reclama|cookie|ads|window\.|document\.|mii\s*de\s*pariori|utilizatori)/i;
 
 const log = (msg) => console.log(`[claudiu][DEBUG] ${msg}`);
 
@@ -81,62 +77,50 @@ function normalize(s="") {
     .trim();
 }
 
-// ---------------- EXTRACTION ----------------
-function extractFromText(html) {
+// ---------------- EXTRACT VIA FLASHScore ----------------
+function extractFromText(html, matches) {
   const $ = cheerio.load(html);
-  const text = $("body").text().replace(/\s+/g, " ").trim();
+  const text = $("body").text().replace(/\s+/g, " ").toLowerCase();
 
   log(`Extracted text length: ${text.length}`);
   log(`TEXT SAMPLE (first 300 chars):`);
   console.log(text.slice(0, 300));
 
   const results = [];
-  let m;
 
-  // ===== STRICT TEAM PAIR =====
-  const PAIR_REGEX =
-    /\b([A-Z][A-Za-zÀ-ž .'-]{2,})\s*[-–]\s*([A-Z][A-Za-zÀ-ž .'-]{2,})\b.*?(1X|12|X2|1|X|2|Peste\s*\d+\.5|Sub\s*\d+\.5).*?Cota[: ]+([\d.]+)/gi;
+  const MARKET_REGEX =
+    /(1x|x2|12|\b1\b|\bx\b|\b2\b|peste\s*\d+\.5|sub\s*\d+\.5).*?cota[: ]+([\d.]+)/i;
 
-  while ((m = PAIR_REGEX.exec(text)) !== null) {
-    const teamA = m[1].trim();
-    const teamB = m[2].trim();
+  for (const match of matches) {
+    if (!match.teams) continue;
 
-    if (NOISE_PAT.test(teamA) || NOISE_PAT.test(teamB)) {
-      log(`SKIP noise pair → ${teamA} - ${teamB}`);
-      continue;
-    }
+    const [teamA, teamB] = match.teams.split(" - ").map(t => t?.trim());
+    if (!teamA || !teamB) continue;
 
-    log(`PAIR MATCH OK → ${teamA} - ${teamB} | ${m[3]} | ${m[4]}`);
+    const na = normalize(teamA);
+    const nb = normalize(teamB);
+
+    // both teams must be mentioned in article text
+    if (!text.includes(na) || !text.includes(nb)) continue;
+
+    const m = MARKET_REGEX.exec(text);
+    if (!m) continue;
+
+    const marketRaw = m[1];
+    const odd = Number(m[2]);
+    if (!odd || odd < 1.01) continue;
+
+    log(`MATCH VIA TEXT → ${teamA} - ${teamB} | ${marketRaw} | ${odd}`);
 
     results.push({
       teamA,
       teamB,
-      market_raw: m[3].trim(),
-      odd: Number(m[4])
+      market_raw: marketRaw,
+      odd
     });
   }
 
-  // ===== SINGLE TEAM FALLBACK =====
-  if (!results.length) {
-    const SINGLE_REGEX =
-      /\b([A-Z][A-Za-zÀ-ž .'-]{3,})\b.*?(1X|12|X2|1|X|2|Peste\s*\d+\.5|Sub\s*\d+\.5).*?Cota[: ]+([\d.]+)/gi;
-
-    while ((m = SINGLE_REGEX.exec(text)) !== null) {
-      const team = m[1].trim();
-      if (NOISE_PAT.test(team)) continue;
-
-      log(`SINGLE TEAM MATCH OK → ${team} | ${m[2]} | ${m[3]}`);
-
-      results.push({
-        teamA: team,
-        teamB: null,
-        market_raw: m[2].trim(),
-        odd: Number(m[3])
-      });
-    }
-  }
-
-  log(`Total VALID Claudiu selections: ${results.length}`);
+  log(`Total matches detected via Claudiu text: ${results.length}`);
   return results;
 }
 
@@ -151,35 +135,23 @@ function normalizeMarket(m) {
   return null;
 }
 
-// ---------------- FLASHScore MAPPING ----------------
+// ---------------- BUILD TICKETS ----------------
 function mapToFlashscore(selections, matches) {
   const mapped = [];
 
   for (const s of selections) {
     const na = normalize(s.teamA);
-    const nb = s.teamB ? normalize(s.teamB) : null;
+    const nb = normalize(s.teamB);
 
-    let candidates = matches.filter(m => {
+    const match = matches.find(m => {
       const mt = normalize(m.teams || "");
-      return nb ? (mt.includes(na) && mt.includes(nb)) : mt.includes(na);
+      return mt.includes(na) && mt.includes(nb);
     });
 
-    if (!candidates.length) {
-      log(`❌ No Flashscore match for: ${s.teamA}${s.teamB ? " - " + s.teamB : ""}`);
-      continue;
-    }
+    if (!match) continue;
 
-    if (!s.teamB && candidates.length > 1) {
-      log(`❌ Ambiguous single-team match for: ${s.teamA}`);
-      continue;
-    }
-
-    const match = candidates[0];
     const market = normalizeMarket(s.market_raw);
-    if (!market) {
-      log(`❌ Unsupported market: ${s.market_raw}`);
-      continue;
-    }
+    if (!market) continue;
 
     log(`✅ MAPPED → ${match.teams} | ${market} @ ${s.odd}`);
 
@@ -224,11 +196,11 @@ function mapToFlashscore(selections, matches) {
     fallback(`Claudiu fetch failed: ${e.message}`);
   }
 
-  const selC2 = extractFromText(htmlC2);
-  const selZi = extractFromText(htmlZi);
+  const selC2 = extractFromText(htmlC2, matches);
+  const selZi = extractFromText(htmlZi, matches);
 
   if (!selC2.length && !selZi.length)
-    fallback("No valid Claudiu selections extracted");
+    fallback("No matches detected in Claudiu articles");
 
   const mapC2 = mapToFlashscore(selC2.slice(0,2), matches);
   const mapZi = mapToFlashscore(selZi.slice(0,4), matches);
