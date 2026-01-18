@@ -1,389 +1,202 @@
-// verify_and_update_wp.js — Node 18/20 compatible
+// verify_and_update_wp.js — FINAL VERSION (scores + stats)
+// Node 18 / 20 compatible
+
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
 
 /* ================= CONFIG ================= */
-const WP_BASE       = process.env.WP_BASE;            // e.g. https://pariuverde.ro
-const WP_USER       = process.env.WP_USER;
-const WP_APP_PASS   = process.env.WP_APP_PASS;
-const HOMEPAGE_ID   = 11;
+const WP_BASE     = process.env.WP_BASE;
+const WP_USER     = process.env.WP_USER;
+const WP_APP_PASS = process.env.WP_APP_PASS;
+const HOMEPAGE_ID = 11;
 
-// One-off rescue mode: re-check already-decided rows for the most recent N posts.
-// Use in CI for a single run: RECHECK_ONCE=1 RECHECK_LAST_N=15
 const RECHECK_ONCE   = /^(1|true|yes)$/i.test(process.env.RECHECK_ONCE || "");
 const RECHECK_LAST_N = parseInt(process.env.RECHECK_LAST_N || "15", 10);
 
-// Some fixed older IDs; auto-discovery will also add newest posts:
-const STATIC_POSTS = [1303,1297,1292,1285,1281,1257,1255,1253,1304,1298,1293,1286,1282,1258,1256];
+const STATIC_POSTS = [
+  1303,1297,1292,1285,1281,1257,1255,1253,
+  1304,1298,1293,1286,1282,1258,1256
+];
 
-const FS_BASE  = "https://www.flashscore.mobi/match/";
-const PENDING  = "pending";
-const WIN      = "win";
-const LOSS     = "loss";
+const FS_BASE = "https://www.flashscore.mobi/match/";
+const PENDING = "pending";
+const WIN  = "win";
+const LOSS = "loss";
 
-const authHeader = "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASS}`).toString("base64");
+const authHeader =
+  "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASS}`).toString("base64");
 
 const get = (url) =>
-  fetch(url, { headers: { Authorization: authHeader, "Content-Type": "application/json" } });
+  fetch(url, { headers:{ Authorization:authHeader } });
 
 const put = (url, body) =>
   fetch(url, {
-    method: "PUT",
-    headers: { Authorization: authHeader, "Content-Type": "application/json" },
+    method:"PUT",
+    headers:{ Authorization:authHeader, "Content-Type":"application/json" },
     body: JSON.stringify(body),
   });
 
-/* ================= FLASHCORE PARSER (robust) =================
-   Decide only when match is clearly finished AND we can extract a final score.
-   Avoid matching odds (1.53 / 3.85 / 6.50) by requiring non-decimal context.
-================================================================ */
+/* ================= SCORE (1X2) ================= */
 function outcomeFromScore(scoreText, market, side) {
   const m = scoreText.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
   if (!m) return null;
+
   const h = +m[1], a = +m[2];
-  const result = h > a ? "1" : h < a ? "2" : "X";
+  const res = h > a ? "1" : h < a ? "2" : "X";
 
   if (market === "1") {
-    if (side === "1") return result === "1" ? WIN : LOSS;
-    if (side === "2") return result === "2" ? WIN : LOSS;
-    if ((side || "").toUpperCase() === "X") return result === "X" ? WIN : LOSS;
+    if (side === "1") return res === "1" ? WIN : LOSS;
+    if (side === "2") return res === "2" ? WIN : LOSS;
+    if (side === "X") return res === "X" ? WIN : LOSS;
   }
   return null;
 }
 
+/* ================= FETCH SCORE ================= */
 async function fetchFlashscoreOutcome(matchId) {
   try {
-    const url = `${FS_BASE}${matchId}/?s=5&d=0`;
-    const res = await fetch(url);
-    if (!res.ok) return { finished: false };
+    const res = await fetch(`${FS_BASE}${matchId}/?s=5&d=0`);
+    if (!res.ok) return { finished:false };
+
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const text = $("body").text();
+
+    if (!/Finished|Full Time|After Extra Time|Penalties/i.test(text))
+      return { finished:false };
+
+    const score =
+      $("div.detail b").first().text() ||
+      text.match(/(\d{1,2}\s*:\s*\d{1,2})/)?.[1];
+
+    if (!score) return { finished:false };
+
+    return { finished:true, scoreText:score };
+  } catch {
+    return { finished:false };
+  }
+}
+
+/* ================= FETCH STATS ================= */
+async function fetchFlashscoreStats(matchId) {
+  try {
+    const res = await fetch(`${FS_BASE}${matchId}/?s=1&d=0&t=stats`);
+    if (!res.ok) return null;
 
     const html = await res.text();
     const $ = cheerio.load(html);
 
-    // Normalize body text once
-    const fullText = $("body").text().replace(/\s+/g, " ").trim();
+    const stats = {};
 
-    // 1) Strong finished signals
-    const finishedSignals = [
-      "Finished", "Full Time", "After Extra Time", "AET",
-      "After penalties", "Penalties", "Abandoned", "Awarded"
-    ];
-    const isFinished =
-      $("div.detail").filter((_, el) => {
-        const t = $(el).text().trim().toLowerCase();
-        return finishedSignals.some(s => t === s.toLowerCase());
-      }).length > 0
-      || finishedSignals.some(s => new RegExp(`\\b${s}\\b`, "i").test(fullText));
+    $("tr").each((_, tr) => {
+      const tds = $(tr).find("td");
+      if (tds.length < 3) return;
 
-    if (!isFinished) return { finished: false };
+      const label = $(tds[0]).text().toLowerCase();
+      const h = parseInt($(tds[1]).text(), 10);
+      const a = parseInt($(tds[2]).text(), 10);
+      if (!Number.isFinite(h) || !Number.isFinite(a)) return;
 
-    // 2) Try canonical place first: <div class="detail"><b>score</b></div>
-    let scoreText = $("div.detail b").first().text().trim();
-    const scoreRegexSafe = /(?:^|[^0-9.])(\d{1,2}\s*:\s*\d{1,2})(?![0-9.])/;
+      if (label.includes("corner")) stats.corners = h + a;
+      if (label.includes("shot") && label.includes("on"))
+        stats.shots_on_target = h + a;
+      if (label.includes("goal")) stats.goals = h + a;
+    });
 
-    if (!scoreRegexSafe.test(scoreText)) {
-      // 3) Try header/score blocks often used by FS
-      const header = ($("h1,h2,h3").first().text() + " " + $(".participant__score").text())
-        .replace(/\s+/g, " ");
-      const mh = header.match(scoreRegexSafe);
-      if (mh) scoreText = mh[1];
-    }
-
-    if (!scoreRegexSafe.test(scoreText)) {
-      // 4) Fallback: search near the "finished" marker window (±250 chars)
-      const idx = finishedSignals
-        .map(s => fullText.search(new RegExp(`\\b${s}\\b`, "i")))
-        .filter(i => i >= 0)
-        .sort((a,b) => a-b)[0] ?? -1;
-
-      if (idx >= 0) {
-        const near = fullText.slice(Math.max(0, idx - 250), idx + 250);
-        const m = [...near.matchAll(new RegExp(scoreRegexSafe, "g"))];
-        if (m.length) scoreText = m[m.length - 1][1];
-      }
-    }
-
-    if (!scoreRegexSafe.test(scoreText)) return { finished: false };
-    return { finished: true, scoreText: scoreText.match(scoreRegexSafe)[1] };
-  } catch (e) {
-    console.error("⚠️ Flashscore parse error:", e.message);
-    return { finished: false };
+    return stats;
+  } catch {
+    return null;
   }
 }
 
-/* ================= DOM HELPERS ================= */
+function evaluateStatBet(stats, stat, side, threshold) {
+  if (!stats || stats[stat] == null) return null;
+  const v = stats[stat];
+  const t = Number(threshold);
+  if (!Number.isFinite(t)) return null;
+
+  if (side === "over")  return v > t ? WIN : LOSS;
+  if (side === "under") return v < t ? WIN : LOSS;
+  return null;
+}
+
+/* ================= UI HELPERS ================= */
 function paintIconCell($, row, status) {
-  const $row = $(row);
-  let $cells = $row.find("td");
-  if ($cells.length < 6) {
-    $row.append('<td style="text-align:center;font-weight:bold;"></td>');
-    $cells = $row.find("td");
-  }
-  const $iconTd = $cells.eq(5);
-  $iconTd.attr("style", "text-align:center;font-weight:bold;");
-  $iconTd.html(status === WIN ? "✅" : status === LOSS ? "❌" : "⏳");
+  const td = $(row).find("td").eq(5);
+  td.html(status === WIN ? "✅" : status === LOSS ? "❌" : "⏳");
 }
 
-function computeTicketStatusFromTable($, $table) {
-  let hasPending = false, hasLoss = false;
-  $table.find("tbody tr[data-status]").each((_, tr) => {
-    const s = $(tr).attr("data-status");
-    if (s === PENDING) hasPending = true;
-    else if (s === LOSS) hasLoss = true;
+function computeTicketStatus($, $table) {
+  let pending=false, loss=false;
+  $table.find("tbody tr").each((_, tr)=>{
+    const s=$(tr).attr("data-status");
+    if (s===PENDING) pending=true;
+    if (s===LOSS) loss=true;
   });
-  if (hasPending) return PENDING;
-  if (hasLoss) return LOSS;
+  if (pending) return PENDING;
+  if (loss) return LOSS;
   return WIN;
 }
 
-function recalcAndBadge($, $table) {
-  const status = computeTicketStatusFromTable($, $table);
-  const badge = $table
-    .closest("div")
-    .find("div")
-    .filter((_, el) => $(el).text().match(/În așteptare|Câștigat|Pierdut|⏳|✅|❌/))
-    .first();
-
-  const styleBase =
-    " color:#fff; padding:6px 10px; border-radius:4px; font-weight:bold;";
-  if (badge.length) {
-    if (status === WIN)
-      badge.html("✅ Câștigat").attr("style", "background-color:#4CAF50;" + styleBase);
-    else if (status === LOSS)
-      badge.html("❌ Pierdut").attr("style", "background-color:#F44336;" + styleBase);
-    else
-      badge.html("⏳ În așteptare").attr("style", "background-color:#FFC107;" + styleBase);
-  }
-}
-
-/**
- * Șterge toate paragrafele / heading-urile care conțin textele de analiză
- * gen „Everton – Nottingham — selecție: 1 (gazde)…”
- */
-function cleanupSelectionAnalysis($) {
-  let removed = false;
-  $("p,h2,h3,h4").each((_, el) => {
-    const txt = $(el).text().trim();
-    if (
-      /Analiza selec(ți|t)ilor/i.test(txt) ||
-      /selec(ți|t)ie\s*:/i.test(txt)    // „— selecție: …”
-    ) {
-      $(el).remove();
-      removed = true;
-    }
-  });
-  return removed;
-}
-
-/**
- * Actualizează box-ul galben de status global al biletului
- * (.pv-status-bilet) în funcție de rezultatul calculat din tabel.
- */
-function updateGlobalTicketStatusBox($) {
-  const $mainTable = $("table.bilet-pariu").first();
-  if (!$mainTable.length) return false;
-
-  const status = computeTicketStatusFromTable($, $mainTable);
-  const $box = $(".pv-status-bilet").first();
-  if (!$box.length) return false;
-
-  let target = {
-    cls: "pv-status-yellow",
-    icon: "⏳",
-    label: "Rezultat în așteptare",
-  };
-
-  if (status === WIN) {
-    target = {
-      cls: "pv-status-green",
-      icon: "✅",
-      label: "Bilet câștigat",
-    };
-  } else if (status === LOSS) {
-    target = {
-      cls: "pv-status-red",
-      icon: "❌",
-      label: "Bilet pierdut",
-    };
-  }
-
-  const currentLabel = $box.find(".pv-status-label").text().trim();
-  const currentIcon  = $box.find(".pv-status-icon").text().trim();
-
-  $box.removeClass("pv-status-yellow pv-status-green pv-status-red")
-      .addClass(target.cls);
-  $box.find(".pv-status-icon").text(target.icon);
-  $box.find(".pv-status-label").text(target.label);
-
-  return currentLabel !== target.label || currentIcon !== target.icon;
-}
-
-/* ================= VERIFY ONE POST ================= */
-async function verifyOnePost(post, statusCache, allowRecheck) {
-  const postId = typeof post === "number" ? post : post.id;
+/* ================= VERIFY POST ================= */
+async function verifyOnePost(postId, cache, allowRecheck) {
   const res = await get(`${WP_BASE}/wp-json/wp/v2/posts/${postId}?context=edit`);
-  if (!res.ok) throw new Error(`Cannot load post ${postId}`);
+  if (!res.ok) return;
   const data = await res.json();
-  const raw = data.content?.rendered || data.content?.raw || "";
-  const $ = cheerio.load(raw);
 
-  let changed = false;
+  const $ = cheerio.load(data.content.raw || data.content.rendered);
+  let changed=false;
 
-  const rows = $("table.bilet-pariu tbody tr[data-id]").toArray();
-  for (const row of rows) {
-    const $row   = $(row);
-    const matchId = $row.attr("data-id");
-    const current = $row.attr("data-status") || PENDING;
-    const market  = $row.attr("data-market") || "1";
-    const pickTxt = ($row.find("td").eq(3).text() || "").trim();
-    const side    = pickTxt.startsWith("1") ? "1" :
-                    pickTxt.startsWith("2") ? "2" :
-                    (pickTxt[0] || "").toUpperCase();
+  for (const row of $("tr[data-id]").toArray()) {
+    const $r = $(row);
+    const id = $r.attr("data-id");
+    const cur = $r.attr("data-status") || PENDING;
+    if (!allowRecheck && cur !== PENDING) continue;
 
-    // Skip already decided rows unless this is the one-off rescue pass
-    if (!allowRecheck && (current === WIN || current === LOSS)) {
-      statusCache[matchId] = current;
-      paintIconCell($, row, current);
-      continue;
+    const market = $r.attr("data-market");
+    const stat   = $r.attr("data-stat");
+    const side   = $r.attr("data-side");
+    const thr    = $r.attr("data-threshold");
+
+    let verdict=null;
+
+    if (market==="1") {
+      const o = await fetchFlashscoreOutcome(id);
+      if (o.finished)
+        verdict = outcomeFromScore(o.scoreText, "1", side);
+    } else if (stat) {
+      const stats = await fetchFlashscoreStats(id);
+      verdict = evaluateStatBet(stats, stat, side, thr);
     }
 
-    const info = await fetchFlashscoreOutcome(matchId);
-    if (!info.finished) {
-      statusCache[matchId] = current;
-      paintIconCell($, row, current);
-      continue;
-    }
-
-    const verdict = outcomeFromScore(info.scoreText, market, side);
-    if (verdict && verdict !== current) {
-      $row.attr("data-status", verdict);
+    if (verdict && verdict!==cur) {
+      $r.attr("data-status", verdict);
       paintIconCell($, row, verdict);
-      statusCache[matchId] = verdict;
-      changed = true;
-      console.log(`[VERIFY] ${data.slug} :: ${matchId} -> ${verdict}`);
-    } else {
-      statusCache[matchId] = current;
-      paintIconCell($, row, current);
+      cache[id]=verdict;
+      changed=true;
     }
-  }
-
-  // Ensure ✔ column and ticket badge(s)
-  $("table.bilet-pariu").each((_, t) => {
-    const $t = $(t);
-    if ($t.find("thead tr th").length < 6) $t.find("thead tr").append("<th>✔</th>");
-    $t.find("tbody tr[data-status]").each((_, tr) =>
-      paintIconCell($, tr, $(tr).attr("data-status"))
-    );
-    recalcAndBadge($, $t);
-  });
-
-  // 1) Curăță complet blocul de „Analiza selecțiilor”
-  if (cleanupSelectionAnalysis($)) {
-    changed = true;
-  }
-
-  // 2) Actualizează box-ul mare de rezultat al biletului
-  if (updateGlobalTicketStatusBox($)) {
-    changed = true;
   }
 
   if (changed) {
-    await put(`${WP_BASE}/wp-json/wp/v2/posts/${postId}`, { content: $.html() });
-    console.log(`Post #${postId}: actualizat`);
-  } else {
-    console.log(`Post #${postId}: fără schimbări`);
-  }
-}
-
-/* ================= SYNC HOMEPAGE =================
-   Elementor/shortcodes render on the frontend; we can’t safely edit rendered HTML.
-   Instead, if we don’t find any tables in the raw content, we bump a cache-buster
-   comment to force a fresh render from caches.
-=================================================== */
-async function syncHomepage(statusCache) {
-  const res = await get(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}?context=edit`);
-  if (!res.ok) {
-    console.log(`Homepage (${HOMEPAGE_ID}) not accessible`);
-    return;
-  }
-  const page = await res.json();
-  let raw  = page.content?.raw || page.content?.rendered || "";
-  let $    = cheerio.load(raw);
-  let changed = false;
-
-  const hasTables = $("table.bilet-pariu").length > 0;
-
-  if (hasTables) {
-    // Legacy path: if the homepage really contains tables in the editable HTML.
-    $("table.bilet-pariu tbody tr[data-id]").each((_, tr) => {
-      const $tr = $(tr);
-      const id  = $tr.attr("data-id");
-      const cur = $tr.attr("data-status") || PENDING;
-      const next = statusCache[id];
-      if (!next) {
-        paintIconCell($, tr, cur);
-        return;
-      }
-      if (cur !== next) {
-        $tr.attr("data-status", next);
-        changed = true;
-      }
-      paintIconCell($, tr, $tr.attr("data-status"));
+    await put(`${WP_BASE}/wp-json/wp/v2/posts/${postId}`, {
+      content: $.html()
     });
-    $("table.bilet-pariu").each((_, t) => recalcAndBadge($, $(t)));
-    if (changed) {
-      await put(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}`, { content: $.html() });
-      console.log(`Homepage #${HOMEPAGE_ID}: sincronizat cu rezultatele (inline tables).`);
-      return;
-    }
   }
-
-  // Cache-buster (Elementor/shortcodes path)
-  const stamp = `<!-- pv-cache-buster:${Date.now()} -->`;
-  if (raw.includes("pv-cache-buster")) {
-    raw = raw.replace(/<!--\s*pv-cache-buster:\d+\s*-->/, stamp);
-  } else {
-    raw = raw + "\n" + stamp;
-  }
-  await put(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}`, { content: raw });
-  console.log(`Homepage #${HOMEPAGE_ID}: cache-busted to refresh shortcodes.`);
 }
 
 /* ================= RUN ================= */
-(async function run() {
-  if (!WP_BASE || !WP_USER || !WP_APP_PASS) {
-    console.error("Set WP_BASE, WP_USER, WP_APP_PASS env vars.");
-    process.exit(1);
-  }
+(async ()=>{
+  if (!WP_BASE||!WP_USER||!WP_APP_PASS) process.exit(1);
 
-  const statusCache = {};
+  const cache = {};
+  const posts = new Set(STATIC_POSTS);
 
-  // 1) Build the list of posts: static + newest (covers day-by-day)
-  const postsSet = new Set(STATIC_POSTS);
   try {
-    // pull newest 20 posts that likely include "Biletul Zilei" or "Bilet Cota 2"
-    const q1 = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=20&orderby=date&order=desc&search=Bilet`);
-    if (q1.ok) for (const p of await q1.json()) postsSet.add(p.id);
+    const r = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=20&search=Bilet`);
+    if (r.ok) (await r.json()).forEach(p=>posts.add(p.id));
   } catch {}
 
-  const ids = [...postsSet];
-
-  // 2) If RECHECK_ONCE=true, get newest N posts and force recheck for them
-  let newestIds = [];
-  if (RECHECK_ONCE) {
-    try {
-      const r = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=${RECHECK_LAST_N}&orderby=date&order=desc`);
-      if (r.ok) newestIds = (await r.json()).map(p => p.id);
-    } catch {}
+  for (const id of posts) {
+    await verifyOnePost(id, cache, RECHECK_ONCE);
   }
-
-  for (const id of ids) {
-    try {
-      await verifyOnePost(id, statusCache, RECHECK_ONCE && newestIds.includes(id));
-    } catch (e) {
-      console.error(`Eroare la post ${id}: ${e.message}`);
-    }
-  }
-
-  await syncHomepage(statusCache);
 })();
