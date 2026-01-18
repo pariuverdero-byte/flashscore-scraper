@@ -57,22 +57,39 @@ async function fetchFlashscoreOutcome(matchId) {
 
     const html = await res.text();
     const $ = cheerio.load(html);
-    const text = $("body").text();
 
-    if (!/Finished|Full Time|After Extra Time|Penalties/i.test(text))
+    const bodyText = $("body").text().replace(/\s+/g, " ");
+
+    // 1️⃣ Extragem scorul (X:Y)
+    const scoreMatch = bodyText.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
+    if (!scoreMatch) {
       return { finished:false };
+    }
 
-    const score =
-      $("div.detail b").first().text().trim() ||
-      text.match(/(\d{1,2}\s*:\s*\d{1,2})/)?.[1];
+    const scoreText = `${scoreMatch[1]}:${scoreMatch[2]}`;
 
-    if (!score) return { finished:false };
+    // 2️⃣ Detectăm LIVE minute (ex: 54', 90+2')
+    const isLive =
+      /\d{1,2}\s*'/.test(bodyText) ||
+      /\d{1,2}\s*\+\s*\d{1,2}\s*'/.test(bodyText);
 
-    return { finished:true, scoreText:score };
-  } catch {
+    if (isLive) {
+      // încă se joacă
+      return { finished:false };
+    }
+
+    // 3️⃣ Dacă avem scor și NU e live → FINISHED
+    return {
+      finished: true,
+      scoreText
+    };
+
+  } catch (e) {
+    console.error("⚠️ Flashscore fetch error:", e.message);
     return { finished:false };
   }
 }
+
 
 /* ================= VERIFY ONE POST ================= */
 async function verifyOnePost(postId) {
