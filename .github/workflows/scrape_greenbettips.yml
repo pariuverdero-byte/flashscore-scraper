@@ -128,7 +128,7 @@ jobs:
       - name: Publish posts to WordPress (greenbettips)
         if: success()
         env:
-          WP_URL: https://greenbettips.com/wp-json/wp/v2
+          WP_URL: WP_URL: https://greenbettips.com/index.php/wp-json/wp/v2
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
         run: node publish_wp.js
