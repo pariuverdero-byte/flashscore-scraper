@@ -28,7 +28,6 @@ jobs:
 
       # ------------------
       # GREENBETTIPS TICKETS
-      # (aceleași valori ca PV)
       # ------------------
       PV_COTA2_MIN: "1.90"
       PV_COTA2_MAX: "2.50"
@@ -123,12 +122,12 @@ jobs:
         run: node generate_wp.js
 
       # ------------------
-      # 6) PUBLISH WORDPRESS (EN)
+      # 6) PUBLISH WORDPRESS (EN) ✅ FIX FINAL
       # ------------------
       - name: Publish posts to WordPress (greenbettips)
         if: success()
         env:
-          WP_URL: WP_URL: https://greenbettips.com/index.php/wp-json/wp/v2
+          WP_URL: https://greenbettips.com/index.php/wp-json/wp/v2
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
         run: node publish_wp.js
