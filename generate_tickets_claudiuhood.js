@@ -82,24 +82,44 @@ function extractFromText(html) {
   const text = $("body").text().replace(/\s+/g, " ").trim();
 
   log(`Extracted text length: ${text.length}`);
-  log(`TEXT SAMPLE (first 500 chars):`);
+  log("TEXT SAMPLE (first 500 chars):");
   console.log(text.slice(0, 500));
 
-  const REGEX = /([A-Za-zÀ-ž0-9 .'-]+)\s*[-–]\s*([A-Za-zÀ-ž0-9 .'-]+).*?(1X|12|X2|1|X|2|Peste\s*\d+\.5|Sub\s*\d+\.5).*?Cota[: ]+([\d.]+)/gi;
+  const results = [];
 
-  const out = [];
+  // -------- CASE 1: FULL TEAM PAIR --------
+  const PAIR_REGEX =
+    /([A-Za-zÀ-ž0-9 .'-]{3,})\s*[-–]\s*([A-Za-zÀ-ž0-9 .'-]{3,}).*?(1X|12|X2|1|X|2|Peste\s*\d+\.5|Sub\s*\d+\.5).*?Cota[: ]+([\d.]+)/gi;
+
   let m;
-  while ((m = REGEX.exec(text)) !== null) {
-    log(`MATCH FOUND → ${m[1]} - ${m[2]} | ${m[3]} | ${m[4]}`);
-    out.push({
-      teams: `${m[1].trim()} - ${m[2].trim()}`,
+  while ((m = PAIR_REGEX.exec(text)) !== null) {
+    log(`PAIR MATCH → ${m[1]} - ${m[2]} | ${m[3]} | ${m[4]}`);
+    results.push({
+      teamA: m[1].trim(),
+      teamB: m[2].trim(),
       market_raw: m[3].trim(),
       odd: Number(m[4])
     });
   }
 
-  log(`Total regex matches found: ${out.length}`);
-  return out;
+  // -------- CASE 2: SINGLE TEAM --------
+  if (!results.length) {
+    const SINGLE_REGEX =
+      /([A-Z][A-Za-zÀ-ž0-9 .'-]{3,}).*?(1X|12|X2|1|X|2|Peste\s*\d+\.5|Sub\s*\d+\.5).*?Cota[: ]+([\d.]+)/gi;
+
+    while ((m = SINGLE_REGEX.exec(text)) !== null) {
+      log(`SINGLE TEAM MATCH → ${m[1]} | ${m[2]} | ${m[3]}`);
+      results.push({
+        teamA: m[1].trim(),
+        teamB: null,
+        market_raw: m[2].trim(),
+        odd: Number(m[3])
+      });
+    }
+  }
+
+  log(`Total extracted Claudiu selections: ${results.length}`);
+  return results;
 }
 
 function normalizeMarket(m) {
@@ -117,29 +137,36 @@ function mapToFlashscore(selections, matches) {
   const mapped = [];
 
   for (const s of selections) {
-    const [a,b] = s.teams.split(" - ");
-    const na = normalize(a);
-    const nb = normalize(b);
+    const na = normalize(s.teamA);
+    const nb = s.teamB ? normalize(s.teamB) : null;
 
-    log(`Mapping: ${a} vs ${b}`);
-
-    const match = matches.find(m => {
+    let candidates = matches.filter(m => {
       const mt = normalize(m.teams || "");
-      return mt.includes(na) && mt.includes(nb);
+      if (nb) {
+        return mt.includes(na) && mt.includes(nb);
+      }
+      return mt.includes(na);
     });
 
-    if (!match) {
-      log(`❌ No Flashscore match for: ${s.teams}`);
+    if (!candidates.length) {
+      log(`❌ No Flashscore match for: ${s.teamA}${s.teamB ? " - " + s.teamB : ""}`);
       continue;
     }
 
+    if (!s.teamB && candidates.length > 1) {
+      log(`❌ Ambiguous single-team match for: ${s.teamA}`);
+      continue;
+    }
+
+    const match = candidates[0];
     const market = normalizeMarket(s.market_raw);
+
     if (!market) {
       log(`❌ Unsupported market: ${s.market_raw}`);
       continue;
     }
 
-    log(`✅ Mapped to Flashscore: ${match.teams}`);
+    log(`✅ MAPPED → ${match.teams} | ${market} @ ${s.odd}`);
 
     mapped.push({
       id: match.id,
@@ -156,6 +183,7 @@ function mapToFlashscore(selections, matches) {
   log(`Total mapped selections: ${mapped.length}`);
   return mapped;
 }
+
 
 // -------- MAIN --------
 (async () => {
