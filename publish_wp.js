@@ -1,5 +1,5 @@
 // publish_wp.js
-// FIXED VERSION — robust publish even if category is missing
+// FINAL VERSION — publish with custom excerpt for category listing
 
 import fs from "fs/promises";
 import fetch from "node-fetch";
@@ -17,7 +17,7 @@ const auth =
 const read = async (p) =>
   fs.readFile(p, "utf8").catch(() => null);
 
-// ---------------- CATEGORY (OPTIONAL) ----------------
+// ---------- CATEGORY (OPTIONAL) ----------
 async function getCategoryId(slug) {
   try {
     const r = await fetch(
@@ -31,8 +31,28 @@ async function getCategoryId(slug) {
   }
 }
 
-// ---------------- PUBLISH ----------------
-async function publish({ title, html, categorySlug }) {
+// ---------- EXCERPT BUILDER ----------
+function buildExcerpt({ title, ticket }) {
+  if (!ticket || !ticket.selections?.length) {
+    return `${title} – analiză și pronosticuri fotbal.`;
+  }
+
+  const n = ticket.selections.length;
+  const totalOdd = ticket.product;
+  const sports = new Set();
+
+  for (const s of ticket.selections) {
+    if (s.country) sports.add(s.country);
+  }
+
+  const region =
+    sports.size === 1 ? [...sports][0] : "Fotbal Internațional";
+
+  return `${title} cu ${n} selecții • Cotă totală ${totalOdd} • ${region}`;
+}
+
+// ---------- PUBLISH ----------
+async function publish({ title, html, excerpt, categorySlug }) {
   if (!html || !html.trim()) {
     console.log(`ℹ Conținut gol → skip "${title}"`);
     return;
@@ -53,6 +73,7 @@ async function publish({ title, html, categorySlug }) {
     title,
     status: "publish",
     content: html,
+    excerpt,
     categories
   };
 
@@ -74,27 +95,40 @@ async function publish({ title, html, categorySlug }) {
   console.log(`✅ Publicat: ${data.link}`);
 }
 
-// ---------------- MAIN ----------------
+// ---------- MAIN ----------
 (async () => {
   const today = new Date().toLocaleDateString("ro-RO");
 
-  const cota2 = await read("cota2.html");
-  const zi = await read("biletul-zilei.html");
+  const ticketsRaw = await read("tickets.json");
+  const tickets = ticketsRaw ? JSON.parse(ticketsRaw) : {};
 
-  if (cota2) {
+  const cota2Html = await read("cota2.html");
+  const ziHtml = await read("biletul-zilei.html");
+
+  if (cota2Html && tickets.bilet_cota2) {
+    const title = `Bilet Cota 2 (${today})`;
     await publish({
-      title: `Bilet Cota 2 (${today})`,
-      html: cota2,
-      categorySlug: "cota-2" // dacă există, bine; dacă nu, nu blochează
+      title,
+      html: cota2Html,
+      excerpt: buildExcerpt({
+        title: "Bilet Cota 2",
+        ticket: tickets.bilet_cota2
+      }),
+      categorySlug: "cota-2"
     });
   } else {
     console.log("ℹ cota2.html lipsă — nu public");
   }
 
-  if (zi) {
+  if (ziHtml && tickets.biletul_zilei) {
+    const title = `Biletul Zilei (${today})`;
     await publish({
-      title: `Biletul Zilei (${today})`,
-      html: zi,
+      title,
+      html: ziHtml,
+      excerpt: buildExcerpt({
+        title: "Biletul Zilei",
+        ticket: tickets.biletul_zilei
+      }),
       categorySlug: "biletul-zilei"
     });
   } else {
