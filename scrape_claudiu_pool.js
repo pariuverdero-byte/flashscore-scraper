@@ -1,5 +1,5 @@
 // scrape_claudiu_pool.js
-// FINAL FIX – robust mapping + per-ticket dedupe + fallback
+// FINAL FIX — correct INPUT FILE + robust pool logic
 // Node 18+
 
 import fs from "fs/promises";
@@ -7,7 +7,10 @@ import fs from "fs/promises";
 /* =========================================================
  * CONFIG
  * ========================================================= */
-const OUTPUT_FILE = "claudiu_pool.json";
+
+// ⬇️ ACESTA este fișierul REAL generat anterior în flow
+const INPUT_FILE  = "claudiu_pool.json";
+const OUTPUT_FILE = "claudiu_pool_final.json";
 
 const MIN_BILETUL_ZILEI = 4;
 const FALLBACK_MIN = 3;
@@ -27,7 +30,7 @@ function mapMarket(text) {
 
   // BTTS
   if (
-    t.includes("ambele") && t.includes("marchează") ||
+    (t.includes("ambele") && t.includes("marche")) ||
     t.includes("both teams") ||
     t.includes("btts")
   ) {
@@ -62,6 +65,7 @@ function mapMarket(text) {
 function dedupePerMatch(selections) {
   const seen = new Set();
   return selections.filter(sel => {
+    if (!sel.matchId) return false;
     if (seen.has(sel.matchId)) return false;
     seen.add(sel.matchId);
     return true;
@@ -71,7 +75,7 @@ function dedupePerMatch(selections) {
 /* =========================================================
  * CORE BUILDER
  * ========================================================= */
-function buildTicket(name, rawSelections) {
+function buildTicket(name, rawSelections = []) {
   const mapped = [];
   const unmapped = [];
 
@@ -105,20 +109,21 @@ function buildTicket(name, rawSelections) {
  * MAIN
  * ========================================================= */
 (async () => {
-  const raw = JSON.parse(await fs.readFile("raw_claudiu_input.json", "utf8"));
+  // ✅ CITIM FIȘIERUL CORECT
+  const raw = JSON.parse(await fs.readFile(INPUT_FILE, "utf8"));
 
-  /* ---------- BUILD TICKETS INDEPENDENT ---------- */
-  const cota2 = buildTicket("cota2", raw.cota2 || []);
-  const biletulZilei = buildTicket("biletul_zilei", raw.biletul_zilei || []);
+  const cota2Raw = raw.cota2 || [];
+  const biletulZileiRaw = raw.biletul_zilei || [];
   const rezerva = raw.varianta_rezerva || [];
+
+  const cota2 = buildTicket("cota2", cota2Raw);
+  const biletulZilei = buildTicket("biletul_zilei", biletulZileiRaw);
 
   /* ---------- FALLBACK LOGIC ---------- */
   if (biletulZilei.selections.length < MIN_BILETUL_ZILEI) {
     console.log(
       `[fallback] Biletul Zilei incomplete (${biletulZilei.selections.length})`
     );
-
-    const needed = MIN_BILETUL_ZILEI - biletulZilei.selections.length;
 
     const fallbackCandidates = [
       ...rezerva,
@@ -128,6 +133,7 @@ function buildTicket(name, rawSelections) {
     for (const sel of fallbackCandidates) {
       if (biletulZilei.selections.length >= MIN_BILETUL_ZILEI) break;
       if (
+        sel.matchId &&
         !biletulZilei.selections.find(s => s.matchId === sel.matchId)
       ) {
         biletulZilei.selections.push(sel);
@@ -137,7 +143,7 @@ function buildTicket(name, rawSelections) {
     biletulZilei.fallback_used = true;
   }
 
-  /* ---------- FINAL VALIDATION ---------- */
+  /* ---------- OUTPUT ---------- */
   const output = {
     generated_at: new Date().toISOString(),
     cota2: cota2.selections,
@@ -152,5 +158,5 @@ function buildTicket(name, rawSelections) {
 
   await fs.writeFile(OUTPUT_FILE, JSON.stringify(output, null, 2), "utf8");
 
-  console.log("✅ claudiu_pool.json generated");
+  console.log("✅ claudiu_pool_final.json generated");
 })();
