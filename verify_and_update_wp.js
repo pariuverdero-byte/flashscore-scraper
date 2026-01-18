@@ -23,6 +23,7 @@ const PENDING = "pending";
 const WIN  = "win";
 const LOSS = "loss";
 
+/* ================= AUTH ================= */
 const authHeader =
   "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASS}`).toString("base64");
 
@@ -32,23 +33,25 @@ const get = (url) =>
 const put = (url, body) =>
   fetch(url, {
     method:"PUT",
-    headers:{ Authorization:authHeader, "Content-Type":"application/json" },
+    headers:{
+      Authorization:authHeader,
+      "Content-Type":"application/json"
+    },
     body: JSON.stringify(body),
   });
 
 /* ================= SCORE (1X2) ================= */
-function outcomeFromScore(scoreText, market, side) {
+function outcomeFromScore(scoreText, side) {
   const m = scoreText.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
   if (!m) return null;
 
   const h = +m[1], a = +m[2];
   const res = h > a ? "1" : h < a ? "2" : "X";
 
-  if (market === "1") {
-    if (side === "1") return res === "1" ? WIN : LOSS;
-    if (side === "2") return res === "2" ? WIN : LOSS;
-    if (side === "X") return res === "X" ? WIN : LOSS;
-  }
+  if (side === "1") return res === "1" ? WIN : LOSS;
+  if (side === "2") return res === "2" ? WIN : LOSS;
+  if (side === "X") return res === "X" ? WIN : LOSS;
+
   return null;
 }
 
@@ -66,7 +69,7 @@ async function fetchFlashscoreOutcome(matchId) {
       return { finished:false };
 
     const score =
-      $("div.detail b").first().text() ||
+      $("div.detail b").first().text().trim() ||
       text.match(/(\d{1,2}\s*:\s*\d{1,2})/)?.[1];
 
     if (!score) return { finished:false };
@@ -111,12 +114,14 @@ async function fetchFlashscoreStats(matchId) {
 
 function evaluateStatBet(stats, stat, side, threshold) {
   if (!stats || stats[stat] == null) return null;
+
   const v = stats[stat];
   const t = Number(threshold);
   if (!Number.isFinite(t)) return null;
 
   if (side === "over")  return v > t ? WIN : LOSS;
   if (side === "under") return v < t ? WIN : LOSS;
+
   return null;
 }
 
@@ -126,54 +131,51 @@ function paintIconCell($, row, status) {
   td.html(status === WIN ? "✅" : status === LOSS ? "❌" : "⏳");
 }
 
-function computeTicketStatus($, $table) {
-  let pending=false, loss=false;
-  $table.find("tbody tr").each((_, tr)=>{
-    const s=$(tr).attr("data-status");
-    if (s===PENDING) pending=true;
-    if (s===LOSS) loss=true;
-  });
-  if (pending) return PENDING;
-  if (loss) return LOSS;
-  return WIN;
-}
-
 /* ================= VERIFY POST ================= */
-async function verifyOnePost(postId, cache, allowRecheck) {
+async function verifyOnePost(postId, allowRecheck) {
   const res = await get(`${WP_BASE}/wp-json/wp/v2/posts/${postId}?context=edit`);
   if (!res.ok) return;
-  const data = await res.json();
 
-  const $ = cheerio.load(data.content.raw || data.content.rendered);
+  const data = await res.json();
+  const $ = cheerio.load(data.content?.raw || data.content?.rendered || "");
   let changed=false;
 
-  for (const row of $("tr[data-id]").toArray()) {
+  const rows = $("table.bilet-pariu tbody tr[data-match-id]").toArray();
+  if (!rows.length) return;
+
+  for (const row of rows) {
     const $r = $(row);
-    const id = $r.attr("data-id");
-    const cur = $r.attr("data-status") || PENDING;
+
+    const matchId = $r.attr("data-match-id");
+    const cur     = $r.attr("data-status") || PENDING;
+
     if (!allowRecheck && cur !== PENDING) continue;
 
-    const market = $r.attr("data-market");
+    const market = ($r.attr("data-market") || "1").toLowerCase();
     const stat   = $r.attr("data-stat");
     const side   = $r.attr("data-side");
     const thr    = $r.attr("data-threshold");
 
-    let verdict=null;
+    let verdict = null;
 
-    if (market==="1") {
-      const o = await fetchFlashscoreOutcome(id);
-      if (o.finished)
-        verdict = outcomeFromScore(o.scoreText, "1", side);
-    } else if (stat) {
-      const stats = await fetchFlashscoreStats(id);
+    // 1️⃣ SCORE MARKETS
+    if (market === "1" || market === "x" || market === "2") {
+      const o = await fetchFlashscoreOutcome(matchId);
+      if (o.finished) verdict = outcomeFromScore(o.scoreText, market.toUpperCase());
+    }
+
+    // 2️⃣ STATS MARKETS
+    if (!verdict && stat) {
+      const stats = await fetchFlashscoreStats(matchId);
       verdict = evaluateStatBet(stats, stat, side, thr);
     }
 
-    if (verdict && verdict!==cur) {
+    if (verdict && verdict !== cur) {
       $r.attr("data-status", verdict);
       paintIconCell($, row, verdict);
-      cache[id]=verdict;
-      changed=true;
+      changed = true;
+
+      console.log(`[VERIFY] Post ${postId} :: ${matchId} → ${verdict}`);
     }
   }
 
@@ -181,14 +183,17 @@ async function verifyOnePost(postId, cache, allowRecheck) {
     await put(`${WP_BASE}/wp-json/wp/v2/posts/${postId}`, {
       content: $.html()
     });
+    console.log(`Post #${postId}: actualizat`);
   }
 }
 
 /* ================= RUN ================= */
 (async ()=>{
-  if (!WP_BASE||!WP_USER||!WP_APP_PASS) process.exit(1);
+  if (!WP_BASE || !WP_USER || !WP_APP_PASS) {
+    console.error("Missing WP credentials");
+    process.exit(1);
+  }
 
-  const cache = {};
   const posts = new Set(STATIC_POSTS);
 
   try {
@@ -197,6 +202,10 @@ async function verifyOnePost(postId, cache, allowRecheck) {
   } catch {}
 
   for (const id of posts) {
-    await verifyOnePost(id, cache, RECHECK_ONCE);
+    try {
+      await verifyOnePost(id, RECHECK_ONCE);
+    } catch (e) {
+      console.error(`Eroare la post ${id}:`, e.message);
+    }
   }
 })();
