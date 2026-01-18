@@ -1,5 +1,5 @@
 // generate_wp.js
-// FINAL — no duplicate titles, correct "Pariu propus", pending status ready
+// FINAL — aligned with verify_and_update_wp.js (bilet-pariu)
 
 import fs from "fs/promises";
 
@@ -27,16 +27,12 @@ function renderRow(sel) {
   <td>${sel.time || "-"}</td>
   <td><strong>${betText}</strong></td>
   <td><strong>${sel.odd}</strong></td>
-  <td class="pv-status-cell">
-    <span class="pv-status pv-pending">⏳</span>
-    <span class="pv-status pv-win">✅</span>
-    <span class="pv-status pv-loss">❌</span>
-  </td>
+  <td style="text-align:center;font-weight:bold;">⏳</td>
 </tr>`;
 }
 
 /**
- * Renders ticket table ONLY (NO TITLE!)
+ * Renders ticket table (class MUST be bilet-pariu)
  */
 function renderTicket(ticket) {
   if (!ticket || !ticket.selections?.length) {
@@ -44,57 +40,68 @@ function renderTicket(ticket) {
   }
 
   return `
-<table class="pv-ticket">
-  <thead>
-    <tr>
-      <th>Eveniment</th>
-      <th>Sport / Țară</th>
-      <th>Ora (RO)</th>
-      <th>Pariu propus</th>
-      <th>Cotă</th>
-      <th>Status</th>
-    </tr>
-  </thead>
-  <tbody>
-    ${ticket.selections.map(renderRow).join("\n")}
-  </tbody>
-  <tfoot>
-    <tr>
-      <td colspan="4"><strong>Cotă totală</strong></td>
-      <td><strong>${ticket.product}</strong></td>
-      <td></td>
-    </tr>
-  </tfoot>
-</table>
-`;
+<div class="pv-ticket-wrapper">
+  <div class="pv-status-bilet pv-status-yellow">
+    <span class="pv-status-icon">⏳</span>
+    <span class="pv-status-label">Rezultat în așteptare</span>
+  </div>
+
+  <table class="bilet-pariu">
+    <thead>
+      <tr>
+        <th>Eveniment</th>
+        <th>Sport / Țară</th>
+        <th>Ora (RO)</th>
+        <th>Pariu propus</th>
+        <th>Cotă</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${ticket.selections.map(renderRow).join("\n")}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td colspan="4"><strong>Cotă totală</strong></td>
+        <td><strong>${ticket.product}</strong></td>
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+</div>`;
 }
 
 /**
- * Shared CSS
+ * Shared CSS (minimal, verifier-safe)
  */
 const STYLE = `
 <style>
-.pv-ticket {
+.bilet-pariu {
   width: 100%;
   border-collapse: collapse;
   margin-bottom: 24px;
 }
-.pv-ticket th, .pv-ticket td {
+.bilet-pariu th,
+.bilet-pariu td {
   border: 1px solid #ddd;
   padding: 8px;
 }
-.pv-ticket th {
+.bilet-pariu th {
   background: #f4f4f4;
 }
-.pv-status {
-  font-size: 18px;
+
+.pv-status-bilet {
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:8px 12px;
+  border-radius:6px;
+  font-weight:700;
+  margin-bottom:12px;
 }
-[data-status="pending"] .pv-win,
-[data-status="pending"] .pv-loss { display:none; }
-[data-status="win"] .pv-pending,
-[data-status="win"] .pv-loss { display:none; }
-[data-status="loss"] .pv-pending,
-[data-status="loss"] .pv-win { display:none; }
+.pv-status-yellow { background:#fde047; }
+.pv-status-green  { background:#22c55e; color:#fff; }
+.pv-status-red    { background:#ef4444; color:#fff; }
 </style>
 `;
 
@@ -102,14 +109,12 @@ const STYLE = `
   const raw = await fs.readFile(TICKETS_FILE, "utf8");
   const data = JSON.parse(raw);
 
-  // ---- COTA 2 ----
   if (data.bilet_cota2) {
     const html = STYLE + renderTicket(data.bilet_cota2);
     await fs.writeFile("cota2.html", html, "utf8");
     console.log("[WP] cota2.html generated");
   }
 
-  // ---- BILETUL ZILEI ----
   if (data.biletul_zilei) {
     const html = STYLE + renderTicket(data.biletul_zilei);
     await fs.writeFile("biletul-zilei.html", html, "utf8");
