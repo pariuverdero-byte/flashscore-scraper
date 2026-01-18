@@ -37,7 +37,7 @@ function buildVerificationMeta(sel) {
 
   // OVER / UNDER
   if (/over|under|minim|maxim|peste|sub/i.test(txt)) {
-    market = "STAT";
+    market = "stat";
 
     if (/gol/i.test(txt)) stat = "goals";
     else if (/corner/i.test(txt)) stat = "corners";
