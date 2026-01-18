@@ -1,14 +1,11 @@
 // generate_tickets_claudiuhood.js
-// ClaudiuHood PRIMARY (text+regex) → Flashscore mapping → fallback to generate_tickets.js
+// DEBUG VERSION — verbose logging
 
 import fs from "fs/promises";
 import * as cheerio from "cheerio";
 import { execSync } from "child_process";
 
-// ---------------- CONFIG ----------------
 const MATCHES_JSON = "matches.json";
-const COTA2_RULE = { size: 2, min: 1.9, max: 2.5 };
-const ZI_RULE = { size: 4, min: 4.0, max: 6.0 };
 const DAY_OFFSET = Number(process.env.DAY_OFFSET || 0);
 
 const RO_MONTH = [
@@ -16,16 +13,12 @@ const RO_MONTH = [
   "iulie","august","septembrie","octombrie","noiembrie","decembrie"
 ];
 
-// ---------------- UTILS ----------------
-const log = (msg) => console.log(`[claudiu] ${msg}`);
+const log = (msg) => console.log(`[claudiu][DEBUG] ${msg}`);
 
-function normalize(s="") {
-  return s
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+function fallback(reason) {
+  log(`FALLBACK TRIGGERED → ${reason}`);
+  execSync("node generate_tickets.js", { stdio: "inherit" });
+  process.exit(0);
 }
 
 function buildDate(offset) {
@@ -49,53 +42,66 @@ function buildUrls() {
 }
 
 async function fetchHtml(url) {
+  log(`Fetching URL: ${url}`);
   const r = await fetch(url, {
     headers: {
       "User-Agent": "Mozilla/5.0",
       "Accept-Language": "ro-RO,ro;q=0.9,en;q=0.8"
     }
   });
+  log(`HTTP status: ${r.status}`);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.text();
+  const html = await r.text();
+  log(`Fetched HTML size: ${html.length} bytes`);
+  return html;
 }
 
-function fallback(reason) {
-  log(`FALLBACK → ${reason}`);
-  execSync("node generate_tickets.js", { stdio: "inherit" });
-  process.exit(0);
+function normalize(s="") {
+  return s
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-// ---------------- CLAUDIU TEXT EXTRACTION ----------------
+// -------- TEXT + REGEX EXTRACTION --------
 function extractFromText(html) {
   const $ = cheerio.load(html);
-  const text = $("body").text().replace(/\s+/g, " ");
+  const text = $("body").text().replace(/\s+/g, " ").trim();
 
-  // Matches patterns like:
-  // Team A – Team B ... 1X ... Cota 1.45
+  log(`Extracted text length: ${text.length}`);
+  log(`TEXT SAMPLE (first 500 chars):`);
+  console.log(text.slice(0, 500));
+
   const REGEX = /([A-Za-zÀ-ž0-9 .'-]+)\s*[-–]\s*([A-Za-zÀ-ž0-9 .'-]+).*?(1X|12|X2|1|X|2|Peste\s*\d+\.5|Sub\s*\d+\.5).*?Cota[: ]+([\d.]+)/gi;
 
   const out = [];
   let m;
   while ((m = REGEX.exec(text)) !== null) {
+    log(`MATCH FOUND → ${m[1]} - ${m[2]} | ${m[3]} | ${m[4]}`);
     out.push({
       teams: `${m[1].trim()} - ${m[2].trim()}`,
       market_raw: m[3].trim(),
       odd: Number(m[4])
     });
   }
+
+  log(`Total regex matches found: ${out.length}`);
   return out;
 }
 
 function normalizeMarket(m) {
+  if (!m) return null;
   m = m.toLowerCase();
-  if (m === "1" || m === "x" || m === "2") return m.toUpperCase();
+  if (["1","x","2"].includes(m)) return m.toUpperCase();
   if (["1x","x2","12"].includes(m)) return m.toUpperCase();
-  if (m.startsWith("peste")) return "O" + m.match(/(\d+\.5)/)[1];
-  if (m.startsWith("sub")) return "U" + m.match(/(\d+\.5)/)[1];
+  if (m.startsWith("peste")) return "O" + m.match(/(\d+\.5)/)?.[1];
+  if (m.startsWith("sub")) return "U" + m.match(/(\d+\.5)/)?.[1];
   return null;
 }
 
-// ---------------- FLASHScore MAPPING ----------------
+// -------- FLASHScore MAPPING --------
 function mapToFlashscore(selections, matches) {
   const mapped = [];
 
@@ -104,15 +110,25 @@ function mapToFlashscore(selections, matches) {
     const na = normalize(a);
     const nb = normalize(b);
 
+    log(`Mapping: ${a} vs ${b}`);
+
     const match = matches.find(m => {
       const mt = normalize(m.teams || "");
       return mt.includes(na) && mt.includes(nb);
     });
 
-    if (!match) continue;
+    if (!match) {
+      log(`❌ No Flashscore match for: ${s.teams}`);
+      continue;
+    }
 
     const market = normalizeMarket(s.market_raw);
-    if (!market) continue;
+    if (!market) {
+      log(`❌ Unsupported market: ${s.market_raw}`);
+      continue;
+    }
+
+    log(`✅ Mapped to Flashscore: ${match.teams}`);
 
     mapped.push({
       id: match.id,
@@ -126,26 +142,25 @@ function mapToFlashscore(selections, matches) {
     });
   }
 
+  log(`Total mapped selections: ${mapped.length}`);
   return mapped;
 }
 
-function product(arr) {
-  return arr.reduce((a,b)=>a*b,1);
-}
-
-// ---------------- MAIN ----------------
+// -------- MAIN --------
 (async () => {
   const urls = buildUrls();
-  log(`URLs → ${JSON.stringify(urls)}`);
+  log(`Using URLs: ${JSON.stringify(urls)}`);
 
   let matches = [];
   try {
-    matches = JSON.parse(await fs.readFile(MATCHES_JSON,"utf8")).matches || [];
+    const raw = await fs.readFile(MATCHES_JSON, "utf8");
+    matches = JSON.parse(raw).matches || [];
+    log(`Flashscore matches loaded: ${matches.length}`);
   } catch {
-    fallback("matches.json missing");
+    fallback("matches.json missing or invalid");
   }
 
-  if (!matches.length) fallback("no Flashscore matches");
+  if (!matches.length) fallback("No Flashscore matches for this day");
 
   let htmlC2, htmlZi;
   try {
@@ -153,41 +168,29 @@ function product(arr) {
     htmlZi = await fetchHtml(urls.zi);
     await fs.writeFile("claudiu_cota2.html", htmlC2);
     await fs.writeFile("claudiu_zi.html", htmlZi);
-  } catch {
-    fallback("Claudiu pages not found");
+  } catch (e) {
+    fallback(`Claudiu fetch failed: ${e.message}`);
   }
 
   const selC2 = extractFromText(htmlC2);
   const selZi = extractFromText(htmlZi);
 
-  log(`Extracted Cota2 selections: ${selC2.length}`);
-  log(`Extracted ZI selections: ${selZi.length}`);
-
-  if (selC2.length < 2 || selZi.length < 4)
-    fallback("not enough Claudiu selections");
+  if (!selC2.length && !selZi.length)
+    fallback("Regex extracted ZERO selections");
 
   const mapC2 = mapToFlashscore(selC2.slice(0,2), matches);
   const mapZi = mapToFlashscore(selZi.slice(0,4), matches);
 
-  if (mapC2.length !== 2) fallback("Cota2 mapping failed");
-  if (mapZi.length !== 4) fallback("ZI mapping failed");
+  if (mapC2.length < 2 || mapZi.length < 4)
+    fallback("Mapping incomplete after regex extraction");
 
-  const pC2 = product(mapC2.map(x=>x.odd));
-  const pZi = product(mapZi.map(x=>x.odd));
-
-  if (pC2 < COTA2_RULE.min || pC2 > COTA2_RULE.max)
-    fallback("Cota2 odds outside range");
-
-  if (pZi < ZI_RULE.min || pZi > ZI_RULE.max)
-    fallback("ZI odds outside range");
-
-  const out = {
+  const tickets = {
     date: new Date().toISOString().slice(0,10),
     source: "claudiuhood",
-    bilet_cota2: { selections: mapC2, product: pC2.toFixed(3) },
-    biletul_zilei: { selections: mapZi, product: pZi.toFixed(3) }
+    bilet_cota2: mapC2,
+    biletul_zilei: mapZi
   };
 
-  await fs.writeFile("tickets.json", JSON.stringify(out,null,2));
-  log("SUCCESS → tickets.json generated from ClaudiuHood");
+  await fs.writeFile("tickets.json", JSON.stringify(tickets,null,2));
+  log("SUCCESS → tickets.json written from ClaudiuHood");
 })();
