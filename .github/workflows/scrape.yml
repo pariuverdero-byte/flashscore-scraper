@@ -11,7 +11,7 @@ jobs:
 
     env:
       # Scraper controls
-      DAY_OFFSET: "-2"           # 0=azi, 1=maine
+      DAY_OFFSET: "-3"           # 0=azi, 1=maine
       MAX_MATCHES: "60"
       CONCURRENCY: "6"
       FETCH_TIMEOUT_MS: "12000"
