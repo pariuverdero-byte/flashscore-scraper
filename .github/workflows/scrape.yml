@@ -17,7 +17,7 @@ jobs:
       FETCH_TIMEOUT_MS: "12000"
       RETRIES: "1"
       GLOBAL_HARD_STOP_MS: "150000"
-      INCLUDE_LIVE: "false"
+      INCLUDE_LIVE: "true"
 
       # Ticket tolerances
       COTA2_TOL: "0.15"
