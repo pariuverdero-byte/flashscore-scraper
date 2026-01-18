@@ -1,46 +1,77 @@
 // generate_wp.js
-// FINAL — aligned with verify_and_update_wp.js (score + stats ready)
+// FINAL — fully aligned with verify_and_update_wp.js (score + stats)
 
 import fs from "fs/promises";
 
 const TICKETS_FILE = "tickets.json";
 
-/**
- * Detect bet type + build verification metadata
- */
-function buildVerificationMeta(sel) {
-  // DEFAULT: 1X2
+/* ================= HELPERS ================= */
+
+// Extract Flashscore match ID from URL
+function extractMatchId(url = "") {
+  const m = url.match(/match\/([^/?]+)/);
+  return m ? m[1] : "";
+}
+
+// Detect bet type and build verification metadata
+function buildVerificationMeta(betTextRaw = "") {
+  const txt = betTextRaw.toLowerCase();
+
+  // DEFAULT → 1X2
   let market = "1";
   let stat = "";
   let side = "";
   let threshold = "";
 
-  const txt =
-    sel.meta?.bet_text?.toLowerCase() ||
-    sel.meta?.market_text?.toLowerCase() ||
-    "";
+  // ---- BTTS ----
+  if (
+    txt.includes("ambele echipe marchează") ||
+    txt.includes("gg")
+  ) {
+    return {
+      market: "STAT",
+      stat: "btts",
+      side: "yes",
+      threshold: "",
+    };
+  }
 
-  // OVER / UNDER goals
+  // ---- MINIM X GOLURI (TEAM or MATCH) ----
+  const minimGoals = txt.match(/minim\s+(\d+)\s+gol/i);
+  if (minimGoals) {
+    const x = Number(minimGoals[1]);
+    return {
+      market: "STAT",
+      stat: "goals",
+      side: "over",
+      threshold: (x - 0.5).toString(),
+    };
+  }
+
+  // ---- OVER / UNDER ----
   if (txt.includes("over") || txt.includes("under")) {
-    market = "stat";
+    market = "STAT";
+    side = txt.includes("over") ? "over" : "under";
 
     if (txt.includes("gol")) stat = "goals";
     else if (txt.includes("corner")) stat = "corners";
-    else if (txt.includes("shot") || txt.includes("șut"))
+    else if (txt.includes("șut") || txt.includes("shot"))
       stat = "shots_on_target";
-
-    side = txt.includes("over") ? "over" : "under";
 
     const m = txt.match(/(\d+(\.\d+)?)/);
     if (m) threshold = m[1];
+
+    if (stat) {
+      return { market, stat, side, threshold };
+    }
   }
 
-  return { market, stat, side, threshold };
+  // ---- FALLBACK: treat as 1X2 ----
+  return { market: "1", stat: "", side: "", threshold: "" };
 }
 
-/**
- * Render one table row
- */
+/* ================= ROW RENDER ================= */
+
 function renderRow(sel) {
   const betText =
     sel.meta?.bet_text ||
@@ -49,11 +80,12 @@ function renderRow(sel) {
     sel.market ||
     "Pariu special";
 
-  const meta = buildVerificationMeta(sel);
+  const matchId = extractMatchId(sel.url);
+  const meta = buildVerificationMeta(betText);
 
   return `
 <tr
-  data-id="${sel.id}"
+  data-id="${matchId}"
   data-status="pending"
   data-market="${meta.market}"
   ${meta.stat ? `data-stat="${meta.stat}"` : ""}
@@ -73,9 +105,8 @@ function renderRow(sel) {
 </tr>`;
 }
 
-/**
- * Render ONLY the ticket table (no title!)
- */
+/* ================= TABLE RENDER ================= */
+
 function renderTicket(ticket) {
   if (!ticket || !ticket.selections?.length) {
     return `<p>(Nu a fost generat)</p>`;
@@ -107,9 +138,8 @@ function renderTicket(ticket) {
 `;
 }
 
-/**
- * Minimal CSS (safe for WP)
- */
+/* ================= STYLE ================= */
+
 const STYLE = `
 <style>
 .bilet-pariu {
@@ -128,18 +158,18 @@ const STYLE = `
 </style>
 `;
 
+/* ================= MAIN ================= */
+
 (async () => {
   const raw = await fs.readFile(TICKETS_FILE, "utf8");
   const data = JSON.parse(raw);
 
-  // ---- COTA 2 ----
   if (data.bilet_cota2) {
     const html = STYLE + renderTicket(data.bilet_cota2);
     await fs.writeFile("cota2.html", html, "utf8");
     console.log("[WP] cota2.html generated");
   }
 
-  // ---- BILETUL ZILEI ----
   if (data.biletul_zilei) {
     const html = STYLE + renderTicket(data.biletul_zilei);
     await fs.writeFile("biletul-zilei.html", html, "utf8");
