@@ -3,7 +3,7 @@ name: Scrape Flashscore + Claudiu Pool + Generate Tickets + WordPress
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 4 * * *"  # 07:30 Europe/Bucharest (04:30 UTC)
+    - cron: "30 11 * * *"  # 07:30 Europe/Bucharest (14:30 UTC)
 
 jobs:
   scrape:
