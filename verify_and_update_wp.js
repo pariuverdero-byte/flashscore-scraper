@@ -1,5 +1,4 @@
-// verify_and_update_wp.js
-// FINAL — score + stats verification, WordPress REST safe
+// verify_and_update_wp.js — FINAL STABLE VERSION
 // Node 18 / 20 compatible
 
 import fetch from "node-fetch";
@@ -13,91 +12,92 @@ const WP_APP_PASS = process.env.WP_APP_PASS;
 const RECHECK_ONCE =
   /^(1|true|yes)$/i.test(process.env.RECHECK_ONCE || "");
 
-const authHeader =
-  "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASS}`).toString("base64");
-
 const FS_BASE = "https://www.flashscore.mobi/match/";
 
 const PENDING = "pending";
-const WIN  = "win";
-const LOSS = "loss";
+const WIN     = "win";
+const LOSS    = "loss";
 
-/* ================= HTTP HELPERS ================= */
-async function wpGet(url) {
-  const r = await fetch(url, {
-    headers: { Authorization: authHeader }
-  });
+const authHeader =
+  "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASS}`).toString("base64");
 
-  const text = await r.text();
-
-  // CAPTCHA / firewall protection
-  if (!text.trim().startsWith("{")) {
-    console.error("⚠️ NON-JSON RESPONSE from WP (firewall / captcha?)");
-    console.error(text.slice(0, 200));
-    return null;
-  }
-
-  return JSON.parse(text);
-}
-
-async function wpPut(url, body) {
-  await fetch(url, {
-    method: "PUT",
+/* ================= SAFE WP FETCH ================= */
+async function wpFetchJson(url, options = {}) {
+  const res = await fetch(url, {
     headers: {
       Authorization: authHeader,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      ...(options.headers || {})
     },
-    body: JSON.stringify(body)
+    ...options
   });
+
+  let text = await res.text();
+  text = text.replace(/^\uFEFF/, "").trim();
+
+  // taie junk / html înainte de JSON
+  const i1 = text.indexOf("{");
+  const i2 = text.indexOf("[");
+  const start =
+    i1 === -1 ? i2 :
+    i2 === -1 ? i1 :
+    Math.min(i1, i2);
+
+  if (start > 0) text = text.slice(start);
+
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    console.error("❌ INVALID JSON from WP");
+    console.error(text.slice(0, 500));
+    return null;
+  }
 }
 
-/* ================= SCORE LOGIC (1X2) ================= */
+/* ================= FLASHCORE SCORE ================= */
 function outcomeFromScore(scoreText, side) {
   const m = scoreText.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
   if (!m) return null;
 
-  const h = +m[1];
-  const a = +m[2];
+  const h = +m[1], a = +m[2];
+  const res = h > a ? "1" : h < a ? "2" : "X";
 
-  if (side === "1") return h > a ? WIN : LOSS;
-  if (side === "2") return a > h ? WIN : LOSS;
-  if (side === "x") return h === a ? WIN : LOSS;
-
+  if (side === "1") return res === "1" ? WIN : LOSS;
+  if (side === "2") return res === "2" ? WIN : LOSS;
+  if (side === "X") return res === "X" ? WIN : LOSS;
   return null;
 }
 
-/* ================= FETCH FINAL SCORE ================= */
-async function fetchFlashscoreScore(matchId) {
+async function fetchScore(matchId) {
   try {
-    const r = await fetch(`${FS_BASE}${matchId}/?s=5&d=0`);
-    if (!r.ok) return null;
+    const res = await fetch(`${FS_BASE}${matchId}/?s=5&d=0`);
+    if (!res.ok) return null;
 
-    const html = await r.text();
+    const html = await res.text();
     const $ = cheerio.load(html);
-    const bodyText = $("body").text();
+    const txt = $("body").text();
 
-    if (!/Finished|Full Time|After Extra Time|Penalties/i.test(bodyText))
+    if (!/Finished|Full Time|After Extra Time|Penalties/i.test(txt))
       return null;
 
-    const score =
+    return (
       $("div.detail b").first().text() ||
-      bodyText.match(/(\d{1,2}\s*:\s*\d{1,2})/)?.[1];
-
-    return score || null;
+      txt.match(/(\d{1,2}\s*:\s*\d{1,2})/)?.[1] ||
+      null
+    );
   } catch {
     return null;
   }
 }
 
-/* ================= FETCH STATS ================= */
-async function fetchFlashscoreStats(matchId) {
+/* ================= FLASHCORE STATS ================= */
+async function fetchStats(matchId) {
   try {
-    const r = await fetch(`${FS_BASE}${matchId}/?s=1&d=-1&t=stats`);
-    if (!r.ok) return null;
+    const res = await fetch(`${FS_BASE}${matchId}/?s=1&d=0&t=stats`);
+    if (!res.ok) return null;
 
-    const html = await r.text();
+    const html = await res.text();
     const $ = cheerio.load(html);
-
     const stats = {};
 
     $("tr").each((_, tr) => {
@@ -107,13 +107,12 @@ async function fetchFlashscoreStats(matchId) {
       const label = $(tds[0]).text().toLowerCase();
       const h = parseInt($(tds[1]).text(), 10);
       const a = parseInt($(tds[2]).text(), 10);
-
       if (!Number.isFinite(h) || !Number.isFinite(a)) return;
 
-      if (label.includes("goal")) stats.goals = h + a;
       if (label.includes("corner")) stats.corners = h + a;
       if (label.includes("shot") && label.includes("on"))
         stats.shots_on_target = h + a;
+      if (label.includes("goal")) stats.goals = h + a;
     });
 
     return stats;
@@ -122,81 +121,64 @@ async function fetchFlashscoreStats(matchId) {
   }
 }
 
-function evaluateStat(stats, stat, side, threshold) {
+function evalStat(stats, stat, side, thr) {
   if (!stats || stats[stat] == null) return null;
-
-  const value = stats[stat];
-  const t = Number(threshold);
-
+  const v = stats[stat];
+  const t = Number(thr);
   if (!Number.isFinite(t)) return null;
-
-  if (side === "over")  return value > t ? WIN : LOSS;
-  if (side === "under") return value < t ? WIN : LOSS;
-
-  return null;
-}
-
-/* ================= UI ================= */
-function paintStatus($row, status) {
-  $row.attr("data-status", status);
-  $row.find("td").eq(5).html(
-    status === WIN ? "✅" :
-    status === LOSS ? "❌" : "⏳"
-  );
+  return side === "over" ? (v > t ? WIN : LOSS)
+                         : (v < t ? WIN : LOSS);
 }
 
 /* ================= VERIFY ONE POST ================= */
 async function verifyPost(post) {
-  const postId = post.id;
-  const raw = post.content.raw || post.content.rendered;
+  const raw = post.content?.rendered || post.content?.raw || "";
   const $ = cheerio.load(raw);
-
   let changed = false;
-  let events = 0;
 
-  for (const tr of $("table.bilet-pariu tbody tr").toArray()) {
-    const $tr = $(tr);
+  const rows = $("tr[data-id]").toArray();
+  console.log(`[VERIFY] Post ${post.id} → ${rows.length} events`);
 
-    const matchId = $tr.attr("data-id");
-    if (!matchId) continue;
+  for (const row of rows) {
+    const $r = $(row);
+    const id = $r.attr("data-id");
+    if (!id) continue;
 
-    const current = $tr.attr("data-status") || PENDING;
-    if (!RECHECK_ONCE && current !== PENDING) continue;
+    const cur = $r.attr("data-status") || PENDING;
+    if (!RECHECK_ONCE && cur !== PENDING) continue;
 
-    const market = ($tr.attr("data-market") || "").toLowerCase();
-    const stat   = ($tr.attr("data-stat") || "").toLowerCase();
-    const side   = ($tr.attr("data-side") || "").toLowerCase();
-    const thr    = $tr.attr("data-threshold");
+    const market = ($r.attr("data-market") || "").toLowerCase();
+    const side   = $r.attr("data-side");
+    const stat   = $r.attr("data-stat");
+    const thr    = $r.attr("data-threshold");
 
     let verdict = null;
 
-    // SCORE
-    if (market === "1") {
-      const score = await fetchFlashscoreScore(matchId);
+    if (!stat) {
+      const score = await fetchScore(id);
       if (score) verdict = outcomeFromScore(score, side);
+    } else {
+      const stats = await fetchStats(id);
+      verdict = evalStat(stats, stat, side, thr);
     }
 
-    // STATS
-    if (market === "stat" && stat) {
-      const stats = await fetchFlashscoreStats(matchId);
-      verdict = evaluateStat(stats, stat, side, thr);
-    }
-
-    if (verdict && verdict !== current) {
-      paintStatus($tr, verdict);
+    if (verdict && verdict !== cur) {
+      $r.attr("data-status", verdict);
+      $r.find("td").last().html(verdict === WIN ? "✅" : "❌");
       changed = true;
+      console.log(` → ${id} = ${verdict}`);
     }
-
-    events++;
   }
 
   if (changed) {
-    await wpPut(`${WP_BASE}/wp-json/wp/v2/posts/${postId}`, {
-      content: $.html()
-    });
-    console.log(`[UPDATED] Post ${postId} → ${events} events`);
-  } else {
-    console.log(`[VERIFY] Post ${postId} → ${events} events (no change)`);
+    await wpFetchJson(
+      `${WP_BASE}/wp-json/wp/v2/posts/${post.id}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ content: $.html() })
+      }
+    );
+    console.log(` ✔ Post ${post.id} updated`);
   }
 }
 
@@ -207,21 +189,18 @@ async function verifyPost(post) {
     process.exit(1);
   }
 
-  // Load latest posts containing tickets
-  const posts = await wpGet(
-    `${WP_BASE}/wp-json/wp/v2/posts?per_page=10&orderby=date&order=desc&search=Bilet`
+  const posts = await wpFetchJson(
+    `${WP_BASE}/wp-json/wp/v2/posts?per_page=20&search=Bilet`
   );
 
-  if (!posts) {
+  if (!Array.isArray(posts)) {
     console.error("❌ Cannot load posts list");
     process.exit(1);
   }
 
-  for (const post of posts) {
-    try {
-      await verifyPost(post);
-    } catch (e) {
-      console.error(`⚠️ Post ${post.id} failed`, e.message);
-    }
+  for (const p of posts) {
+    await verifyPost(p);
   }
+
+  console.log("✅ VERIFY FLOW FINISHED");
 })();
