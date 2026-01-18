@@ -87,10 +87,36 @@ function extractFromText(html, matches) {
 
   const results = [];
 
-  const MARKET_REGEX =
-    /(1x|x2|12|\b1\b|\bx\b|\b2\b|peste\s*\d+\.5|sub\s*\d+\.5).*?cota[: ]+([\d.]+)/i;
+  function detectMarketAndOdd(text) {
+    // 1️⃣ goal-based markets FIRST (priority)
+    if (/minim\s*2\s*goluri|peste\s*1\.5/.test(text)) {
+      const odd = text.match(/cota[: ]+([\d.]+)/i)?.[1];
+      return odd ? { market: "peste 1.5", odd: Number(odd) } : null;
+    }
 
-  // ---------- FULL TEAM PAIR ----------
+    if (/minim\s*3\s*goluri|peste\s*2\.5/.test(text)) {
+      const odd = text.match(/cota[: ]+([\d.]+)/i)?.[1];
+      return odd ? { market: "peste 2.5", odd: Number(odd) } : null;
+    }
+
+    if (/sub\s*2\.5/.test(text)) {
+      const odd = text.match(/cota[: ]+([\d.]+)/i)?.[1];
+      return odd ? { market: "sub 2.5", odd: Number(odd) } : null;
+    }
+
+    // 2️⃣ result markets LAST
+    if (/\bcota\b/.test(text)) {
+      const odd = text.match(/cota[: ]+([\d.]+)/i)?.[1];
+      if (!odd) return null;
+
+      if (/\bcastiga\b|\bvictorie\b/.test(text)) {
+        return { market: "win", odd: Number(odd) };
+      }
+    }
+
+    return null;
+  }
+
   for (const match of matches) {
     if (!match.teams) continue;
 
@@ -100,46 +126,19 @@ function extractFromText(html, matches) {
     const na = normalize(teamA);
     const nb = normalize(teamB);
 
-    if (!text.includes(na) || !text.includes(nb)) continue;
+    if (!text.includes(na) && !text.includes(nb)) continue;
 
-    const m = MARKET_REGEX.exec(text);
-    if (!m) continue;
+    const mo = detectMarketAndOdd(text);
+    if (!mo) continue;
+
+    log(`CLAUDIU BET → ${teamA} - ${teamB} | ${mo.market} | ${mo.odd}`);
 
     results.push({
       teamA,
       teamB,
-      market_raw: m[1],
-      odd: Number(m[2])
+      market_raw: mo.market,
+      odd: mo.odd
     });
-
-    log(`MATCH VIA TEXT → ${teamA} - ${teamB} | ${m[1]} | ${m[2]}`);
-  }
-
-  // ---------- SINGLE TEAM FALLBACK (for Cota 2) ----------
-  if (!results.length) {
-    for (const match of matches) {
-      if (!match.teams) continue;
-
-      const [teamA, teamB] = match.teams.split(" - ").map(t => t?.trim());
-      if (!teamA || !teamB) continue;
-
-      const na = normalize(teamA);
-      const nb = normalize(teamB);
-
-      if (!text.includes(na) && !text.includes(nb)) continue;
-
-      const m = MARKET_REGEX.exec(text);
-      if (!m) continue;
-
-      results.push({
-        teamA,
-        teamB,
-        market_raw: m[1],
-        odd: Number(m[2])
-      });
-
-      log(`SINGLE-TEAM MATCH → ${teamA} - ${teamB} | ${m[1]} | ${m[2]}`);
-    }
   }
 
   log(`Total matches detected via Claudiu text: ${results.length}`);
