@@ -1,78 +1,55 @@
 // generate_wp.js
-// FINAL — fully aligned with verify_and_update_wp.js (score + stats)
+// FINAL — HTML valid + aligned with verify_and_update_wp.js (score + stats)
 
 import fs from "fs/promises";
 
 const TICKETS_FILE = "tickets.json";
 
-/* ================= HELPERS ================= */
-
-// Extract Flashscore match ID from URL
-function extractMatchId(url = "") {
-  const m = url.match(/match\/([^/?]+)/);
-  return m ? m[1] : "";
-}
-
-// Detect bet type and build verification metadata
-function buildVerificationMeta(betTextRaw = "") {
-  const txt = betTextRaw.toLowerCase();
-
-  // DEFAULT → 1X2
-  let market = "1";
+/**
+ * Detect bet type + build verification metadata
+ */
+function buildVerificationMeta(sel) {
+  let market = "1";     // score based
   let stat = "";
   let side = "";
   let threshold = "";
 
-  // ---- BTTS ----
-  if (
-    txt.includes("ambele echipe marchează") ||
-    txt.includes("gg")
-  ) {
-    return {
-      market: "STAT",
-      stat: "btts",
-      side: "yes",
-      threshold: "",
-    };
-  }
+  const txt =
+    sel.meta?.bet_text?.toLowerCase() ||
+    sel.meta?.market_text?.toLowerCase() ||
+    sel.market_raw?.toLowerCase() ||
+    "";
 
-  // ---- MINIM X GOLURI (TEAM or MATCH) ----
-  const minimGoals = txt.match(/minim\s+(\d+)\s+gol/i);
-  if (minimGoals) {
-    const x = Number(minimGoals[1]);
-    return {
-      market: "STAT",
-      stat: "goals",
-      side: "over",
-      threshold: (x - 0.5).toString(),
-    };
-  }
-
-  // ---- OVER / UNDER ----
-  if (txt.includes("over") || txt.includes("under")) {
+  // --- GOALS / CORNERS / SHOTS (OVER / UNDER) ---
+  if (/over|under|minim|maxim|peste|sub/i.test(txt)) {
     market = "STAT";
-    side = txt.includes("over") ? "over" : "under";
 
-    if (txt.includes("gol")) stat = "goals";
-    else if (txt.includes("corner")) stat = "corners";
-    else if (txt.includes("șut") || txt.includes("shot"))
-      stat = "shots_on_target";
+    if (/gol/i.test(txt)) stat = "goals";
+    else if (/corner/i.test(txt)) stat = "corners";
+    else if (/șut|sut|shot/i.test(txt)) stat = "shots_on_target";
+
+    side = /under|sub/i.test(txt) ? "under" : "over";
 
     const m = txt.match(/(\d+(\.\d+)?)/);
     if (m) threshold = m[1];
-
-    if (stat) {
-      return { market, stat, side, threshold };
-    }
   }
 
-  // ---- FALLBACK: treat as 1X2 ----
-  return { market: "1", stat: "", side: "", threshold: "" };
+  // --- BTTS ---
+  if (/ambele.*marcheaz|btts/i.test(txt)) {
+    market = "STAT";
+    stat = "btts";
+    side = "yes";
+  }
+
+  return { market, stat, side, threshold };
 }
 
-/* ================= ROW RENDER ================= */
-
+/**
+ * Render one valid table row (NO <p>, NO broken HTML)
+ */
 function renderRow(sel) {
+  if (!sel.id) return ""; // safety
+
   const betText =
     sel.meta?.bet_text ||
     sel.meta?.market_text ||
@@ -80,12 +57,11 @@ function renderRow(sel) {
     sel.market ||
     "Pariu special";
 
-  const matchId = extractMatchId(sel.url);
-  const meta = buildVerificationMeta(betText);
+  const meta = buildVerificationMeta(sel);
 
   return `
 <tr
-  data-id="${matchId}"
+  data-id="${sel.id}"
   data-status="pending"
   data-market="${meta.market}"
   ${meta.stat ? `data-stat="${meta.stat}"` : ""}
@@ -100,13 +76,14 @@ function renderRow(sel) {
   <td>${sel.country} / ${sel.competition}</td>
   <td>${sel.time || "-"}</td>
   <td><strong>${betText}</strong></td>
-  <td><strong>${sel.odd}</strong></td>
+  <td><strong>${Number(sel.odd).toFixed(2)}</strong></td>
   <td style="text-align:center;font-weight:bold;">⏳</td>
 </tr>`;
 }
 
-/* ================= TABLE RENDER ================= */
-
+/**
+ * Render ONLY the ticket table
+ */
 function renderTicket(ticket) {
   if (!ticket || !ticket.selections?.length) {
     return `<p>(Nu a fost generat)</p>`;
@@ -138,8 +115,9 @@ function renderTicket(ticket) {
 `;
 }
 
-/* ================= STYLE ================= */
-
+/**
+ * Minimal CSS
+ */
 const STYLE = `
 <style>
 .bilet-pariu {
@@ -158,25 +136,25 @@ const STYLE = `
 </style>
 `;
 
-/* ================= MAIN ================= */
-
 (async () => {
   const raw = await fs.readFile(TICKETS_FILE, "utf8");
   const data = JSON.parse(raw);
 
   if (data.bilet_cota2) {
-    const html = STYLE + renderTicket(data.bilet_cota2);
-    await fs.writeFile("cota2.html", html, "utf8");
+    await fs.writeFile(
+      "cota2.html",
+      STYLE + renderTicket(data.bilet_cota2),
+      "utf8"
+    );
     console.log("[WP] cota2.html generated");
   }
 
   if (data.biletul_zilei) {
-    const html = STYLE + renderTicket(data.biletul_zilei);
-    await fs.writeFile("biletul-zilei.html", html, "utf8");
+    await fs.writeFile(
+      "biletul-zilei.html",
+      STYLE + renderTicket(data.biletul_zilei),
+      "utf8"
+    );
     console.log("[WP] biletul-zilei.html generated");
-  }
-
-  if (!data.bilet_cota2 && !data.biletul_zilei) {
-    console.log("[WP] Nothing to publish today.");
   }
 })();
