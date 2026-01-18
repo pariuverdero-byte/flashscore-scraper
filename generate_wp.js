@@ -1,12 +1,45 @@
 // generate_wp.js
-// FINAL — aligned with verify_and_update_wp.js (bilet-pariu)
+// FINAL — aligned with verify_and_update_wp.js (score + stats ready)
 
 import fs from "fs/promises";
 
 const TICKETS_FILE = "tickets.json";
 
 /**
- * Renders a single table row (one selection)
+ * Detect bet type + build verification metadata
+ */
+function buildVerificationMeta(sel) {
+  // DEFAULT: 1X2
+  let market = "1";
+  let stat = "";
+  let side = "";
+  let threshold = "";
+
+  const txt =
+    sel.meta?.bet_text?.toLowerCase() ||
+    sel.meta?.market_text?.toLowerCase() ||
+    "";
+
+  // OVER / UNDER goals
+  if (txt.includes("over") || txt.includes("under")) {
+    market = "stat";
+
+    if (txt.includes("gol")) stat = "goals";
+    else if (txt.includes("corner")) stat = "corners";
+    else if (txt.includes("shot") || txt.includes("șut"))
+      stat = "shots_on_target";
+
+    side = txt.includes("over") ? "over" : "under";
+
+    const m = txt.match(/(\d+(\.\d+)?)/);
+    if (m) threshold = m[1];
+  }
+
+  return { market, stat, side, threshold };
+}
+
+/**
+ * Render one table row
  */
 function renderRow(sel) {
   const betText =
@@ -16,8 +49,17 @@ function renderRow(sel) {
     sel.market ||
     "Pariu special";
 
+  const meta = buildVerificationMeta(sel);
+
   return `
-<tr data-match-id="${sel.id}" data-status="pending">
+<tr
+  data-id="${sel.id}"
+  data-status="pending"
+  data-market="${meta.market}"
+  ${meta.stat ? `data-stat="${meta.stat}"` : ""}
+  ${meta.side ? `data-side="${meta.side}"` : ""}
+  ${meta.threshold ? `data-threshold="${meta.threshold}"` : ""}
+>
   <td>
     <a href="${sel.url}" target="_blank" rel="nofollow noopener">
       ${sel.teams}
@@ -32,7 +74,7 @@ function renderRow(sel) {
 }
 
 /**
- * Renders ticket table (class MUST be bilet-pariu)
+ * Render ONLY the ticket table (no title!)
  */
 function renderTicket(ticket) {
   if (!ticket || !ticket.selections?.length) {
@@ -40,68 +82,49 @@ function renderTicket(ticket) {
   }
 
   return `
-<div class="pv-ticket-wrapper">
-  <div class="pv-status-bilet pv-status-yellow">
-    <span class="pv-status-icon">⏳</span>
-    <span class="pv-status-label">Rezultat în așteptare</span>
-  </div>
-
-  <table class="bilet-pariu">
-    <thead>
-      <tr>
-        <th>Eveniment</th>
-        <th>Sport / Țară</th>
-        <th>Ora (RO)</th>
-        <th>Pariu propus</th>
-        <th>Cotă</th>
-        <th>Status</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${ticket.selections.map(renderRow).join("\n")}
-    </tbody>
-    <tfoot>
-      <tr>
-        <td colspan="4"><strong>Cotă totală</strong></td>
-        <td><strong>${ticket.product}</strong></td>
-        <td></td>
-      </tr>
-    </tfoot>
-  </table>
-</div>`;
+<table class="bilet-pariu">
+  <thead>
+    <tr>
+      <th>Eveniment</th>
+      <th>Sport / Țară</th>
+      <th>Ora (RO)</th>
+      <th>Pariu propus</th>
+      <th>Cotă</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${ticket.selections.map(renderRow).join("\n")}
+  </tbody>
+  <tfoot>
+    <tr>
+      <td colspan="4"><strong>Cotă totală</strong></td>
+      <td><strong>${ticket.product}</strong></td>
+      <td></td>
+    </tr>
+  </tfoot>
+</table>
+`;
 }
 
 /**
- * Shared CSS (minimal, verifier-safe)
+ * Minimal CSS (safe for WP)
  */
 const STYLE = `
 <style>
 .bilet-pariu {
-  width: 100%;
-  border-collapse: collapse;
-  margin-bottom: 24px;
+  width:100%;
+  border-collapse:collapse;
+  margin-bottom:24px;
 }
 .bilet-pariu th,
 .bilet-pariu td {
-  border: 1px solid #ddd;
-  padding: 8px;
+  border:1px solid #ddd;
+  padding:8px;
 }
 .bilet-pariu th {
-  background: #f4f4f4;
+  background:#f4f4f4;
 }
-
-.pv-status-bilet {
-  display:inline-flex;
-  align-items:center;
-  gap:8px;
-  padding:8px 12px;
-  border-radius:6px;
-  font-weight:700;
-  margin-bottom:12px;
-}
-.pv-status-yellow { background:#fde047; }
-.pv-status-green  { background:#22c55e; color:#fff; }
-.pv-status-red    { background:#ef4444; color:#fff; }
 </style>
 `;
 
@@ -109,12 +132,14 @@ const STYLE = `
   const raw = await fs.readFile(TICKETS_FILE, "utf8");
   const data = JSON.parse(raw);
 
+  // ---- COTA 2 ----
   if (data.bilet_cota2) {
     const html = STYLE + renderTicket(data.bilet_cota2);
     await fs.writeFile("cota2.html", html, "utf8");
     console.log("[WP] cota2.html generated");
   }
 
+  // ---- BILETUL ZILEI ----
   if (data.biletul_zilei) {
     const html = STYLE + renderTicket(data.biletul_zilei);
     await fs.writeFile("biletul-zilei.html", html, "utf8");
