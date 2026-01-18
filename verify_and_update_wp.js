@@ -1,4 +1,4 @@
-// verify_and_update_wp.js — FINAL STABLE (1X2 + Goals + BTTS)
+// verify_and_update_wp.js — FINAL FIXED (1X2 + GOALS + BTTS)
 // Node 18 / 20 compatible
 
 import fetch from "node-fetch";
@@ -45,7 +45,7 @@ function outcome1X2(score, side) {
 }
 
 function outcomeGoals(score, side, threshold) {
-  if (!score) return null;
+  if (!score || isNaN(threshold)) return null;
   const total = score.h + score.a;
   return side === "over"
     ? total > threshold ? WIN : LOSS
@@ -89,20 +89,24 @@ function paintRow($, row, status) {
   );
 }
 
-function computeTicketStatus($table) {
-  let pending=false, loss=false;
-  $table.find("tbody tr").each((_, tr)=>{
+function computeTicketStatus($, table) {
+  let hasPending = false;
+  let hasLoss = false;
+
+  $(table).find("tbody tr").each((_, tr) => {
     const s = $(tr).attr("data-status");
-    if (s===PENDING) pending=true;
-    if (s===LOSS) loss=true;
+    if (s === PENDING) hasPending = true;
+    if (s === LOSS) hasLoss = true;
   });
-  if (pending) return PENDING;
-  if (loss) return LOSS;
+
+  if (hasPending) return PENDING;
+  if (hasLoss) return LOSS;
   return WIN;
 }
 
 function updateGlobalBadge($, status) {
   let box = $(".pv-status-bilet");
+
   if (!box.length) {
     $("table.bilet-pariu").first().before(`
       <div class="pv-status-bilet">
@@ -134,7 +138,7 @@ async function verifyPost(postId) {
 
   const post = await res.json();
   const $ = cheerio.load(post.content.raw || post.content.rendered);
-  let changed=false;
+  let changed = false;
 
   const rows = $("table.bilet-pariu tbody tr").toArray();
   console.log(`[VERIFY] Post ${postId} → ${rows.length} events`);
@@ -142,6 +146,7 @@ async function verifyPost(postId) {
   for (const row of rows) {
     const $r = $(row);
     const cur = $r.attr("data-status") || PENDING;
+
     if (!RECHECK_ONCE && cur !== PENDING) continue;
 
     const matchId = $r.attr("data-id");
@@ -155,21 +160,21 @@ async function verifyPost(postId) {
     const score = await fetchFlashscore(matchId);
     if (!score) continue;
 
-    let verdict=null;
+    let verdict = null;
 
-    if (market==="1") verdict = outcome1X2(score, side);
-    else if (stat==="goals") verdict = outcomeGoals(score, side, thr);
-    else if (stat==="btts") verdict = outcomeBTTS(score);
+    if (market === "1") verdict = outcome1X2(score, side);
+    else if (stat === "goals") verdict = outcomeGoals(score, side, thr);
+    else if (stat === "btts") verdict = outcomeBTTS(score);
 
-    if (verdict && verdict!==cur) {
+    if (verdict && verdict !== cur) {
       paintRow($, row, verdict);
-      changed=true;
+      changed = true;
     }
   }
 
   if (changed) {
     const table = $("table.bilet-pariu").first();
-    const globalStatus = computeTicketStatus(table);
+    const globalStatus = computeTicketStatus($, table);
     updateGlobalBadge($, globalStatus);
 
     await put(`${WP_BASE}/wp-json/wp/v2/posts/${postId}`, {
@@ -187,14 +192,14 @@ async function refreshHomepage() {
   let raw = page.content.raw || page.content.rendered;
 
   const stamp = `<!-- pv-cache-buster:${Date.now()} -->`;
-  raw = raw.replace(/<!-- pv-cache-buster:\d+ -->/,"");
-  raw += "\n"+stamp;
+  raw = raw.replace(/<!-- pv-cache-buster:\d+ -->/, "");
+  raw += "\n" + stamp;
 
-  await put(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}`,{ content:raw });
+  await put(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}`, { content: raw });
 }
 
 /* ================= RUN ================= */
-(async ()=>{
+(async () => {
   const r = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=25&search=Bilet`);
   if (!r.ok) {
     console.error("Cannot load posts");
@@ -202,7 +207,9 @@ async function refreshHomepage() {
   }
 
   const posts = await r.json();
-  for (const p of posts) await verifyPost(p.id);
+  for (const p of posts) {
+    await verifyPost(p.id);
+  }
 
   await refreshHomepage();
   console.log("✅ VERIFY FLOW FINISHED");
