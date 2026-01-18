@@ -1,5 +1,5 @@
 // generate_tickets_claudiuhood.js
-// DEBUG VERSION — verbose logging
+// FINAL DEBUG VERSION — strict team-pair + single-team fallback
 
 import fs from "fs/promises";
 import * as cheerio from "cheerio";
@@ -13,6 +13,10 @@ const RO_MONTH = [
   "iulie","august","septembrie","octombrie","noiembrie","decembrie"
 ];
 
+// 🚫 Noise / marketing / article words to exclude
+const NOISE_PAT =
+  /(cota\s*2|biletul\s*zilei|claudiu\s*hood|facebook|unibet|pariuri|pariori|publicitate|reclama|cookie|ads|window\.|document\.|mii\s*de\s*pariori|utilizatori)/i;
+
 const log = (msg) => console.log(`[claudiu][DEBUG] ${msg}`);
 
 function fallback(reason) {
@@ -21,6 +25,7 @@ function fallback(reason) {
   process.exit(0);
 }
 
+// ---------------- DATE + URL ----------------
 function buildDate(offset) {
   const d = new Date();
   d.setDate(d.getDate() + offset);
@@ -36,7 +41,6 @@ function buildDate(offset) {
 function buildUrls() {
   const { day, dd, mm, monthName, year } = buildDate(DAY_OFFSET);
 
-  // sanitize month name (remove hidden unicode chars)
   const safeMonth = monthName
     .normalize("NFKD")
     .replace(/[^\w]/g, "")
@@ -47,11 +51,11 @@ function buildUrls() {
     zi: `https://www.claudiuhood.ro/biletul-zilei-${dd}-${mm}-${year}/`
   };
 
-  console.log("[claudiu][DEBUG] Using URLs:", urls);
+  log(`Using URLs: ${JSON.stringify(urls)}`);
   return urls;
 }
 
-
+// ---------------- FETCH ----------------
 async function fetchHtml(url) {
   log(`Fetching URL: ${url}`);
   const r = await fetch(url, {
@@ -67,6 +71,7 @@ async function fetchHtml(url) {
   return html;
 }
 
+// ---------------- NORMALIZE ----------------
 function normalize(s="") {
   return s
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -76,41 +81,54 @@ function normalize(s="") {
     .trim();
 }
 
-// -------- TEXT + REGEX EXTRACTION --------
+// ---------------- EXTRACTION ----------------
 function extractFromText(html) {
   const $ = cheerio.load(html);
   const text = $("body").text().replace(/\s+/g, " ").trim();
 
   log(`Extracted text length: ${text.length}`);
-  log("TEXT SAMPLE (first 500 chars):");
-  console.log(text.slice(0, 500));
+  log(`TEXT SAMPLE (first 300 chars):`);
+  console.log(text.slice(0, 300));
 
   const results = [];
-
-  // -------- CASE 1: FULL TEAM PAIR --------
-  const PAIR_REGEX =
-    /([A-Za-zÀ-ž0-9 .'-]{3,})\s*[-–]\s*([A-Za-zÀ-ž0-9 .'-]{3,}).*?(1X|12|X2|1|X|2|Peste\s*\d+\.5|Sub\s*\d+\.5).*?Cota[: ]+([\d.]+)/gi;
-
   let m;
+
+  // ===== STRICT TEAM PAIR =====
+  const PAIR_REGEX =
+    /\b([A-Z][A-Za-zÀ-ž .'-]{2,})\s*[-–]\s*([A-Z][A-Za-zÀ-ž .'-]{2,})\b.*?(1X|12|X2|1|X|2|Peste\s*\d+\.5|Sub\s*\d+\.5).*?Cota[: ]+([\d.]+)/gi;
+
   while ((m = PAIR_REGEX.exec(text)) !== null) {
-    log(`PAIR MATCH → ${m[1]} - ${m[2]} | ${m[3]} | ${m[4]}`);
+    const teamA = m[1].trim();
+    const teamB = m[2].trim();
+
+    if (NOISE_PAT.test(teamA) || NOISE_PAT.test(teamB)) {
+      log(`SKIP noise pair → ${teamA} - ${teamB}`);
+      continue;
+    }
+
+    log(`PAIR MATCH OK → ${teamA} - ${teamB} | ${m[3]} | ${m[4]}`);
+
     results.push({
-      teamA: m[1].trim(),
-      teamB: m[2].trim(),
+      teamA,
+      teamB,
       market_raw: m[3].trim(),
       odd: Number(m[4])
     });
   }
 
-  // -------- CASE 2: SINGLE TEAM --------
+  // ===== SINGLE TEAM FALLBACK =====
   if (!results.length) {
     const SINGLE_REGEX =
-      /([A-Z][A-Za-zÀ-ž0-9 .'-]{3,}).*?(1X|12|X2|1|X|2|Peste\s*\d+\.5|Sub\s*\d+\.5).*?Cota[: ]+([\d.]+)/gi;
+      /\b([A-Z][A-Za-zÀ-ž .'-]{3,})\b.*?(1X|12|X2|1|X|2|Peste\s*\d+\.5|Sub\s*\d+\.5).*?Cota[: ]+([\d.]+)/gi;
 
     while ((m = SINGLE_REGEX.exec(text)) !== null) {
-      log(`SINGLE TEAM MATCH → ${m[1]} | ${m[2]} | ${m[3]}`);
+      const team = m[1].trim();
+      if (NOISE_PAT.test(team)) continue;
+
+      log(`SINGLE TEAM MATCH OK → ${team} | ${m[2]} | ${m[3]}`);
+
       results.push({
-        teamA: m[1].trim(),
+        teamA: team,
         teamB: null,
         market_raw: m[2].trim(),
         odd: Number(m[3])
@@ -118,10 +136,11 @@ function extractFromText(html) {
     }
   }
 
-  log(`Total extracted Claudiu selections: ${results.length}`);
+  log(`Total VALID Claudiu selections: ${results.length}`);
   return results;
 }
 
+// ---------------- MARKET NORMALIZATION ----------------
 function normalizeMarket(m) {
   if (!m) return null;
   m = m.toLowerCase();
@@ -132,7 +151,7 @@ function normalizeMarket(m) {
   return null;
 }
 
-// -------- FLASHScore MAPPING --------
+// ---------------- FLASHScore MAPPING ----------------
 function mapToFlashscore(selections, matches) {
   const mapped = [];
 
@@ -142,10 +161,7 @@ function mapToFlashscore(selections, matches) {
 
     let candidates = matches.filter(m => {
       const mt = normalize(m.teams || "");
-      if (nb) {
-        return mt.includes(na) && mt.includes(nb);
-      }
-      return mt.includes(na);
+      return nb ? (mt.includes(na) && mt.includes(nb)) : mt.includes(na);
     });
 
     if (!candidates.length) {
@@ -160,7 +176,6 @@ function mapToFlashscore(selections, matches) {
 
     const match = candidates[0];
     const market = normalizeMarket(s.market_raw);
-
     if (!market) {
       log(`❌ Unsupported market: ${s.market_raw}`);
       continue;
@@ -184,11 +199,9 @@ function mapToFlashscore(selections, matches) {
   return mapped;
 }
 
-
-// -------- MAIN --------
+// ---------------- MAIN ----------------
 (async () => {
   const urls = buildUrls();
-  log(`Using URLs: ${JSON.stringify(urls)}`);
 
   let matches = [];
   try {
@@ -215,13 +228,13 @@ function mapToFlashscore(selections, matches) {
   const selZi = extractFromText(htmlZi);
 
   if (!selC2.length && !selZi.length)
-    fallback("Regex extracted ZERO selections");
+    fallback("No valid Claudiu selections extracted");
 
   const mapC2 = mapToFlashscore(selC2.slice(0,2), matches);
   const mapZi = mapToFlashscore(selZi.slice(0,4), matches);
 
   if (mapC2.length < 2 || mapZi.length < 4)
-    fallback("Mapping incomplete after regex extraction");
+    fallback("Mapping incomplete after extraction");
 
   const tickets = {
     date: new Date().toISOString().slice(0,10),
