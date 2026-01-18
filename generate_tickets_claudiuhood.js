@@ -1,6 +1,6 @@
 // generate_tickets_claudiuhood.js
-// FINAL VERSION — Flashscore-driven team detection + Claudiu text markets
-// with SINGLE-TEAM fallback + relaxed fallback condition
+// FIXED VERSION — Row-by-row table extraction (keeps Claudiu bet + odds) + Flashscore mapping
+// Still supports fallback to generate_tickets.js and "either ticket is ok"
 
 import fs from "fs/promises";
 import * as cheerio from "cheerio";
@@ -78,85 +78,99 @@ function normalize(s="") {
     .trim();
 }
 
-// ---------------- EXTRACT VIA FLASHScore ----------------
-function extractFromText(html, matches) {
+function parseOddCell(txt) {
+  // examples: "Cotă 1.33", "Cota 2.30"
+  const m = String(txt || "").match(/(\d+(?:[.,]\d+)?)/);
+  if (!m) return NaN;
+  return Number(m[1].replace(",", "."));
+}
+
+function splitTeamsFromCell(txt) {
+  // teams are written with EN DASH in the page: "PSG – Lille"
+  const t = String(txt || "").trim();
+  if (!t) return [null, null];
+
+  const parts =
+    t.split("–").map(x => x.trim()).filter(Boolean).length >= 2
+      ? t.split("–").map(x => x.trim())
+      : t.split(" - ").map(x => x.trim());
+
+  if (parts.length < 2) return [null, null];
+  return [parts[0], parts.slice(1).join(" - ")];
+}
+
+// Map Claudiu bet text -> a stable "market_raw" label we keep in tickets.json
+function marketFromBetText(betTextRaw) {
+  const bet = String(betTextRaw || "").toLowerCase().replace(/\s+/g, " ").trim();
+
+  // Team goals "minim X goluri"
+  // "FCSB minim 2 goluri marcate în meci" -> "TEAM_GOALS_MIN_2"
+  const mg = bet.match(/minim\s*(\d+)\s*gol/i);
+  if (mg) return `TEAM_GOALS_MIN_${mg[1]}`;
+
+  // Over/Under totals
+  const over = bet.match(/\b(peste|over)\s*(\d+(?:[.,]\d+)?)\b/);
+  if (over) return `O${over[2].replace(",", ".")}`;
+  const under = bet.match(/\b(sub|under)\s*(\d+(?:[.,]\d+)?)\b/);
+  if (under) return `U${under[2].replace(",", ".")}`;
+
+  // Interval markets (as on Claudiu page)
+  // "Interval 1-3 goluri marcate total în prima repriză"
+  if (/interval\s*1\s*-\s*3/i.test(bet) && /prima\s*repriz/i.test(bet)) return "INT_1_3_GOALS_1H";
+  if (/interval\s*1\s*-\s*3/i.test(bet) && /repriza\s*a\s*doua/i.test(bet)) return "INT_1_3_GOALS_2H";
+  if (/interval\s*1\s*-\s*3/i.test(bet) && /meci/i.test(bet)) return "INT_1_3_GOALS_FT";
+
+  // If not recognized, keep raw text (still useful for WP output)
+  return `CUSTOM:${betTextRaw.trim()}`;
+}
+
+// ---------------- EXTRACT ROW-BY-ROW FROM TABLE ----------------
+function extractFromHtmlTables(html) {
   const $ = cheerio.load(html);
-  const text = $("body").text().replace(/\s+/g, " ").toLowerCase();
-
-  log(`Extracted text length: ${text.length}`);
-
   const results = [];
 
-  function detectMarketAndOdd(text) {
-    // 1️⃣ goal-based markets FIRST (priority)
-    if (/minim\s*2\s*goluri|peste\s*1\.5/.test(text)) {
-      const odd = text.match(/cota[: ]+([\d.]+)/i)?.[1];
-      return odd ? { market: "peste 1.5", odd: Number(odd) } : null;
-    }
+  // We target the actual selection tables; this will also catch wp-block-table tables
+  $("table").each((_, table) => {
+    $(table).find("tr").each((__, tr) => {
+      const tds = $(tr).find("td");
+      if (tds.length < 3) return;
 
-    if (/minim\s*3\s*goluri|peste\s*2\.5/.test(text)) {
-      const odd = text.match(/cota[: ]+([\d.]+)/i)?.[1];
-      return odd ? { market: "peste 2.5", odd: Number(odd) } : null;
-    }
+      const teamsCell = $(tds[0]).text().trim();
+      const betCell = $(tds[1]).text().trim();
+      const oddCell = $(tds[2]).text().trim();
 
-    if (/sub\s*2\.5/.test(text)) {
-      const odd = text.match(/cota[: ]+([\d.]+)/i)?.[1];
-      return odd ? { market: "sub 2.5", odd: Number(odd) } : null;
-    }
+      // Filter summary rows like "Biletul Zilei ..." / "Unibet" etc.
+      if (!teamsCell) return;
+      if (/unibet/i.test(teamsCell) || /unibet/i.test(betCell)) return;
+      if (/biletul\s*zilei/i.test(teamsCell) || /cota\s*2/i.test(teamsCell)) return;
 
-    // 2️⃣ result markets LAST
-    if (/\bcota\b/.test(text)) {
-      const odd = text.match(/cota[: ]+([\d.]+)/i)?.[1];
-      if (!odd) return null;
+      const [teamA, teamB] = splitTeamsFromCell(teamsCell);
+      if (!teamA || !teamB) return;
 
-      if (/\bcastiga\b|\bvictorie\b/.test(text)) {
-        return { market: "win", odd: Number(odd) };
-      }
-    }
+      const odd = parseOddCell(oddCell);
+      if (!isFinite(odd) || odd <= 1.01 || odd > 100) return;
 
-    return null;
-  }
+      const market_raw = marketFromBetText(betCell);
 
-  for (const match of matches) {
-    if (!match.teams) continue;
+      results.push({
+        teamA,
+        teamB,
+        market_raw,
+        odd,
+        meta: {
+          bet_text: betCell
+        }
+      });
 
-    const [teamA, teamB] = match.teams.split(" - ").map(t => t?.trim());
-    if (!teamA || !teamB) continue;
-
-    const na = normalize(teamA);
-    const nb = normalize(teamB);
-
-    if (!text.includes(na) && !text.includes(nb)) continue;
-
-    const mo = detectMarketAndOdd(text);
-    if (!mo) continue;
-
-    log(`CLAUDIU BET → ${teamA} - ${teamB} | ${mo.market} | ${mo.odd}`);
-
-    results.push({
-      teamA,
-      teamB,
-      market_raw: mo.market,
-      odd: mo.odd
+      log(`ROW → ${teamA} - ${teamB} | ${market_raw} | ${odd} | bet="${betCell}"`);
     });
-  }
+  });
 
-  log(`Total matches detected via Claudiu text: ${results.length}`);
+  log(`Total row-level selections extracted: ${results.length}`);
   return results;
 }
 
-// ---------------- MARKET NORMALIZATION ----------------
-function normalizeMarket(m) {
-  if (!m) return null;
-  m = m.toLowerCase();
-  if (["1","x","2"].includes(m)) return m.toUpperCase();
-  if (["1x","x2","12"].includes(m)) return m.toUpperCase();
-  if (m.startsWith("peste")) return "O" + m.match(/(\d+\.5)/)?.[1];
-  if (m.startsWith("sub")) return "U" + m.match(/(\d+\.5)/)?.[1];
-  return null;
-}
-
-// ---------------- BUILD TICKETS ----------------
+// ---------------- BUILD TICKETS (Flashscore mapping only) ----------------
 function mapToFlashscore(selections, matches) {
   const mapped = [];
 
@@ -174,20 +188,19 @@ function mapToFlashscore(selections, matches) {
       continue;
     }
 
-    // 🔑 KEEP CLAUDIU MARKET + ODD AS-IS
-    log(
-      `✅ MAPPED (Claudiu odds kept) → ${match.teams} | ${s.market_raw} @ ${s.odd}`
-    );
+    // KEEP CLAUDIU MARKET + ODD AS-IS
+    log(`✅ MAPPED (Claudiu kept) → ${match.teams} | ${s.market_raw} @ ${s.odd}`);
 
     mapped.push({
       id: match.id,
       teams: match.teams,
-      market: s.market_raw,   // ⬅ KEEP EXACT CLAUDIU MARKET
-      odd: s.odd,             // ⬅ KEEP EXACT CLAUDIU ODD
+      market: s.market_raw,
+      odd: s.odd,
       competition: match.competition,
       country: match.country,
       time: match.time,
-      url: match.url
+      url: match.url,
+      meta: s.meta || {}
     });
   }
 
@@ -220,16 +233,18 @@ function mapToFlashscore(selections, matches) {
     fallback(`Claudiu fetch failed: ${e.message}`);
   }
 
-  const selC2 = extractFromText(htmlC2, matches);
-  const selZi = extractFromText(htmlZi, matches);
+  // Extract row-by-row from tables (correct granularity)
+  const selC2 = extractFromHtmlTables(htmlC2);
+  const selZi = extractFromHtmlTables(htmlZi);
 
   if (!selC2.length && !selZi.length)
-    fallback("No valid Claudiu tickets generated");
+    fallback("No row-level selections found in Claudiu pages");
 
-  const mapC2 = mapToFlashscore(selC2.slice(0,2), matches);
-  const mapZi = mapToFlashscore(selZi.slice(0,4), matches);
+  // Keep first 2 for Cota2 and first 4 for Biletul Zilei
+  const mapC2 = mapToFlashscore(selC2.slice(0, 2), matches);
+  const mapZi = mapToFlashscore(selZi.slice(0, 4), matches);
 
-  // ✅ relaxed condition: allow either ticket
+  // relaxed: allow either ticket
   if (!mapC2.length && !mapZi.length)
     fallback("No mapped tickets after extraction");
 
@@ -240,6 +255,6 @@ function mapToFlashscore(selections, matches) {
     biletul_zilei: mapZi
   };
 
-  await fs.writeFile("tickets.json", JSON.stringify(tickets,null,2));
+  await fs.writeFile("tickets.json", JSON.stringify(tickets, null, 2));
   log("SUCCESS → tickets.json written from ClaudiuHood");
 })();
