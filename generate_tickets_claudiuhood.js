@@ -170,18 +170,21 @@ function mapToFlashscore(selections, matches) {
       return mt.includes(na) && mt.includes(nb);
     });
 
-    if (!match) continue;
+    if (!match) {
+      log(`❌ No Flashscore match for ${s.teamA} - ${s.teamB}`);
+      continue;
+    }
 
-    const market = normalizeMarket(s.market_raw);
-    if (!market) continue;
-
-    log(`✅ MAPPED → ${match.teams} | ${market} @ ${s.odd}`);
+    // 🔑 KEEP CLAUDIU MARKET + ODD AS-IS
+    log(
+      `✅ MAPPED (Claudiu odds kept) → ${match.teams} | ${s.market_raw} @ ${s.odd}`
+    );
 
     mapped.push({
       id: match.id,
       teams: match.teams,
-      market,
-      odd: s.odd,
+      market: s.market_raw,   // ⬅ KEEP EXACT CLAUDIU MARKET
+      odd: s.odd,             // ⬅ KEEP EXACT CLAUDIU ODD
       competition: match.competition,
       country: match.country,
       time: match.time,
