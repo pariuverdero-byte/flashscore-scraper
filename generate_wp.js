@@ -1,13 +1,39 @@
 // generate_wp.js
-// FINAL — WP renderer with HUMAN bet text (meta.bet_text)
+// FINAL — WP HTML with PENDING status for later auto-validation
 
 import fs from "fs/promises";
 
-const TICKETS_FILE = "tickets.json";
+const tickets = JSON.parse(await fs.readFile("tickets.json", "utf8"));
 
-function renderTable(ticket) {
-  let html = `
-<table class="pariuri">
+function row(sel) {
+  return `
+<tr data-match-id="${sel.id}" data-status="pending">
+  <td>
+    <a href="${sel.url}" target="_blank" rel="noopener">
+      ${sel.teams}
+    </a>
+  </td>
+  <td>${sel.country} / ${sel.competition}</td>
+  <td>${sel.time || "-"}</td>
+  <td>${sel.market}</td>
+  <td>${sel.odd}</td>
+  <td>
+    <span class="pv-status pv-pending">⏳</span>
+    <span class="pv-status pv-win">✅</span>
+    <span class="pv-status pv-loss">❌</span>
+  </td>
+</tr>`;
+}
+
+function table(title, ticket) {
+  if (!ticket || !ticket.selections?.length) {
+    return `<h2>${title}</h2><p>(Nu a fost generat)</p>`;
+  }
+
+  return `
+<h2>${title}</h2>
+
+<table class="pv-ticket">
   <thead>
     <tr>
       <th>Eveniment</th>
@@ -15,82 +41,55 @@ function renderTable(ticket) {
       <th>Ora (RO)</th>
       <th>Pariu propus</th>
       <th>Cotă</th>
+      <th>Status</th>
     </tr>
   </thead>
   <tbody>
-`;
-
-  for (const s of ticket.selections) {
-    const betText =
-      s.meta?.bet_text ||
-      s.market_raw ||
-      "Pariu special";
-
-    html += `
-    <tr>
-      <td>
-        <a href="${s.url}" target="_blank" rel="nofollow noopener">
-          ${s.teams}
-        </a>
-      </td>
-      <td>
-        Fotbal — ${s.country} / ${s.competition}
-      </td>
-      <td>${s.time || "-"}</td>
-      <td>${betText}</td>
-      <td><strong>${s.odd}</strong></td>
-    </tr>
-`;
-  }
-
-  html += `
+    ${ticket.selections.map(row).join("\n")}
   </tbody>
   <tfoot>
     <tr>
       <td colspan="4"><strong>Cotă totală</strong></td>
       <td><strong>${ticket.product}</strong></td>
+      <td></td>
     </tr>
   </tfoot>
 </table>
 `;
-
-  return html;
 }
 
-function titleForBiletulZilei(size) {
-  if (size === 1) return "Pontul Zilei";
-  if (size === 2) return "Combo Zilnic";
-  return "Biletul Zilei";
+const baseStyle = `
+<style>
+.pv-ticket { width:100%; border-collapse:collapse; }
+.pv-ticket th, .pv-ticket td {
+  border:1px solid #ddd;
+  padding:8px;
 }
+.pv-ticket th { background:#f5f5f5; }
+.pv-status { font-size:18px; }
 
-(async () => {
-  const raw = await fs.readFile(TICKETS_FILE, "utf8");
-  const data = JSON.parse(raw);
+[data-status="pending"] .pv-win,
+[data-status="pending"] .pv-loss { display:none; }
 
-  // ---- COTA 2 ----
-  if (data.bilet_cota2) {
-    const html =
-      `<h2>Cota 2 – Pronosticuri fotbal azi</h2>` +
-      renderTable(data.bilet_cota2);
+[data-status="win"] .pv-pending,
+[data-status="win"] .pv-loss { display:none; }
 
-    await fs.writeFile("cota2.html", html, "utf8");
-    console.log("[WP] cota2.html generated");
-  }
+[data-status="loss"] .pv-pending,
+[data-status="loss"] .pv-win { display:none; }
+</style>
+`;
 
-  // ---- BILETUL ZILEI ----
-  if (data.biletul_zilei) {
-    const size = data.biletul_zilei.selections.length;
-    const title = titleForBiletulZilei(size);
+const cota2Html = `
+${baseStyle}
+${table("Bilet Cota 2", tickets.bilet_cota2)}
+`;
 
-    const html =
-      `<h2>${title}</h2>` +
-      renderTable(data.biletul_zilei);
+const ziHtml = `
+${baseStyle}
+${table("Biletul Zilei", tickets.biletul_zilei)}
+`;
 
-    await fs.writeFile("biletul-zilei.html", html, "utf8");
-    console.log("[WP] biletul-zilei.html generated");
-  }
+await fs.writeFile("cota2.html", cota2Html);
+await fs.writeFile("biletul-zilei.html", ziHtml);
 
-  if (!data.bilet_cota2 && !data.biletul_zilei) {
-    console.log("[WP] Nothing to publish today.");
-  }
-})();
+console.log("[OK] WordPress HTML generated with PENDING status");
