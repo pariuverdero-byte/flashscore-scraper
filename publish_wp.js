@@ -1,5 +1,5 @@
 // publish_wp.js
-// FINAL VERSION — publish with custom excerpt for category listing
+// FINAL & GUARANTEED — excerpt via <!--more-->
 
 import fs from "fs/promises";
 import fetch from "node-fetch";
@@ -17,7 +17,7 @@ const auth =
 const read = async (p) =>
   fs.readFile(p, "utf8").catch(() => null);
 
-// ---------- CATEGORY (OPTIONAL) ----------
+// ---------- CATEGORY ----------
 async function getCategoryId(slug) {
   try {
     const r = await fetch(
@@ -31,28 +31,20 @@ async function getCategoryId(slug) {
   }
 }
 
-// ---------- EXCERPT BUILDER ----------
-function buildExcerpt({ title, ticket }) {
+// ---------- EXCERPT TEXT ----------
+function buildExcerptText(title, ticket) {
   if (!ticket || !ticket.selections?.length) {
     return `${title} – analiză și pronosticuri fotbal.`;
   }
 
   const n = ticket.selections.length;
-  const totalOdd = ticket.product;
-  const sports = new Set();
+  const odd = ticket.product;
 
-  for (const s of ticket.selections) {
-    if (s.country) sports.add(s.country);
-  }
-
-  const region =
-    sports.size === 1 ? [...sports][0] : "Fotbal Internațional";
-
-  return `${title} cu ${n} selecții • Cotă totală ${totalOdd} • ${region}`;
+  return `${title} cu ${n} selecții • Cotă totală ${odd}`;
 }
 
 // ---------- PUBLISH ----------
-async function publish({ title, html, excerpt, categorySlug }) {
+async function publish({ title, html, excerptText, categorySlug }) {
   if (!html || !html.trim()) {
     console.log(`ℹ Conținut gol → skip "${title}"`);
     return;
@@ -69,11 +61,17 @@ async function publish({ title, html, excerpt, categorySlug }) {
     }
   }
 
+  // 🔑 EXCERPT injected in content
+  const content = `
+<p><strong>${excerptText}</strong></p>
+<!--more-->
+${html}
+  `.trim();
+
   const body = {
     title,
     status: "publish",
-    content: html,
-    excerpt,
+    content,
     categories
   };
 
@@ -106,14 +104,10 @@ async function publish({ title, html, excerpt, categorySlug }) {
   const ziHtml = await read("biletul-zilei.html");
 
   if (cota2Html && tickets.bilet_cota2) {
-    const title = `Bilet Cota 2 (${today})`;
     await publish({
-      title,
+      title: `Bilet Cota 2 (${today})`,
       html: cota2Html,
-      excerpt: buildExcerpt({
-        title: "Bilet Cota 2",
-        ticket: tickets.bilet_cota2
-      }),
+      excerptText: buildExcerptText("Bilet Cota 2", tickets.bilet_cota2),
       categorySlug: "cota-2"
     });
   } else {
@@ -121,14 +115,10 @@ async function publish({ title, html, excerpt, categorySlug }) {
   }
 
   if (ziHtml && tickets.biletul_zilei) {
-    const title = `Biletul Zilei (${today})`;
     await publish({
-      title,
+      title: `Biletul Zilei (${today})`,
       html: ziHtml,
-      excerpt: buildExcerpt({
-        title: "Biletul Zilei",
-        ticket: tickets.biletul_zilei
-      }),
+      excerptText: buildExcerptText("Biletul Zilei", tickets.biletul_zilei),
       categorySlug: "biletul-zilei"
     });
   } else {
