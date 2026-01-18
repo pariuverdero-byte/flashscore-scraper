@@ -19,7 +19,7 @@ jobs:
       GLOBAL_HARD_STOP_MS: "150000"
       INCLUDE_LIVE: "false"
 
-      # Ticket tolerances (folosite de generate_tickets.js)
+      # Ticket tolerances
       COTA2_TOL: "0.15"
       ZI_TOL: "0.30"
 
@@ -51,12 +51,12 @@ jobs:
         timeout-minutes: 5
         run: node scrape_mobi.js
 
-      # 2) (optional) Odds din tab-ul Flashscore ?s=5 (poate fi gol pe unele zile/ligi)
+      # 2) Odds din tab-ul Flashscore ?s=5
       - name: Run scraper (Flashscore Odds tab)
         timeout-minutes: 5
         run: node scrape_odds_tab.js
 
-      # 3) (optional) Merge The Odds API (h2h + totals)
+      # 3) (optional) Merge The Odds API
       - name: Merge (optional) The Odds API odds
         timeout-minutes: 5
         run: |
@@ -68,7 +68,7 @@ jobs:
             echo "scrape_odds_combo.js not present, skipping."
           fi
 
-      # 4) Construiește odds_extra.json din 1X2 (Double Chance 1X/12/X2)
+      # 4) Build odds_extra.json (Double Chance)
       - name: Build odds_extra (derive DC from 1X2)
         run: |
           if [ -f "build_odds_extra_from_1x2.js" ]; then
@@ -77,21 +77,21 @@ jobs:
             echo "build_odds_extra_from_1x2.js not present, skipping."
           fi
 
-      # 5) Generează biletele (folosește odds.json + odds_extra.json)
-      - name: Generate tickets (with extras)
-        run: node generate_tickets.js
+      # 5) Generate tickets (ClaudiuHood PRIMARY, auto fallback)
+      - name: Generate tickets (ClaudiuHood primary, auto fallback)
+        run: node generate_tickets_claudiuhood.js
 
-      # 6) (opțional) Augmentează DOAR meciurile selectate și re-generează biletele
+      # 6) (optional) Augment odds for selected events + REGENERATE tickets
       - name: Augment odds for selected events (optional per-match)
         run: |
           if [ -f "augment_odds_selected.js" ]; then
             node augment_odds_selected.js
-            node generate_tickets.js
+            node generate_tickets_claudiuhood.js
           else
             echo "augment_odds_selected.js not present, skipping."
           fi
 
-      # 7) Generează HTML pentru WordPress
+      # 7) Generate WordPress HTML
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
@@ -110,6 +110,8 @@ jobs:
             odds_tab.json
             odds_extra.json
             odds_debug.json
+            claudiu_cota2.html
+            claudiu_zi.html
 
       # 9) Upload ticket outputs
       - name: Upload artifacts (tickets)
@@ -123,7 +125,7 @@ jobs:
             cota2.html
             biletul-zilei.html
 
-      # 10) Publică în WordPress
+      # 10) Publish to WordPress
       - name: Publish posts to WordPress
         if: success()
         env:
