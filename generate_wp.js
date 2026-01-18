@@ -1,15 +1,25 @@
 // generate_wp.js
-// FINAL — HTML valid + aligned with verify_and_update_wp.js (score + stats)
+// FINAL FIX — always extract Flashscore match ID (no more undefined)
 
 import fs from "fs/promises";
 
 const TICKETS_FILE = "tickets.json";
 
+/* ================= HELPERS ================= */
+
+/**
+ * Extract Flashscore match ID from URL
+ */
+function extractMatchId(url = "") {
+  const m = url.match(/\/match\/([A-Za-z0-9]+)\//);
+  return m ? m[1] : "";
+}
+
 /**
  * Detect bet type + build verification metadata
  */
 function buildVerificationMeta(sel) {
-  let market = "1";     // score based
+  let market = "1";
   let stat = "";
   let side = "";
   let threshold = "";
@@ -20,7 +30,12 @@ function buildVerificationMeta(sel) {
     sel.market_raw?.toLowerCase() ||
     "";
 
-  // --- GOALS / CORNERS / SHOTS (OVER / UNDER) ---
+  // BTTS
+  if (/ambele.*marcheaz|btts/i.test(txt)) {
+    return { market: "STAT", stat: "btts", side: "yes", threshold: "" };
+  }
+
+  // OVER / UNDER
   if (/over|under|minim|maxim|peste|sub/i.test(txt)) {
     market = "STAT";
 
@@ -28,27 +43,20 @@ function buildVerificationMeta(sel) {
     else if (/corner/i.test(txt)) stat = "corners";
     else if (/șut|sut|shot/i.test(txt)) stat = "shots_on_target";
 
-    side = /under|sub/i.test(txt) ? "under" : "over";
+    side = /sub|under/i.test(txt) ? "under" : "over";
 
     const m = txt.match(/(\d+(\.\d+)?)/);
     if (m) threshold = m[1];
   }
 
-  // --- BTTS ---
-  if (/ambele.*marcheaz|btts/i.test(txt)) {
-    market = "STAT";
-    stat = "btts";
-    side = "yes";
-  }
-
   return { market, stat, side, threshold };
 }
 
-/**
- * Render one valid table row (NO <p>, NO broken HTML)
- */
+/* ================= RENDER ================= */
+
 function renderRow(sel) {
-  if (!sel.id) return ""; // safety
+  const matchId = sel.id || extractMatchId(sel.url);
+  if (!matchId) return ""; // safety
 
   const betText =
     sel.meta?.bet_text ||
@@ -61,7 +69,7 @@ function renderRow(sel) {
 
   return `
 <tr
-  data-id="${sel.id}"
+  data-id="${matchId}"
   data-status="pending"
   data-market="${meta.market}"
   ${meta.stat ? `data-stat="${meta.stat}"` : ""}
@@ -81,9 +89,6 @@ function renderRow(sel) {
 </tr>`;
 }
 
-/**
- * Render ONLY the ticket table
- */
 function renderTicket(ticket) {
   if (!ticket || !ticket.selections?.length) {
     return `<p>(Nu a fost generat)</p>`;
@@ -111,13 +116,9 @@ function renderTicket(ticket) {
       <td></td>
     </tr>
   </tfoot>
-</table>
-`;
+</table>`;
 }
 
-/**
- * Minimal CSS
- */
 const STYLE = `
 <style>
 .bilet-pariu {
@@ -136,6 +137,8 @@ const STYLE = `
 </style>
 `;
 
+/* ================= MAIN ================= */
+
 (async () => {
   const raw = await fs.readFile(TICKETS_FILE, "utf8");
   const data = JSON.parse(raw);
@@ -146,7 +149,7 @@ const STYLE = `
       STYLE + renderTicket(data.bilet_cota2),
       "utf8"
     );
-    console.log("[WP] cota2.html generated");
+    console.log("[OK] cota2.html generated");
   }
 
   if (data.biletul_zilei) {
@@ -155,6 +158,6 @@ const STYLE = `
       STYLE + renderTicket(data.biletul_zilei),
       "utf8"
     );
-    console.log("[WP] biletul-zilei.html generated");
+    console.log("[OK] biletul-zilei.html generated");
   }
 })();
