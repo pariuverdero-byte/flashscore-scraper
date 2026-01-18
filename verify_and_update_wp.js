@@ -1,4 +1,4 @@
-// verify_and_update_wp.js — FINAL FIX (TEAM GOALS via SCORE)
+// verify_and_update_wp.js — FINAL FIX v2 (TEAM GOALS, SAFE PARSING)
 // Node 18 / 20 compatible
 
 import fetch from "node-fetch";
@@ -53,7 +53,7 @@ async function fetchFinalScore(matchId) {
   }
 }
 
-/* ================= VERIFY POSTS ================= */
+/* ================= VERIFY ONE POST ================= */
 async function verifyPost(postId) {
   const res = await get(`${WP_BASE}/wp-json/wp/v2/posts/${postId}?context=edit`);
   if (!res.ok) return;
@@ -73,17 +73,26 @@ async function verifyPost(postId) {
     if (!matchId || status !== PENDING) continue;
 
     const threshold = parseFloat($r.attr("data-threshold") || "0");
+    if (!threshold) continue;
+
     const betText = $r.find("td").eq(3).text().toLowerCase();
 
     const score = await fetchFinalScore(matchId);
     if (!score) continue;
 
-    // Detect home / away team from text
+    // SAFE team parsing
     const teamsText = $r.find("td").eq(0).text().toLowerCase();
-    const homeTeam = teamsText.split("–")[0].trim();
-    const awayTeam = teamsText.split("–")[1].trim();
+    const parts = teamsText
+      .replace(/\s+/g, " ")
+      .split(/–|-|—/);
+
+    if (parts.length < 2) continue;
+
+    const homeTeam = parts[0].trim();
+    const awayTeam = parts[1].trim();
 
     let goals = null;
+
     if (betText.includes(homeTeam)) goals = score.home;
     else if (betText.includes(awayTeam)) goals = score.away;
     else continue;
