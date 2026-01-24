@@ -14,8 +14,17 @@ jobs:
         with:
           node-version: 18
 
-      - name: Install dependencies
-        run: npm install node-fetch cheerio
+      - name: HARD RESET node_modules
+        run: |
+          rm -rf node_modules
+          rm -rf package-lock.json
+          npm cache clean --force
+
+      - name: Install cheerio ONLY
+        run: npm install cheerio
 
       - name: Run scraper
         run: node scrapers/scrape_talkfootball.js
+
+      - name: Show output
+        run: cat artifacts/talkfootball_pool.json
