@@ -1,11 +1,41 @@
 /**
- * Extract match / players from title + raw text
- * Supports:
- *  - Football: Team A vs Team B / Team A si Team B
- *  - Tennis: Player A vs Player B / Player A il va intalni pe Player B
+ * Robust match / players extractor
+ * Avoids editorial titles and false positives
  */
+
+const STOP_WORDS = [
+  "biletul",
+  "pontul",
+  "ponturi",
+  "cota",
+  "azi",
+  "fotbal",
+  "tenis",
+  "ban",
+  "ion",
+  "dan",
+  "zilei",
+];
+
+function looksLikeName(str) {
+  if (!str) return false;
+
+  const s = str.toLowerCase();
+
+  // minim 2 cuvinte
+  if (str.trim().split(/\s+/).length < 2) return false;
+
+  // nu contine stop words editoriale
+  for (const w of STOP_WORDS) {
+    if (s.includes(w)) return false;
+  }
+
+  // trebuie sa contina litere mari (nume proprii)
+  return /[A-Z]/.test(str);
+}
+
 export function extractMatch({ sport, title, rawText }) {
-  const text = `${title} ${rawText}`;
+  const text = `${title}. ${rawText}`;
 
   /* ======================
    * TENNIS
@@ -13,15 +43,15 @@ export function extractMatch({ sport, title, rawText }) {
   if (sport === "tennis") {
     const tennisRegexes = [
       // Daniil Medvedev il va intalni pe Learner Tien
-      /([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)\s+(?:il va intalni pe|vs\.?|contra)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)/i,
+      /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s+(?:il va intalni pe|va juca cu|vs\.?|contra)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/,
 
       // Medvedev vs Tien
-      /([A-Z][a-zA-Z]+)\s+vs\.?\s+([A-Z][a-zA-Z]+)/i,
+      /([A-Z][a-z]+)\s+vs\.?\s+([A-Z][a-z]+)/,
     ];
 
     for (const r of tennisRegexes) {
       const m = text.match(r);
-      if (m) {
+      if (m && looksLikeName(m[1]) && looksLikeName(m[2])) {
         return {
           home: m[1].trim(),
           away: m[2].trim(),
@@ -37,15 +67,15 @@ export function extractMatch({ sport, title, rawText }) {
   if (sport === "football") {
     const footballRegexes = [
       // Aston Villa U21 vs Ipswich Town U21
-      /([A-Z][a-zA-Z0-9\s]+)\s+(?:vs\.?|-\s?)\s+([A-Z][a-zA-Z0-9\s]+)/i,
+      /([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)+)\s+(?:vs\.?|-\s?|va juca cu)\s+([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)+)/,
 
       // Manchester City si Wolves
-      /([A-Z][a-zA-Z\s]+)\s+(?:si|și)\s+([A-Z][a-zA-Z\s]+)/i,
+      /([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)+)\s+(?:si|și)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)+)/,
     ];
 
     for (const r of footballRegexes) {
       const m = text.match(r);
-      if (m) {
+      if (m && looksLikeName(m[1]) && looksLikeName(m[2])) {
         return {
           home: m[1].trim(),
           away: m[2].trim(),
