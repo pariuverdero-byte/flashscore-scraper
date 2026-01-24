@@ -1,10 +1,10 @@
-name: Test TalkFootball Scraper
+name: Test TalkFootball + Flashscore MOBI
 
 on:
   workflow_dispatch:
 
 jobs:
-  scrape:
+  test-flow:
     runs-on: ubuntu-latest
 
     steps:
@@ -20,5 +20,25 @@ jobs:
           npm cache clean --force
           npm install cheerio
 
-      - name: Run scraper
+      - name: Scrape TalkFootball
         run: node scrapers/scrape_talkfootball.js
+
+      - name: Scrape Flashscore (MOBI)
+        run: node scrapers/scrape_flashscore_today.js
+
+      - name: Match TalkFootball → Flashscore
+        run: node engine/match_talkfootball_flashscore.js
+
+      - name: Show results
+        run: |
+          echo "=== MATCHED ==="
+          cat artifacts/talkfootball_matched.json
+          echo ""
+          echo "=== DROPPED ==="
+          cat artifacts/talkfootball_dropped.json
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: talkfootball_flashscore_mobi
+          path: artifacts/
