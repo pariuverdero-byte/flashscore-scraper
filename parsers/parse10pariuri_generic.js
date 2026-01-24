@@ -109,3 +109,6 @@ export function parse10PariuriGeneric(html, url, meta = {}) {
     rawText: contentText.slice(0, 600),
   };
 }
+// 🔁 Alias explicit pentru consum extern (tests, engine, etc.)
+export { parse10pariuri };
+export const parse10pariuriGeneric = parse10pariuri;
