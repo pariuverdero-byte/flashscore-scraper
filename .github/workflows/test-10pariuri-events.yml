@@ -1,0 +1,29 @@
+name: Test 10pariuri Events Extraction
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "parsers/**"
+      - "scripts/**"
+      - ".github/workflows/test-10pariuri-events.yml"
+
+jobs:
+  test-10pariuri-events:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run 10pariuri events flow test
+        run: |
+          node --require ./scripts/undici_shim.cjs scripts/test_parse10pariuri_events_flow.js
