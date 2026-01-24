@@ -3,7 +3,7 @@ name: Scrape Flashscore + Claudiu Pool + Generate Tickets + WordPress (EN)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "35 11 * * *"  # rulează la 5 min după RO
+    - cron: "35 11 * * *"  # 14:35 RO (GitHub = UTC)
 
 jobs:
   scrape:
@@ -13,11 +13,11 @@ jobs:
       # ------------------
       # GLOBAL CONTROLS
       # ------------------
-      DAY_OFFSET: "-1"
+      DAY_OFFSET: "-1"        # 0 = today, -1 = yesterday
       INCLUDE_LIVE: "true"
 
       # ------------------
-      # LANGUAGE FLAG
+      # LANGUAGE (CRITICAL)
       # ------------------
       LANG: "en"
 
@@ -27,7 +27,7 @@ jobs:
       CLAUDIU_MIN_ODD: "1.15"
 
       # ------------------
-      # GREENBETTIPS – COTA 2
+      # GREENBETTIPS – ODDS 2
       # ------------------
       PV_COTA2_MIN: "1.90"
       PV_COTA2_MAX: "2.50"
@@ -60,9 +60,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-npm-
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
-          npm install cheerio@^1.0.0-rc.12 node-fetch@^3 --no-fund --no-audit --prefer-offline
+          npm install cheerio@^1.0.0-rc.12 node-fetch@^3 \
+            --no-fund --no-audit --prefer-offline
 
       # ------------------
       # 1) FLASHScore FIXTURES
@@ -79,20 +80,20 @@ jobs:
         run: node scrape_claudiu_pool.js
 
       # ------------------
-      # 3) GENERATE TICKETS
+      # 3) GENERATE GREENBETTIPS TICKETS
       # ------------------
       - name: Generate tickets from pool
         timeout-minutes: 5
         run: node generate_tickets_from_pool.js
 
       # ------------------
-      # 4) WORDPRESS HTML
+      # 4) GENERATE WORDPRESS HTML
       # ------------------
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
       # ------------------
-      # 5) ARTIFACTS (DEBUG)
+      # 5) ARTIFACTS (DEBUG / TRACE)
       # ------------------
       - name: Upload artifacts (raw)
         if: always()
@@ -119,7 +120,7 @@ jobs:
       - name: Publish posts to WordPress (greenbettips)
         if: success()
         env:
-          WP_URL: https://greenbettips.com/index.php/wp-json/wp/v2
+          WP_URL: https://greenbettips.com
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
         run: node publish_wp.js
