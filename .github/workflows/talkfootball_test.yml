@@ -18,20 +18,15 @@ jobs:
         with:
           node-version: 18
 
-      - name: Install dependencies
-        working-directory: .
+      - name: Force install dependencies
         run: |
-          node -v
-          npm -v
-          ls -la
-          npm install
+          npm init -y || true
+          npm install axios cheerio
 
       - name: Run TalkFootball scraper
-        working-directory: .
         run: node scrapers/scrape_talkfootball.js
 
       - name: Show scraped pool
-        working-directory: .
         run: |
           echo "====== TALKFOOTBALL POOL ======"
           cat artifacts/talkfootball_pool.json
