@@ -1,4 +1,4 @@
-import axios from 'axios'
+import fetch from 'node-fetch'
 import * as cheerio from 'cheerio'
 import fs from 'fs'
 
@@ -44,17 +44,15 @@ function normalizePick(market, raw) {
     if (txt.includes('no')) return 'BTTS_NO'
   }
 
-  if (market === 'OVER_1_5') {
-    return 'OVER_1_5'
-  }
+  if (market === 'OVER_1_5') return 'OVER_1_5'
 
   return null
 }
 
 async function scrapeMarket({ market, path }) {
-  const url = BASE_URL + path
-  const res = await axios.get(url)
-  const $ = cheerio.load(res.data)
+  const res = await fetch(BASE_URL + path)
+  const html = await res.text()
+  const $ = cheerio.load(html)
 
   const selected = []
   const usedLeagues = new Set()
