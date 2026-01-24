@@ -3,7 +3,7 @@ name: Scrape Flashscore + Claudiu Pool + Generate Tickets + WordPress (RO)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 11 * * *"  # 07:30 Europe/Bucharest
+    - cron: "30 11 * * *"  # 14:30 RO (GitHub = UTC)
 
 jobs:
   scrape:
@@ -13,8 +13,13 @@ jobs:
       # ------------------
       # GLOBAL CONTROLS
       # ------------------
-      DAY_OFFSET: "-1"          # 0 = azi
+      DAY_OFFSET: "-1"          # 0 = azi, -1 = ieri
       INCLUDE_LIVE: "true"
+
+      # ------------------
+      # LANGUAGE (CRITICAL)
+      # ------------------
+      LANG: "ro"
 
       # ------------------
       # CLAUDIU POOL RULES
@@ -57,10 +62,11 @@ jobs:
 
       - name: Install deps
         run: |
-          npm install cheerio@^1.0.0-rc.12 node-fetch@^3 --no-fund --no-audit --prefer-offline
+          npm install cheerio@^1.0.0-rc.12 node-fetch@^3 \
+            --no-fund --no-audit --prefer-offline
 
       # ------------------
-      # 1) FLASHScore FIXTURES (meciuri)
+      # 1) FLASHScore FIXTURES
       # ------------------
       - name: Scrape Flashscore fixtures
         timeout-minutes: 5
@@ -87,7 +93,7 @@ jobs:
         run: node generate_wp.js
 
       # ------------------
-      # 5) ARTIFACTS (DEBUG / TRACE)
+      # 5) ARTIFACTS (DEBUG)
       # ------------------
       - name: Upload artifacts (raw)
         if: always()
