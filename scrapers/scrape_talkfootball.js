@@ -1,3 +1,6 @@
+// 🔴 FIX CRITICAL pentru GitHub Actions + Node 18 + undici
+global.File = class File {}
+
 import fs from 'fs'
 import * as cheerio from 'cheerio'
 
@@ -44,7 +47,6 @@ function normalizePick(market, raw) {
   }
 
   if (market === 'OVER_1_5') return 'OVER_1_5'
-
   return null
 }
 
@@ -107,7 +109,10 @@ async function run() {
   }
 
   fs.mkdirSync('artifacts', { recursive: true })
-  fs.writeFileSync('artifacts/talkfootball_pool.json', JSON.stringify(pool, null, 2))
+  fs.writeFileSync(
+    'artifacts/talkfootball_pool.json',
+    JSON.stringify(pool, null, 2)
+  )
 
   console.log(`[talkfootball] total: ${pool.length}`)
 }
