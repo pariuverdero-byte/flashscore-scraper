@@ -16,8 +16,8 @@ jobs:
         with:
           node-version: 18
 
-      - name: Install parser dependencies
-        run: npm install axios cheerio
+      - name: Install dependencies
+        run: npm install cheerio
 
       - name: Run parser test
         run: node scripts/test_parse_10pariuri.js
