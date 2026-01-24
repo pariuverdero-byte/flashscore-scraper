@@ -66,34 +66,34 @@ jobs:
             --no-fund --no-audit --prefer-offline
 
       # ------------------
-      # 1) FLASHScore FIXTURES
+      # 1) FLASHSCORE FIXTURES (MECIURI)
       # ------------------
       - name: Scrape Flashscore fixtures
         timeout-minutes: 5
         run: node scrape_mobi.js
 
       # ------------------
-      # 2) CLAUDIU HOOD → POOL
+      # 2) CLAUDIU HOOD → POOL (FLASHCORE SAFE)
       # ------------------
       - name: Build Claudiu Hood POOL
         timeout-minutes: 5
         run: node scrape_claudiu_pool.js
 
       # ------------------
-      # 3) GENERATE PARIUVERDE TICKETS
+      # 3) MASTER POOL → TICKETS
       # ------------------
-      - name: Generate PariuVerde tickets from pool
+      - name: Generate tickets from MASTER pool
         timeout-minutes: 5
         run: node generate_tickets_from_pool.js
 
       # ------------------
-      # 4) GENERATE WORDPRESS HTML
+      # 4) WORDPRESS HTML
       # ------------------
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
       # ------------------
-      # 5) ARTIFACTS (DEBUG)
+      # 5) ARTIFACTS (DEBUG / TRACE)
       # ------------------
       - name: Upload artifacts (raw)
         if: always()
@@ -103,6 +103,7 @@ jobs:
           path: |
             matches.json
             claudiu_pool.json
+            master_pool.json
 
       - name: Upload artifacts (tickets)
         if: always()
@@ -111,6 +112,7 @@ jobs:
           name: tickets
           path: |
             tickets.json
+            tickets.md
             cota2.html
             biletul-zilei.html
 
