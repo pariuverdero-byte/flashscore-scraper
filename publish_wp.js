@@ -1,25 +1,24 @@
-// publish_wp.js — FINAL FIX (pariuverde + greenbettips compatible)
+// publish_wp.js
+// FINAL — LANG-aware (RO / EN), pariuverde + greenbettips safe
 
 import fs from "fs/promises";
 import fetch from "node-fetch";
 
 const { WP_URL, WP_USER, WP_APP_PASS } = process.env;
+const LANG = (process.env.LANG || "ro").toLowerCase();
 
 if (!WP_URL || !WP_USER || !WP_APP_PASS) {
   console.error("❌ Missing WP_URL / WP_USER / WP_APP_PASS");
   process.exit(1);
 }
 
-// =====================================================
-// 🔧 NORMALIZE REST API BASE (AUTO-DETECT index.php)
-// =====================================================
+/* =====================================================
+ * 🔧 NORMALIZE REST API BASE
+ * ===================================================== */
 function normalizeApiBase(url) {
   let u = url.replace(/\/$/, "");
 
-  // dacă deja conține wp-json → îl folosim ca atare
   if (u.includes("/wp-json/wp/v2")) return u;
-
-  // fallback sigur (merge pe orice hosting)
   return `${u}/index.php/wp-json/wp/v2`;
 }
 
@@ -33,9 +32,33 @@ const auth =
 const read = async (p) =>
   fs.readFile(p, "utf8").catch(() => null);
 
-// =====================================================
-// CATEGORY
-// =====================================================
+/* =====================================================
+ * 🌍 TRANSLATIONS
+ * ===================================================== */
+const I18N = {
+  ro: {
+    cota2_title: "Bilet Cota 2",
+    zi_title: "Biletul Zilei",
+    cota2_excerpt: (t) =>
+      `Bilet Cota 2 cu ${t.selections.length} selecții • Cotă totală ${t.product}`,
+    zi_excerpt: (t) =>
+      `Biletul Zilei cu ${t.selections.length} selecții • Cotă totală ${t.product}`,
+  },
+  en: {
+    cota2_title: "Odds 2 Ticket",
+    zi_title: "Bet of the Day",
+    cota2_excerpt: (t) =>
+      `Odds 2 Ticket with ${t.selections.length} selections • Total odds ${t.product}`,
+    zi_excerpt: (t) =>
+      `Bet of the Day with ${t.selections.length} selections • Total odds ${t.product}`,
+  },
+};
+
+const T = I18N[LANG] || I18N.ro;
+
+/* =====================================================
+ * CATEGORY
+ * ===================================================== */
 async function getCategoryId(slug) {
   try {
     const r = await fetch(`${CATEGORIES_ENDPOINT}?slug=${slug}`, {
@@ -49,20 +72,10 @@ async function getCategoryId(slug) {
   }
 }
 
-// =====================================================
-// EXCERPT
-// =====================================================
-function buildExcerptText(title, ticket) {
-  if (!ticket || !ticket.selections?.length) {
-    return `${title} – football betting tips.`;
-  }
-  return `${title} with ${ticket.selections.length} selections • Total odds ${ticket.product}`;
-}
-
-// =====================================================
-// PUBLISH
-// =====================================================
-async function publish({ title, html, excerptText, categorySlug }) {
+/* =====================================================
+ * PUBLISH
+ * ===================================================== */
+async function publish({ title, html, excerpt, categorySlug }) {
   if (!html || !html.trim()) {
     console.log(`ℹ Empty content → skip "${title}"`);
     return;
@@ -76,7 +89,7 @@ async function publish({ title, html, excerptText, categorySlug }) {
   }
 
   const content = `
-<p><strong>${excerptText}</strong></p>
+<p><strong>${excerpt}</strong></p>
 <!--more-->
 ${html}
 `.trim();
@@ -96,11 +109,7 @@ ${html}
   });
 
   if (!r.ok) {
-    console.error(
-      `❌ Publish failed "${title}"`,
-      r.status,
-      await r.text()
-    );
+    console.error(`❌ Publish failed "${title}"`, r.status, await r.text());
     return;
   }
 
@@ -108,11 +117,14 @@ ${html}
   console.log(`✅ Published: ${data.link}`);
 }
 
-// =====================================================
-// MAIN
-// =====================================================
+/* =====================================================
+ * MAIN
+ * ===================================================== */
 (async () => {
-  const today = new Date().toLocaleDateString("en-GB");
+  const today =
+    LANG === "ro"
+      ? new Date().toLocaleDateString("ro-RO")
+      : new Date().toLocaleDateString("en-GB");
 
   const ticketsRaw = await read("tickets.json");
   const tickets = ticketsRaw ? JSON.parse(ticketsRaw) : {};
@@ -120,20 +132,22 @@ ${html}
   const cota2Html = await read("cota2.html");
   const ziHtml = await read("biletul-zilei.html");
 
+  // ---- COTA 2 ----
   if (cota2Html && tickets.bilet_cota2) {
     await publish({
-      title: `Odds 2 Ticket (${today})`,
+      title: `${T.cota2_title} (${today})`,
       html: cota2Html,
-      excerptText: buildExcerptText("Odds 2 Ticket", tickets.bilet_cota2),
+      excerpt: T.cota2_excerpt(tickets.bilet_cota2),
       categorySlug: "cota-2",
     });
   }
 
+  // ---- BILETUL ZILEI ----
   if (ziHtml && tickets.biletul_zilei) {
     await publish({
-      title: `Bet of the Day (${today})`,
+      title: `${T.zi_title} (${today})`,
       html: ziHtml,
-      excerptText: buildExcerptText("Bet of the Day", tickets.biletul_zilei),
+      excerpt: T.zi_excerpt(tickets.biletul_zilei),
       categorySlug: "biletul-zilei",
     });
   }
