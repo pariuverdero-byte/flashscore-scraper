@@ -13,7 +13,7 @@ jobs:
       # ------------------
       # GLOBAL CONTROLS
       # ------------------
-      DAY_OFFSET: "-1"        # 0 = today, -1 = yesterday
+      DAY_OFFSET: "0"        # 0 = today, -1 = yesterday
       INCLUDE_LIVE: "true"
 
       # ------------------
