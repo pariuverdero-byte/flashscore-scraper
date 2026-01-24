@@ -1,0 +1,48 @@
+name: Test scraper beturi.ro (RAW output)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-beturi:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ------------------
+      # SETUP
+      # ------------------
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-beturi-test
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      - name: Install dependencies
+        run: |
+          npm install cheerio@^1.0.0-rc.12 node-fetch@^3 \
+            --no-fund --no-audit --prefer-offline
+
+      # ------------------
+      # PAS 2 — TEST SCRAPER
+      # ------------------
+      - name: Run beturi.ro scraper (RAW)
+        run: node scrapers/beturi_ro.js
+
+      # ------------------
+      # ARTIFACTS
+      # ------------------
+      - name: Upload RAW HTML + logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beturi_ro_raw
+          path: |
+            beturi_ro_raw.html
