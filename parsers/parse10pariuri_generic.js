@@ -1,7 +1,7 @@
 import * as cheerio from "cheerio";
-import fetch from "node-fetch";
 
 export async function parse10pariuriGeneric(url, meta = {}) {
+  // 🔥 folosim fetch global (din undici_shim)
   const res = await fetch(url, {
     headers: {
       "User-Agent": "Mozilla/5.0",
