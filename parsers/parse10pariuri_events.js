@@ -1,15 +1,17 @@
 import * as cheerio from "cheerio";
 
-/**
- * Parsează o pagină 10pariuri și returnează EVENTURI (nu match unic)
- * @param {string} html
- * @param {string} url
- * @returns {Array}
- */
-export function parse10pariuriEvents(html, url) {
+export async function parse10pariuriEvents(url) {
+  const res = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0" },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch ${url}`);
+  }
+
+  const html = await res.text();
   const $ = cheerio.load(html);
 
-  // luăm DOAR textul util (nu meniuri)
   const rawText = $(".elementor-widget-text-editor")
     .map((_, el) => $(el).text())
     .get()
@@ -26,9 +28,7 @@ export function parse10pariuriEvents(html, url) {
   let current = null;
 
   for (const line of lines) {
-    /* -------------------------
-     * MATCH LINE
-     * ------------------------- */
+    // MATCH
     const matchLine = line.match(
       /([A-Z][A-Za-z\s]+?)\s*(?:vs|–|-)\s*([A-Z][A-Za-z\s]+)/i
     );
@@ -51,28 +51,7 @@ export function parse10pariuriEvents(html, url) {
 
     if (!current) continue;
 
-    /* -------------------------
-     * MARKET
-     * ------------------------- */
+    // MARKET
     if (
       /peste|sub|ambele|castiga|victorie|1x|x2|12|goluri|cornere/i.test(line)
     ) {
-      current.market = line;
-    }
-
-    /* -------------------------
-     * ODD
-     * ------------------------- */
-    const oddMatch = line.match(/cota\s+([0-9]+(\.[0-9]+)?)/i);
-    if (oddMatch) {
-      current.odd = parseFloat(oddMatch[1]);
-    }
-  }
-
-  if (current && current.market && current.odd) {
-    events.push(current);
-  }
-
-  // cleanup final
-  return events.filter(e => e.home && e.away && e.market && e.odd);
-}
