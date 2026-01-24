@@ -1,3 +1,6 @@
+// FIX pentru undici / axios
+global.File = class File {};
+
 import axios from "axios";
 import { parse10PariuriCota2 } from "../parsers/parse10pariuri_cota2.js";
 
