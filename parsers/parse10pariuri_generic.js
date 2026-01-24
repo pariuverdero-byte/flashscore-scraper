@@ -1,6 +1,18 @@
 import * as cheerio from "cheerio";
+import fetch from "node-fetch";
 
-export function parse10pariuriGeneric(html, url, meta = {}) {
+export async function parse10pariuriGeneric(url, meta = {}) {
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch ${url}: ${res.status}`);
+  }
+
+  const html = await res.text();
   const $ = cheerio.load(html);
 
   /* -------------------------
@@ -34,13 +46,13 @@ export function parse10pariuriGeneric(html, url, meta = {}) {
     .trim();
 
   /* -------------------------
-   * ODD (prima cotă găsită)
+   * ODD
    * ------------------------- */
   const oddMatch = contentText.match(/cota\s+(de\s+)?([0-9]+(\.[0-9]+)?)/i);
   const odd = oddMatch ? parseFloat(oddMatch[2]) : null;
 
   /* -------------------------
-   * SPORT (heuristic)
+   * SPORT
    * ------------------------- */
   let sport = meta.sport || "unknown";
 
@@ -54,7 +66,7 @@ export function parse10pariuriGeneric(html, url, meta = {}) {
   }
 
   /* -------------------------
-   * MARKET DETECTION
+   * MARKET
    * ------------------------- */
   let market = null;
 
@@ -77,9 +89,6 @@ export function parse10pariuriGeneric(html, url, meta = {}) {
     market = "1X2";
   }
 
-  /* -------------------------
-   * FINAL OBJECT
-   * ------------------------- */
   return {
     source: "10pariuri.ro",
     sourceKey: meta.key || null,
