@@ -6,21 +6,15 @@ const URL =
 
 function fetchHtml(url) {
   return new Promise((resolve, reject) => {
-    https
-      .get(
-        url,
-        {
-          headers: {
-            "User-Agent": "Mozilla/5.0",
-          },
-        },
-        (res) => {
-          let data = "";
-          res.on("data", (chunk) => (data += chunk));
-          res.on("end", () => resolve(data));
-        }
-      )
-      .on("error", reject);
+    https.get(
+      url,
+      { headers: { "User-Agent": "Mozilla/5.0" } },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => resolve(data));
+      }
+    ).on("error", reject);
   });
 }
 
@@ -33,6 +27,6 @@ async function run() {
 }
 
 run().catch((err) => {
-  console.error("ERROR:", err);
+  console.error(err);
   process.exit(1);
 });
