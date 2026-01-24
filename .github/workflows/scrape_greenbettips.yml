@@ -1,4 +1,4 @@
-name: Scrape Flashscore + Claudiu Pool + Generate Tickets + WordPress (EN)
+name: Scrape Flashscore + Claudiu Pool + TalkFootball + Generate Tickets + WordPress (EN)
 
 on:
   workflow_dispatch:
@@ -66,7 +66,7 @@ jobs:
             --no-fund --no-audit --prefer-offline
 
       # ------------------
-      # 1) FLASHScore FIXTURES
+      # 1) FLASHSCORE FIXTURES
       # ------------------
       - name: Scrape Flashscore fixtures
         timeout-minutes: 5
@@ -80,20 +80,41 @@ jobs:
         run: node scrape_claudiu_pool.js
 
       # ------------------
-      # 3) MASTER POOL → TICKETS
+      # 3) TALKFOOTBALL → SCRAPE
+      # ------------------
+      - name: Scrape TalkFootball
+        timeout-minutes: 5
+        run: node scrapers/scrape_talkfootball.js
+
+      # ------------------
+      # 4) TALKFOOTBALL → MATCH FLASHCORE
+      # ------------------
+      - name: Match TalkFootball to Flashscore
+        timeout-minutes: 5
+        run: node engine/match_talkfootball_flashscore.js
+
+      # ------------------
+      # 5) TALKFOOTBALL → ODD SOURCE
+      # ------------------
+      - name: Inject TalkFootball odds into MASTER pool
+        timeout-minutes: 5
+        run: node parsers/parse_talkfootball_as_odds.js
+
+      # ------------------
+      # 6) MASTER POOL → TICKETS
       # ------------------
       - name: Generate tickets from MASTER pool
         timeout-minutes: 5
         run: node generate_tickets_from_pool.js
 
       # ------------------
-      # 4) WORDPRESS HTML
+      # 7) WORDPRESS HTML
       # ------------------
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
       # ------------------
-      # 5) ARTIFACTS (DEBUG / TRACE)
+      # 8) ARTIFACTS (DEBUG / TRACE)
       # ------------------
       - name: Upload artifacts (raw)
         if: always()
@@ -104,6 +125,9 @@ jobs:
             matches.json
             claudiu_pool.json
             master_pool.json
+            artifacts/talkfootball_pool.json
+            artifacts/talkfootball_matched.json
+            artifacts/talkfootball_dropped.json
 
       - name: Upload artifacts (tickets)
         if: always()
@@ -117,9 +141,9 @@ jobs:
             biletul-zilei.html
 
       # ------------------
-      # 6) PUBLISH → GREENBETTIPS.COM
+      # 9) PUBLISH → GREENBETTIPS.COM
       # ------------------
-      - name: Publish posts to WordPress (greenbettips)
+      - name: Publish posts to WordPress (greenbettips.com)
         if: success()
         env:
           WP_URL: https://greenbettips.com
