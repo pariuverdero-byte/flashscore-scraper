@@ -1,9 +1,9 @@
-name: Scrape Flashscore + Claudiu Pool + Generate Tickets + WordPress
+name: Scrape Flashscore + Claudiu Pool + Generate Tickets + WordPress (RO)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 11 * * *"  # 07:30 Europe/Bucharest (14:30 UTC)
+    - cron: "30 11 * * *"  # 07:30 Europe/Bucharest
 
 jobs:
   scrape:
@@ -13,7 +13,7 @@ jobs:
       # ------------------
       # GLOBAL CONTROLS
       # ------------------
-      DAY_OFFSET: "0"              # 0=azi, -1 ieri, -4 test
+      DAY_OFFSET: "0"          # 0 = azi
       INCLUDE_LIVE: "true"
 
       # ------------------
@@ -22,25 +22,20 @@ jobs:
       CLAUDIU_MIN_ODD: "1.15"
 
       # ------------------
-      # PARIUVERDE TICKETS
+      # PARIUVERDE – COTA 2
       # ------------------
       PV_COTA2_MIN: "1.90"
       PV_COTA2_MAX: "2.50"
       PV_TARGET_COTA2: "2.05"
+      PV_COTA2_TOL: "0.00"
 
+      # ------------------
+      # PARIUVERDE – BILETUL ZILEI
+      # ------------------
       PV_ZI_MIN: "3.50"
       PV_ZI_MAX: "7.00"
       PV_TARGET_ZI: "5.00"
-
-      # tolerances (0 = strict)
-      PV_COTA2_TOL: "0.00"
       PV_ZI_TOL: "0.00"
-
-      # ------------------
-      # OPTIONAL ODDS API
-      # ------------------
-      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-      ODDS_REGION: "eu"
 
     steps:
       # ------------------
@@ -65,60 +60,34 @@ jobs:
           npm install cheerio@^1.0.0-rc.12 node-fetch@^3 --no-fund --no-audit --prefer-offline
 
       # ------------------
-      # 1) FLASHScore FIXTURES
+      # 1) FLASHScore FIXTURES (meciuri)
       # ------------------
       - name: Scrape Flashscore fixtures
         timeout-minutes: 5
         run: node scrape_mobi.js
 
       # ------------------
-      # 2) FLASHScore ODDS (optional)
+      # 2) CLAUDIU HOOD → POOL
       # ------------------
-      - name: Scrape Flashscore odds tab
-        timeout-minutes: 5
-        run: node scrape_odds_tab.js
-
-      - name: Merge The Odds API (optional)
-        timeout-minutes: 5
-        run: |
-          if [ -z "${ODDS_API_KEY}" ]; then
-            echo "ODDS_API_KEY missing -> skipping"
-          elif [ -f "scrape_odds_combo.js" ]; then
-            node scrape_odds_combo.js
-          else
-            echo "scrape_odds_combo.js not present"
-          fi
-
-      - name: Build odds_extra (Double Chance)
-        run: |
-          if [ -f "build_odds_extra_from_1x2.js" ]; then
-            node build_odds_extra_from_1x2.js
-          else
-            echo "build_odds_extra_from_1x2.js not present"
-          fi
-
-      # ------------------
-      # 3) CLAUDIU HOOD → POOL
-      # ------------------
-      - name: Build Claudiu Hood POOL (max extensiv)
+      - name: Build Claudiu Hood POOL
         timeout-minutes: 5
         run: node scrape_claudiu_pool.js
 
       # ------------------
-      # 4) PARIUVERDE TICKETS
+      # 3) GENERATE PARIUVERDE TICKETS
       # ------------------
       - name: Generate PariuVerde tickets from pool
         timeout-minutes: 5
         run: node generate_tickets_from_pool.js
 
       # ------------------
-      # 5) WORDPRESS HTML
+      # 4) GENERATE WORDPRESS HTML
       # ------------------
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
       # ------------------
-      # 6) ARTIFACTS (DEBUG)
+      # 5) ARTIFACTS (DEBUG / TRACE)
       # ------------------
       - name: Upload artifacts (raw)
         if: always()
@@ -126,13 +95,8 @@ jobs:
         with:
           name: raw-output
           path: |
-            list.html
             matches.json
-            odds.json
-            odds_tab.json
-            odds_extra.json
             claudiu_pool.json
-            claudiu_*.html
 
       - name: Upload artifacts (tickets)
         if: always()
@@ -141,17 +105,16 @@ jobs:
           name: tickets
           path: |
             tickets.json
-            tickets.md
             cota2.html
             biletul-zilei.html
 
       # ------------------
-      # 7) PUBLISH WORDPRESS
+      # 6) PUBLISH → PARIUVERDE.RO
       # ------------------
-      - name: Publish posts to WordPress
+      - name: Publish posts to WordPress (pariuverde.ro)
         if: success()
         env:
-          WP_URL: ${{ secrets.WP_URL }}
+          WP_URL: https://pariuverde.ro
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
         run: node publish_wp.js
