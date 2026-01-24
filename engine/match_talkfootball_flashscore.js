@@ -14,11 +14,15 @@ function normalizeTeam(str = '') {
     .trim()
 }
 
-function tfKickoffToIso(tfKickoff) {
-  // "01/24 19:00" → "2026-01-24 19:00"
-  const year = new Date().getFullYear()
+function tfKickoffToIso(tfKickoff, dayOffset = 0) {
+  // "01/24 19:00" → "YYYY-MM-DD HH:MM" + offset
+  const base = new Date()
+  base.setDate(base.getDate() + dayOffset)
+
+  const year = base.getFullYear()
   const [md, time] = tfKickoff.split(' ')
   const [mm, dd] = md.split('/')
+
   return `${year}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')} ${time}`
 }
 
@@ -43,40 +47,54 @@ const flashscore = JSON.parse(
 )
 
 /* =========================
-   Matching
+   Matching with DAY_OFFSET fallback
 ========================= */
 
 const matched = []
 const dropped = []
 
+const OFFSETS = [0, -1, 1]
+
 for (const tf of talkfootball) {
   const tfHome = normalizeTeam(tf.home)
   const tfAway = normalizeTeam(tf.away)
-  const tfKickoffIso = tfKickoffToIso(tf.kickoff)
 
-  const candidate = flashscore.find(fsEv => {
-    const fsHome = normalizeTeam(fsEv.home)
-    const fsAway = normalizeTeam(fsEv.away)
+  let found = null
+  let usedOffset = null
 
-    if (tfHome !== fsHome) return false
-    if (tfAway !== fsAway) return false
-    if (!kickoffClose(tfKickoffIso, fsEv.kickoff)) return false
+  for (const offset of OFFSETS) {
+    const tfKickoffIso = tfKickoffToIso(tf.kickoff, offset)
 
-    return true
-  })
+    const candidate = flashscore.find(fsEv => {
+      const fsHome = normalizeTeam(fsEv.home)
+      const fsAway = normalizeTeam(fsEv.away)
 
-  if (candidate) {
+      if (tfHome !== fsHome) return false
+      if (tfAway !== fsAway) return false
+      if (!kickoffClose(tfKickoffIso, fsEv.kickoff)) return false
+
+      return true
+    })
+
+    if (candidate) {
+      found = candidate
+      usedOffset = offset
+      break
+    }
+  }
+
+  if (found) {
     matched.push({
       ...tf,
-      kickoff_iso: tfKickoffIso,
-      flashscore_id: candidate.id,
-      flashscore_kickoff: candidate.kickoff,
+      kickoff_iso: tfKickoffToIso(tf.kickoff, usedOffset),
+      flashscore_id: found.id,
+      flashscore_kickoff: found.kickoff,
+      matched_day_offset: usedOffset,
       status: 'matched'
     })
   } else {
     dropped.push({
       ...tf,
-      kickoff_iso: tfKickoffIso,
       status: 'dropped_not_on_flashscore'
     })
   }
