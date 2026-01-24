@@ -13,7 +13,7 @@ jobs:
       # ------------------
       # GLOBAL CONTROLS
       # ------------------
-      DAY_OFFSET: "0"          # 0 = azi
+      DAY_OFFSET: "-1"          # 0 = azi
       INCLUDE_LIVE: "true"
 
       # ------------------
