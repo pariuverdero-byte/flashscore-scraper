@@ -1,4 +1,4 @@
-// 🔴 FIX CRITICAL pentru GitHub Actions + Node 18 + undici
+// FIX pentru GitHub Actions + Node fetch / undici
 global.File = class File {}
 
 import fs from 'fs'
@@ -29,6 +29,8 @@ const MAJOR_LEAGUES = [
 ]
 
 const MAX_PER_MARKET = 3
+const MIN_CONFIDENCE = 90
+const MAX_PER_LEAGUE = 2
 
 function normalizePick(market, raw) {
   const txt = raw.toLowerCase()
@@ -47,6 +49,7 @@ function normalizePick(market, raw) {
   }
 
   if (market === 'OVER_1_5') return 'OVER_1_5'
+
   return null
 }
 
@@ -60,19 +63,23 @@ async function scrapeMarket({ market, path }) {
   const $ = cheerio.load(html)
 
   const selected = []
-  const usedLeagues = new Set()
 
   $('table.predictions-table tbody tr[itemtype]').each((_, row) => {
     if (selected.length >= MAX_PER_MARKET) return
 
     const matchText = $(row).find('td:nth-child(2)').text().trim()
     const league = $(row).find('.league').text().trim()
-    const confidence = $(row).find('td:nth-last-child(2)').text().trim()
+    const confidenceText = $(row).find('td:nth-last-child(2)').text().trim()
     const predictionRaw = $(row).find('td:last-child strong').text().trim()
 
-    if (!matchText || !league || confidence !== '100%') return
+    if (!matchText || !league) return
     if (!MAJOR_LEAGUES.includes(league)) return
-    if (usedLeagues.has(league)) return
+
+    const confidence = parseInt(confidenceText)
+    if (isNaN(confidence) || confidence < MIN_CONFIDENCE) return
+
+    const leagueCount = selected.filter(e => e.league === league).length
+    if (leagueCount >= MAX_PER_LEAGUE) return
 
     const [home, away] = matchText.split(' - ').map(t => t.trim())
     const pick = normalizePick(market, predictionRaw)
@@ -90,10 +97,8 @@ async function scrapeMarket({ market, path }) {
       league,
       kickoff: `${date} ${time}`,
       pick,
-      confidence: 100
+      confidence
     })
-
-    usedLeagues.add(league)
   })
 
   return selected
@@ -118,6 +123,6 @@ async function run() {
 }
 
 run().catch(err => {
-  console.error(err)
+  console.error('[talkfootball] scrape failed', err)
   process.exit(1)
 })
