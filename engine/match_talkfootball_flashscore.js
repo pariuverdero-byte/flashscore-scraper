@@ -1,118 +1,99 @@
-import fs from 'fs'
+// engine/match_talkfootball_flashscore.js
+// FINAL — compatibil cu scrape_mobi.js (matches.json)
 
-/* =========================
-   Utils
-========================= */
+import fs from "fs";
 
-function normalizeTeam(str = '') {
+// ---------------- UTILS ----------------
+
+function normalizeTeam(str = "") {
   return str
     .toLowerCase()
-    .replace(/['’.]/g, '')
-    .replace(/fc|cf|sc|ac/g, '')
-    .replace(/[^a-z0-9 ]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
+    .replace(/['’.]/g, "")
+    .replace(/\b(fc|cf|sc|ac)\b/g, "")
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function tfKickoffToIso(tfKickoff, dayOffset = 0) {
-  // "01/24 19:00" → "YYYY-MM-DD HH:MM" + offset
-  const base = new Date()
-  base.setDate(base.getDate() + dayOffset)
-
-  const year = base.getFullYear()
-  const [md, time] = tfKickoff.split(' ')
-  const [mm, dd] = md.split('/')
-
-  return `${year}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')} ${time}`
+function tfKickoffToISO(tfKickoff) {
+  // "01/24 19:00" → "YYYY-01-24 19:00"
+  const year = new Date().getFullYear();
+  const [md, time] = tfKickoff.split(" ");
+  const [mm, dd] = md.split("/");
+  return `${year}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")} ${time}`;
 }
 
-function toTs(dateStr) {
-  return new Date(dateStr.replace(' ', 'T')).getTime()
+function toTs(s) {
+  return new Date(s.replace(" ", "T")).getTime();
 }
 
-function kickoffClose(a, b, minutes = 90) {
-  return Math.abs(toTs(a) - toTs(b)) <= minutes * 60 * 1000
+function kickoffClose(a, b, mins = 90) {
+  return Math.abs(toTs(a) - toTs(b)) <= mins * 60 * 1000;
 }
 
-/* =========================
-   Load data
-========================= */
+// ---------------- LOAD ----------------
 
 const talkfootball = JSON.parse(
-  fs.readFileSync('artifacts/talkfootball_pool.json', 'utf8')
-)
+  fs.readFileSync("artifacts/talkfootball_pool.json", "utf8")
+);
 
-const flashscore = JSON.parse(
-  fs.readFileSync('artifacts/flashscore_today.json', 'utf8')
-)
+// ⚠️ AICI E FIXUL
+const flashscoreRaw = JSON.parse(
+  fs.readFileSync("matches.json", "utf8")
+);
 
-/* =========================
-   Matching with DAY_OFFSET fallback
-========================= */
+// normalize matches.json
+const flashscore = (flashscoreRaw.matches || []).map(m => ({
+  id: m.id,
+  home: m.teams.split(" - ")[0],
+  away: m.teams.split(" - ")[1],
+  kickoff: `${new Date().getFullYear()}-${String(m.day || "").padStart(2,"0")}-${String(m.date || "").padStart(2,"0")} ${m.time}`,
+  url: m.url
+}));
 
-const matched = []
-const dropped = []
+// ---------------- MATCHING ----------------
 
-const OFFSETS = [0, -1, 1]
+const matched = [];
+const dropped = [];
 
 for (const tf of talkfootball) {
-  const tfHome = normalizeTeam(tf.home)
-  const tfAway = normalizeTeam(tf.away)
+  const tfISO = tfKickoffToISO(tf.kickoff);
 
-  let found = null
-  let usedOffset = null
-
-  for (const offset of OFFSETS) {
-    const tfKickoffIso = tfKickoffToIso(tf.kickoff, offset)
-
-    const candidate = flashscore.find(fsEv => {
-      const fsHome = normalizeTeam(fsEv.home)
-      const fsAway = normalizeTeam(fsEv.away)
-
-      if (tfHome !== fsHome) return false
-      if (tfAway !== fsAway) return false
-      if (!kickoffClose(tfKickoffIso, fsEv.kickoff)) return false
-
-      return true
-    })
-
-    if (candidate) {
-      found = candidate
-      usedOffset = offset
-      break
-    }
-  }
+  const found = flashscore.find(fsEv =>
+    normalizeTeam(fsEv.home) === normalizeTeam(tf.home) &&
+    normalizeTeam(fsEv.away) === normalizeTeam(tf.away) &&
+    kickoffClose(tfISO, fsEv.kickoff)
+  );
 
   if (found) {
     matched.push({
       ...tf,
-      kickoff_iso: tfKickoffToIso(tf.kickoff, usedOffset),
+      kickoff_iso: tfISO,
       flashscore_id: found.id,
       flashscore_kickoff: found.kickoff,
-      matched_day_offset: usedOffset,
-      status: 'matched'
-    })
+      status: "matched"
+    });
   } else {
     dropped.push({
       ...tf,
-      status: 'dropped_not_on_flashscore'
-    })
+      status: "dropped_not_on_flashscore"
+    });
   }
 }
 
-/* =========================
-   Output
-========================= */
+// ---------------- OUTPUT ----------------
+
+fs.mkdirSync("artifacts", { recursive: true });
 
 fs.writeFileSync(
-  'artifacts/talkfootball_matched.json',
+  "artifacts/talkfootball_matched.json",
   JSON.stringify(matched, null, 2)
-)
+);
 
 fs.writeFileSync(
-  'artifacts/talkfootball_dropped.json',
+  "artifacts/talkfootball_dropped.json",
   JSON.stringify(dropped, null, 2)
-)
+);
 
-console.log(`[matcher] matched: ${matched.length}`)
-console.log(`[matcher] dropped: ${dropped.length}`)
+console.log(`[matcher] matched: ${matched.length}`);
+console.log(`[matcher] dropped: ${dropped.length}`);
