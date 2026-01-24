@@ -1,5 +1,5 @@
 import axios from 'axios'
-import cheerio from 'cheerio'
+import * as cheerio from 'cheerio'
 import fs from 'fs'
 
 const BASE_URL = 'https://talkfootball.co.uk'
@@ -73,7 +73,6 @@ async function scrapeMarket({ market, path }) {
 
     const [home, away] = matchText.split(' - ').map(t => t.trim())
     const pick = normalizePick(market, predictionRaw)
-
     if (!pick) return
 
     const date = $(row).find('.date').text().trim()
