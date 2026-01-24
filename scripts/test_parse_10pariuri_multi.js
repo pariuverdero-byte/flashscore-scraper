@@ -1,11 +1,6 @@
 import { parse10pariuriGeneric } from "../parsers/parse10pariuri_generic.js";
 import { flashscoreMapMatch } from "../engine/flashscore_mapper.js";
 
-/**
- * Rulează cu:
- * node --require ./scripts/undici_shim.cjs scripts/test_parse_10pariuri_multi.js
- */
-
 const SOURCES = [
   {
     label: "TENIS_AZI",
@@ -39,6 +34,7 @@ async function run() {
 
     const parsed = await parse10pariuriGeneric(src.url);
 
+    // 🔥 AICI era lipsa
     parsed.match = await flashscoreMapMatch({
       sport: parsed.sport,
       rawText: parsed.rawText,
@@ -49,7 +45,6 @@ async function run() {
       JSON.stringify(
         {
           source: parsed.source,
-          sourceKey: parsed.sourceKey,
           url: parsed.url,
           title: parsed.title,
           publishedAt: parsed.publishedAt,
