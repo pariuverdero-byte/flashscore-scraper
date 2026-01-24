@@ -3,11 +3,16 @@ import * as cheerio from "cheerio";
 export function parse10PariuriGeneric(html, url, meta = {}) {
   const $ = cheerio.load(html);
 
+  /* -------------------------
+   * TITLE
+   * ------------------------- */
   const title =
     $('meta[property="og:title"]').attr("content") ||
     $("h1").first().text().trim();
 
-  // JSON-LD date
+  /* -------------------------
+   * DATE (JSON-LD)
+   * ------------------------- */
   let publishedAt = null;
   $('script[type="application/ld+json"]').each((_, el) => {
     try {
@@ -18,7 +23,9 @@ export function parse10PariuriGeneric(html, url, meta = {}) {
     } catch {}
   });
 
-  // text editorial
+  /* -------------------------
+   * CONTENT TEXT
+   * ------------------------- */
   const contentText = $(".elementor-widget-text-editor")
     .map((_, el) => $(el).text())
     .get()
@@ -26,32 +33,72 @@ export function parse10PariuriGeneric(html, url, meta = {}) {
     .replace(/\s+/g, " ")
     .trim();
 
-  // cota (prima gasita)
+  /* -------------------------
+   * ODD (prima cota gasita)
+   * ------------------------- */
   const oddMatch = contentText.match(/cota\s+(de\s+)?([0-9]+(\.[0-9]+)?)/i);
   const odd = oddMatch ? parseFloat(oddMatch[2]) : null;
 
-  // sport heuristic
+  /* -------------------------
+   * SPORT (heuristic)
+   * ------------------------- */
   let sport = meta.sport || "unknown";
-  if (/tenis/i.test(title) || /ATP|WTA|set/i.test(contentText)) {
+
+  if (
+    /tenis|atp|wta|set\s+[0-9]/i.test(title) ||
+    /atp|wta|game|set/i.test(contentText)
+  ) {
     sport = "tennis";
+  } else if (/goluri|echipe|meci|repriza/i.test(contentText)) {
+    sport = "football";
   }
 
-  // market heuristic
+  /* -------------------------
+   * MARKET DETECTION (FIXED)
+   * ------------------------- */
   let market = null;
-  if (/peste\s+1\.5\s+goluri\s+prima\s+repriza/i.test(contentText))
-    market = "Over 1.5 goals 1st half";
-  else if (/peste\s+2\.5\s+goluri/i.test(contentText))
-    market = "Over 2.5 goals";
-  else if (/sub\s+2\.5\s+goluri/i.test(contentText))
-    market = "Under 2.5 goals";
-  else if (/ambele\s+echipe\s+marcheaza/i.test(contentText))
-    market = "BTTS";
-  else if (/castiga|victorie/i.test(contentText))
-    market = sport === "tennis" ? "Match Winner" : "1X2";
 
+  // ✅ Over 1.5 goals 1st half  (FIX pentru COTA2)
+  if (
+    /peste\s+1\.5\s+goluri\s+(in\s+)?prima\s+repriza/i.test(contentText)
+  ) {
+    market = "Over 1.5 goals 1st half";
+  }
+
+  // Over 2.5 goals
+  else if (/peste\s+2\.5\s+goluri/i.test(contentText)) {
+    market = "Over 2.5 goals";
+  }
+
+  // Under 2.5 goals
+  else if (/sub\s+2\.5\s+goluri/i.test(contentText)) {
+    market = "Under 2.5 goals";
+  }
+
+  // BTTS
+  else if (/ambele\s+echipe\s+marcheaza/i.test(contentText)) {
+    market = "BTTS";
+  }
+
+  // Tennis – match winner
+  else if (
+    sport === "tennis" &&
+    /castiga|victorie|winner/i.test(contentText)
+  ) {
+    market = "Match Winner";
+  }
+
+  // Football – generic win / 1X2
+  else if (sport === "football" && /castiga|victorie/i.test(contentText)) {
+    market = "1X2";
+  }
+
+  /* -------------------------
+   * FINAL OBJECT
+   * ------------------------- */
   return {
     source: "10pariuri.ro",
-    sourceKey: meta.key,
+    sourceKey: meta.key || null,
     url,
     title,
     publishedAt,
@@ -59,6 +106,6 @@ export function parse10PariuriGeneric(html, url, meta = {}) {
     market,
     odd,
     confidence: odd ? "medium" : "low",
-    rawText: contentText.slice(0, 500), // debug safe
+    rawText: contentText.slice(0, 600),
   };
 }
