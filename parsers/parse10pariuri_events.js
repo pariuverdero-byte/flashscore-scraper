@@ -1,8 +1,15 @@
 import * as cheerio from "cheerio";
 
+/**
+ * Extract events (multiple) from a 10pariuri article
+ * @param {string} url
+ * @returns {Promise<Array>}
+ */
 export async function parse10pariuriEvents(url) {
   const res = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0" },
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+    },
   });
 
   if (!res.ok) {
@@ -28,7 +35,7 @@ export async function parse10pariuriEvents(url) {
   let current = null;
 
   for (const line of lines) {
-    // MATCH
+    // MATCH LINE
     const matchLine = line.match(
       /([A-Z][A-Za-z\s]+?)\s*(?:vs|–|-)\s*([A-Z][A-Za-z\s]+)/i
     );
@@ -55,3 +62,19 @@ export async function parse10pariuriEvents(url) {
     if (
       /peste|sub|ambele|castiga|victorie|1x|x2|12|goluri|cornere/i.test(line)
     ) {
+      current.market = line;
+    }
+
+    // ODD
+    const oddMatch = line.match(/cota\s+([0-9]+(\.[0-9]+)?)/i);
+    if (oddMatch) {
+      current.odd = parseFloat(oddMatch[1]);
+    }
+  }
+
+  if (current && current.market && current.odd) {
+    events.push(current);
+  }
+
+  return events.filter(e => e.home && e.away && e.market && e.odd);
+}
