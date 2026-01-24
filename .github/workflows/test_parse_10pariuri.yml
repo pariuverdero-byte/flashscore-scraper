@@ -17,23 +17,7 @@ jobs:
           node-version: 18
 
       - name: Install dependencies
-        run: |
-          npm install axios cheerio
+        run: npm install
 
-      - name: Run parse10pariuri_cota2
-        run: |
-          node -e "
-          import axios from 'axios';
-          import { parse10PariuriCota2 } from './parsers/parse10pariuri_cota2.js';
-
-          const url = 'https://10pariuri.ro/biletul-zilei-la-pariuri/cota-2-24012026/';
-
-          const res = await axios.get(url, {
-            headers: { 'User-Agent': 'Mozilla/5.0' }
-          });
-
-          const parsed = parse10PariuriCota2(res.data, url);
-
-          console.log('==== PARSE RESULT ====');
-          console.log(JSON.stringify(parsed, null, 2));
-          "
+      - name: Run parser test
+        run: node scripts/test_parse_10pariuri.js
