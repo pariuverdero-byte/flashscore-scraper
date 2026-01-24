@@ -1,0 +1,39 @@
+name: Test parse10pariuri_cota2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-parser:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: |
+          npm install axios cheerio
+
+      - name: Run parse10pariuri_cota2
+        run: |
+          node -e "
+          import axios from 'axios';
+          import { parse10PariuriCota2 } from './parsers/parse10pariuri_cota2.js';
+
+          const url = 'https://10pariuri.ro/biletul-zilei-la-pariuri/cota-2-24012026/';
+
+          const res = await axios.get(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0' }
+          });
+
+          const parsed = parse10PariuriCota2(res.data, url);
+
+          console.log('==== PARSE RESULT ====');
+          console.log(JSON.stringify(parsed, null, 2));
+          "
