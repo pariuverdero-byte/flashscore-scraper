@@ -1,10 +1,9 @@
 // generate_tickets_from_pool.js
-// FINAL VERSION — works with master_pool.json (multi-source, Flashscore-safe)
-// Cota 2 = STRICT | Biletul Zilei = RELAXED
+// FINAL VERSION — relaxed Biletul Zilei (min 1 sel, min odd 2.20)
 
 import fs from "fs/promises";
 
-const POOL_FILE = "master_pool.json"; // 🔴 IMPORTANT
+const POOL_FILE = "claudiu_pool.json";
 
 // ---------------- RULES ----------------
 
@@ -29,16 +28,14 @@ const product = (a) => a.reduce((x, y) => x * y, 1);
 
 function normalizeFp(selections) {
   return selections
-    .map(s => `${s.match_id}:${s.market_raw || s.bet_text_ro || s.bet_text_en}`)
+    .map(s => `${s.match_id}:${s.market_raw}`)
     .sort()
     .join("|");
 }
 
-// keep only best odd per match
 function onePerMatch(list) {
   const m = new Map();
   for (const s of list) {
-    if (!s.match_id || !s.odd) continue;
     if (!m.has(s.match_id) || s.odd > m.get(s.match_id).odd) {
       m.set(s.match_id, s);
     }
@@ -54,9 +51,8 @@ function mdTicket(title, t) {
   }
   out.push(`- **Cota totală:** ${t.product.toFixed(2)}`, "");
   for (const s of t.selections) {
-    out.push(`- ${s.teams} — **${s.market_raw || s.bet_text_ro || s.bet_text_en} @ ${s.odd}**`);
-    if (s.flashscore_url) out.push(`  - Flashscore: ${s.flashscore_url}`);
-    if (s.post_url) out.push(`  - Sursă: ${s.post_url}`);
+    out.push(`- ${s.teams} — **${s.market_raw} @ ${s.odd}**`);
+    if (s.url) out.push(`  - Link: ${s.url}`);
     out.push("");
   }
   return out;
@@ -128,41 +124,29 @@ function pickBiletZi(pool, forbiddenFp, usedMatches) {
   const raw = await fs.readFile(POOL_FILE, "utf8");
   const poolData = JSON.parse(raw);
 
-  const allSelections = poolData.selections || [];
-  const pool = onePerMatch(allSelections);
-
-  const date = poolData.generated_at
-    ? poolData.generated_at.slice(0, 10)
-    : new Date().toISOString().slice(0, 10);
-
-  console.log(`[POOL] total selections: ${allSelections.length}`);
-  console.log(`[POOL] unique matches: ${pool.length}`);
+  const pool = onePerMatch(poolData.selections || []);
+  const date = poolData.date;
 
   const forbiddenFp = new Set();
 
-  // optional heuristic: avoid copying source-native tickets
+  // blacklist Claudiu tickets if present
   const bySource = {};
-  for (const s of allSelections) {
+  for (const s of poolData.selections || []) {
     bySource[s.source] = bySource[s.source] || [];
     bySource[s.source].push(s);
   }
-
   if (bySource.cota2?.length >= 2)
     forbiddenFp.add(normalizeFp(bySource.cota2.slice(0, 2)));
-
   if (bySource.biletul_zilei?.length >= 4)
     forbiddenFp.add(normalizeFp(bySource.biletul_zilei.slice(0, 4)));
 
-  // ---- Generate Cota 2 ----
   const cota2 = pickCota2(pool, forbiddenFp);
   const usedMatches = new Set(cota2?.selections.map(s => s.match_id) || []);
-
-  // ---- Generate Biletul Zilei (RELAXED) ----
   const zi = pickBiletZi(pool, forbiddenFp, usedMatches);
 
   const out = {
     date,
-    source: "master_pool",
+    source: "claudiu_pool",
     pool_size: pool.length,
     bilet_cota2: cota2
       ? { product: +cota2.product.toFixed(3), selections: cota2.selections }
@@ -184,5 +168,5 @@ function pickBiletZi(pool, forbiddenFp, usedMatches) {
   ];
   await fs.writeFile("tickets.md", md.join("\n"));
 
-  console.log("✅ Tickets generated from MASTER POOL");
+  console.log("[OK] Tickets generated from claudiu_pool.json");
 })();
