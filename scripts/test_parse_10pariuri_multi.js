@@ -1,4 +1,4 @@
-import parse10pariuriGeneric from "../parsers/parse10pariuri_generic.js";
+import { parse10pariuriGeneric } from "../parsers/parse10pariuri_generic.js";
 import { flashscoreMapMatch } from "../engine/flashscore_mapper.js";
 
 /**
