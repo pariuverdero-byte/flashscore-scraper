@@ -11,14 +11,14 @@ on:
         description: 'How many newest posts to re-scan'
         default: '15'
   schedule:
-    # Din oră în oră noaptea + o rulare dimineața (tunează după nevoie)
-    - cron: "0 18-23 * * *"   # 21:00-00:00 RO (UTC+3 ⇒ 18-21 UTC)
-    - cron: "0 0-2 * * *"     # 03:00-05:00 RO (UTC+3 ⇒ 00-02 UTC)
-    - cron: "0 5 * * *"       # 08:00 RO (UTC+3 ⇒ 05:00 UTC)
+    - cron: "0 18-23 * * *"
+    - cron: "0 0-2 * * *"
+    - cron: "0 5 * * *"
 
 jobs:
   verify:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -26,7 +26,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Cache npm dir
+      - name: Cache npm
         uses: actions/cache@v4
         with:
           path: ~/.npm
@@ -38,24 +38,33 @@ jobs:
         run: |
           npm install cheerio@^1.0.0-rc.12 node-fetch@^3 --no-fund --no-audit --prefer-offline
 
-      # Normal (scheduled) run – no recheck
-      - name: Verify and update posts (scheduled)
-        if: ${{ github.event_name != 'workflow_dispatch' }}
+      # -------------------------------
+      # VERIFY – PARIUVERDE.RO (RO)
+      # -------------------------------
+      - name: Verify tickets (pariuverde.ro)
+        if: success()
         env:
-          WP_BASE: ${{ secrets.WP_URL }}
+          LANG: "ro"
+          WP_BASE: https://pariuverde.ro
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+          HOMEPAGE_ID: "11"
           MAX_POSTS_PER_CAT: "8"
-          RECHECK_ONCE: "0"
+          RECHECK_ONCE: ${{ inputs.recheck && '1' || '0' }}
+          RECHECK_LAST_N: ${{ inputs.recheck_last_n }}
         run: node verify_and_update_wp.js
 
-      # Manual run – optional one-time recheck of newest N posts
-      - name: Verify and update posts (manual recheck)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      # -------------------------------
+      # VERIFY – GREENBETTIPS.COM (EN)
+      # -------------------------------
+      - name: Verify tickets (greenbettips.com)
+        if: success()
         env:
-          WP_BASE: ${{ secrets.WP_URL }}
+          LANG: "en"
+          WP_BASE: https://greenbettips.com
           WP_USER: ${{ secrets.WP_USER }}
-          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
+          HOMEPAGE_ID: "2"
           MAX_POSTS_PER_CAT: "8"
           RECHECK_ONCE: ${{ inputs.recheck && '1' || '0' }}
           RECHECK_LAST_N: ${{ inputs.recheck_last_n }}
