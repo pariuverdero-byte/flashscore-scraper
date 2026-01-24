@@ -1,50 +1,66 @@
-import https from "https";
-
-import { SOURCES_10PARIURI } from "../parsers/10pariuri_sources.js";
-import { parse10PariuriGeneric } from "../parsers/parse10pariuri_generic.js";
-import { extractMatch } from "../parsers/extract_match.js";
+import { parse10pariuriGeneric } from "../parsers/parse10pariuri_generic.js";
 import { flashscoreMapMatch } from "../engine/flashscore_mapper.js";
 
-function fetchHtml(url) {
-  return new Promise((resolve, reject) => {
-    https
-      .get(
-        url,
-        { headers: { "User-Agent": "Mozilla/5.0" } },
-        (res) => {
-          let data = "";
-          res.on("data", (c) => (data += c));
-          res.on("end", () => resolve(data));
-        }
-      )
-      .on("error", reject);
-  });
-}
+/**
+ * Test runner pentru mai multe surse 10pariuri
+ * Rulează cu:
+ * node --require ./scripts/undici_shim.cjs scripts/test_parse_10pariuri_multi.js
+ */
+
+const SOURCES = [
+  {
+    label: "TENIS_AZI",
+    url: "https://10pariuri.ro/ponturi-pariuri-azi/tenis-24-01-2026/",
+  },
+  {
+    label: "COTA2",
+    url: "https://10pariuri.ro/biletul-zilei-la-pariuri/cota-2-24012026/",
+  },
+  {
+    label: "COTA3",
+    url: "https://10pariuri.ro/biletul-zilei-la-pariuri/fotbal-cota-3-24012026/",
+  },
+  {
+    label: "COTA_MARE",
+    url: "https://10pariuri.ro/biletul-zilei-la-pariuri/cota-mare-24012026/",
+  },
+  {
+    label: "BAN_PE_BAN",
+    url: "https://10pariuri.ro/biletul-zilei-la-pariuri/bilet-fotbal-ban-pe-ban-ion-dan-24012026/",
+  },
+  {
+    label: "PONTUL_ZILEI",
+    url: "https://10pariuri.ro/pontul-zilei/pontul-zilei-24012026/",
+  },
+];
 
 async function run() {
-  for (const src of SOURCES_10PARIURI) {
-    const html = await fetchHtml(src.url);
-    const parsed = parse10PariuriGeneric(html, src.url, src);
+  for (const src of SOURCES) {
+    console.log("\n====", src.label, "====");
 
-    let match = extractMatch({
+    const parsed = await parse10pariuriGeneric(src.url);
+
+    // 🔥 AICI este integrarea corectă cu motorul Flashscore
+    parsed.match = await flashscoreMapMatch({
       sport: parsed.sport,
-      title: parsed.title,
       rawText: parsed.rawText,
+      log: console, // ← LOG TRANSPARENT
     });
 
-    if (!match) {
-      match = await flashscoreMapMatch({
-        sport: parsed.sport,
-        rawText: parsed.rawText,
-      });
-    }
-
-    console.log(`\n==== ${src.key.toUpperCase()} ====`);
+    // Pretty print final
     console.log(
       JSON.stringify(
         {
-          ...parsed,
-          match,
+          source: parsed.source,
+          sourceKey: parsed.sourceKey,
+          url: parsed.url,
+          title: parsed.title,
+          publishedAt: parsed.publishedAt,
+          sport: parsed.sport,
+          market: parsed.market,
+          odd: parsed.odd,
+          confidence: parsed.confidence,
+          match: parsed.match,
         },
         null,
         2
@@ -53,7 +69,7 @@ async function run() {
   }
 }
 
-run().catch((err) => {
-  console.error(err);
+run().catch((e) => {
+  console.error("❌ TEST FAILED:", e);
   process.exit(1);
 });
