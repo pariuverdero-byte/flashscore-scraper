@@ -1,5 +1,4 @@
-// publish_wp.js
-// FINAL & GUARANTEED — works with or without index.php
+// publish_wp.js — FINAL FIX (pariuverde + greenbettips compatible)
 
 import fs from "fs/promises";
 import fetch from "node-fetch";
@@ -7,20 +6,26 @@ import fetch from "node-fetch";
 const { WP_URL, WP_USER, WP_APP_PASS } = process.env;
 
 if (!WP_URL || !WP_USER || !WP_APP_PASS) {
-  console.error("❌ Lipsesc WP_URL / WP_USER / WP_APP_PASS");
+  console.error("❌ Missing WP_URL / WP_USER / WP_APP_PASS");
   process.exit(1);
 }
 
-// ---------------------------------
-// NORMALIZE WP_URL (NO DOUBLE PATHS)
-// ---------------------------------
-const BASE_API = WP_URL.replace(/\/$/, ""); // remove trailing slash
+// =====================================================
+// 🔧 NORMALIZE REST API BASE (AUTO-DETECT index.php)
+// =====================================================
+function normalizeApiBase(url) {
+  let u = url.replace(/\/$/, "");
 
-const POSTS_ENDPOINT = BASE_API.endsWith("/posts")
-  ? BASE_API
-  : `${BASE_API}/posts`;
+  // dacă deja conține wp-json → îl folosim ca atare
+  if (u.includes("/wp-json/wp/v2")) return u;
 
-const CATEGORIES_ENDPOINT = BASE_API.replace(/\/posts$/, "") + "/categories";
+  // fallback sigur (merge pe orice hosting)
+  return `${u}/index.php/wp-json/wp/v2`;
+}
+
+const API_BASE = normalizeApiBase(WP_URL);
+const POSTS_ENDPOINT = `${API_BASE}/posts`;
+const CATEGORIES_ENDPOINT = `${API_BASE}/categories`;
 
 const auth =
   "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASS}`).toString("base64");
@@ -28,13 +33,15 @@ const auth =
 const read = async (p) =>
   fs.readFile(p, "utf8").catch(() => null);
 
-// ---------- CATEGORY ----------
+// =====================================================
+// CATEGORY
+// =====================================================
 async function getCategoryId(slug) {
   try {
-    const r = await fetch(
-      `${CATEGORIES_ENDPOINT}?slug=${slug}`,
-      { headers: { Authorization: auth } }
-    );
+    const r = await fetch(`${CATEGORIES_ENDPOINT}?slug=${slug}`, {
+      headers: { Authorization: auth },
+    });
+    if (!r.ok) return null;
     const j = await r.json();
     return j?.[0]?.id || null;
   } catch {
@@ -42,68 +49,68 @@ async function getCategoryId(slug) {
   }
 }
 
-// ---------- EXCERPT TEXT ----------
+// =====================================================
+// EXCERPT
+// =====================================================
 function buildExcerptText(title, ticket) {
   if (!ticket || !ticket.selections?.length) {
-    return `${title} – football analysis and betting tips.`;
+    return `${title} – football betting tips.`;
   }
-
-  const n = ticket.selections.length;
-  const odd = ticket.product;
-
-  return `${title} with ${n} selections • Total odds ${odd}`;
+  return `${title} with ${ticket.selections.length} selections • Total odds ${ticket.product}`;
 }
 
-// ---------- PUBLISH ----------
+// =====================================================
+// PUBLISH
+// =====================================================
 async function publish({ title, html, excerptText, categorySlug }) {
   if (!html || !html.trim()) {
-    console.log(`ℹ Conținut gol → skip "${title}"`);
+    console.log(`ℹ Empty content → skip "${title}"`);
     return;
   }
 
   let categories = [];
   if (categorySlug) {
     const catId = await getCategoryId(categorySlug);
-    if (catId) {
-      categories = [catId];
-      console.log(`ℹ Categoria setată: ${categorySlug}`);
-    } else {
-      console.log(`⚠ Categoria lipsă (${categorySlug}) → public fără categorie`);
-    }
+    if (catId) categories = [catId];
+    else console.log(`⚠ Category missing: ${categorySlug}`);
   }
 
   const content = `
 <p><strong>${excerptText}</strong></p>
 <!--more-->
 ${html}
-  `.trim();
-
-  const body = {
-    title,
-    status: "publish",
-    content,
-    categories
-  };
+`.trim();
 
   const r = await fetch(POSTS_ENDPOINT, {
     method: "POST",
     headers: {
       Authorization: auth,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify({
+      title,
+      status: "publish",
+      content,
+      categories,
+    }),
   });
 
   if (!r.ok) {
-    console.error(`❌ Eroare publicare "${title}"`, r.status, await r.text());
+    console.error(
+      `❌ Publish failed "${title}"`,
+      r.status,
+      await r.text()
+    );
     return;
   }
 
   const data = await r.json();
-  console.log(`✅ Publicat: ${data.link}`);
+  console.log(`✅ Published: ${data.link}`);
 }
 
-// ---------- MAIN ----------
+// =====================================================
+// MAIN
+// =====================================================
 (async () => {
   const today = new Date().toLocaleDateString("en-GB");
 
@@ -118,10 +125,8 @@ ${html}
       title: `Odds 2 Ticket (${today})`,
       html: cota2Html,
       excerptText: buildExcerptText("Odds 2 Ticket", tickets.bilet_cota2),
-      categorySlug: "cota-2"
+      categorySlug: "cota-2",
     });
-  } else {
-    console.log("ℹ cota2.html lipsă — nu public");
   }
 
   if (ziHtml && tickets.biletul_zilei) {
@@ -129,9 +134,7 @@ ${html}
       title: `Bet of the Day (${today})`,
       html: ziHtml,
       excerptText: buildExcerptText("Bet of the Day", tickets.biletul_zilei),
-      categorySlug: "biletul-zilei"
+      categorySlug: "biletul-zilei",
     });
-  } else {
-    console.log("ℹ biletul-zilei.html lipsă — nu public");
   }
 })();
