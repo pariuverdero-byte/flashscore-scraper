@@ -1,125 +1,138 @@
 // parsers/parse_talkfootball_as_odds.js
-// Injectează TalkFootball ca odd source în master_pool.json (structură compatibilă cu generatorul existent)
+// FINAL — TalkFootball ca odd source, FULL compat cu master_pool + WP
 
 import fs from "fs/promises";
 
-const TF_MATCHED = "artifacts/talkfootball_matched.json";
-const CLAUDIU = "claudiu_pool.json";
-const MASTER = "master_pool.json";
+/* =========================
+ * FILES
+ * ========================= */
+const INPUT_MATCHED = "artifacts/talkfootball_matched.json";
+const MASTER_POOL  = "claudiu_pool.json";
+const OUTPUT_POOL  = "master_pool.json";
 
-function safe(x) {
-  return (x ?? "").toString().trim();
+/* =========================
+ * UTILS
+ * ========================= */
+const safe = (x) => (x ?? "").toString().trim();
+
+function parseKickoffToTime(kickoff) {
+  // expects "YYYY-MM-DD HH:MM"
+  if (!kickoff) return "";
+  const m = kickoff.match(/\b(\d{1,2}:\d{2})\b/);
+  return m ? m[1] : "";
 }
 
-function impliedOdd(conf) {
-  const c = Number(conf);
-  if (!isFinite(c)) return null;
-  if (c >= 100) return 1.30;
-  if (c >= 95) return 1.40;
-  if (c >= 90) return 1.55;
-  if (c >= 85) return 1.70;
-  return null;
-}
-
-function mapMarket(tf) {
-  // păstrăm compatibil cu restul flow-ului
-  if (tf.market === "1X2") return safe(tf.pick);          // 1 / X / 2 / 1X / 2X
-  if (tf.market === "OVER_1_5") return "OVER_1_5";
-  if (tf.market === "BTTS") return safe(tf.pick);         // BTTS_YES / BTTS_NO
-  return null;
-}
-
+/* =========================
+ * MARKET → BET TEXT
+ * ========================= */
 function betText(tf) {
-  const m = safe(tf.market);
-  const p = safe(tf.pick);
+  switch (tf.market) {
+    case "1X2":
+      if (tf.pick === "1") return "Victorie gazde";
+      if (tf.pick === "X") return "Egal";
+      if (tf.pick === "2") return "Victorie oaspeți";
+      if (tf.pick === "1X") return "Șansă dublă 1X";
+      if (tf.pick === "X2") return "Șansă dublă X2";
+      if (tf.pick === "12") return "Șansă dublă 12";
+      return "1X2";
 
-  if (m === "1X2") {
-    if (p === "1") return "Victorie gazde";
-    if (p === "2") return "Victorie oaspeți";
-    if (p === "1X") return "Gazde sau egal";
-    if (p === "2X") return "Oaspeți sau egal";
-    if (p === "X") return "Egal";
+    case "BTTS":
+      if (tf.pick === "BTTS_YES") return "Ambele echipe marchează";
+      if (tf.pick === "BTTS_NO") return "Ambele echipe NU marchează";
+      return "BTTS";
+
+    case "OVER_1_5":
+      return "Peste 1.5 goluri";
+
+    default:
+      return "Pariu special";
   }
-  if (m === "OVER_1_5") return "Peste 1.5 goluri";
-  if (p === "BTTS_YES") return "Ambele echipe marchează";
-  if (p === "BTTS_NO") return "Cel puțin o echipă nu marchează";
-  return "Pariu propus";
 }
 
-async function readJson(path, fallback) {
-  const raw = await fs.readFile(path, "utf8").catch(() => null);
-  if (!raw) return fallback;
-  try { return JSON.parse(raw); } catch { return fallback; }
+/* =========================
+ * MARKET → INTERNAL TYPE
+ * ========================= */
+function detectBetType(tf) {
+  if (tf.market === "BTTS") return "btts";
+  if (tf.market === "OVER_1_5") return "goals_ou";
+  return "1x2";
 }
 
+function detectParams(tf) {
+  if (tf.market === "OVER_1_5") {
+    return { side: "over", line: 1.5 };
+  }
+  if (tf.market === "BTTS") {
+    return { side: tf.pick === "BTTS_YES" ? "yes" : "no" };
+  }
+  return {};
+}
+
+/* =========================
+ * MAIN
+ * ========================= */
 (async () => {
-  // 1) Claudiu pool (baza)
-  const claudiu = await readJson(CLAUDIU, null);
-  if (!claudiu) {
-    console.error("❌ claudiu_pool.json lipsă");
-    process.exit(1);
-  }
+  // ---------- load inputs ----------
+  const matchedRaw = await fs.readFile(INPUT_MATCHED, "utf8");
+  const matched = JSON.parse(matchedRaw);
 
-  // 2) Master pool (dacă nu există, îl creăm din Claudiu)
-  let master = await readJson(MASTER, null);
-  if (!master || !Array.isArray(master.selections)) {
-    master = {
-      date: claudiu.date,
-      source: "master_pool",
-      selections: (claudiu.selections || []).slice()
-    };
-  }
+  const poolRaw = await fs.readFile(MASTER_POOL, "utf8");
+  const pool = JSON.parse(poolRaw);
 
-  // index pentru dedupe: match_id|bet_type|params
-  const keyOf = (s) =>
-    `${safe(s.match_id)}|${safe(s.bet_type)}|${JSON.stringify(s.params || {})}`;
-
-  const existing = new Set(master.selections.map(keyOf));
-
-  // 3) TalkFootball matched
-  const tfMatched = await readJson(TF_MATCHED, []);
-  if (!Array.isArray(tfMatched) || tfMatched.length === 0) {
-    // chiar și fără TF, scriem master_pool.json (important)
-    await fs.writeFile(MASTER, JSON.stringify(master, null, 2), "utf8");
-    console.log("ℹ️ TalkFootball matched empty → master_pool.json created from Claudiu only");
-    return;
-  }
-
-  // 4) Transform TF → selecții compatibile
+  const selections = pool.selections || [];
   let added = 0;
 
-  for (const tf of tfMatched) {
-    const bet_type = mapMarket(tf);
-    const odd = impliedOdd(tf.confidence);
-    if (!bet_type || !odd) continue;
+  for (const tf of matched) {
+    if (!tf.flashscore_id) continue;
 
-    // params compatibile (minim)
-    let params = {};
-    if (bet_type === "OVER_1_5") params = { side: "over", line: 1.5 };
-    if (bet_type === "BTTS_YES") params = { side: "yes" };
-    if (bet_type === "BTTS_NO") params = { side: "no" };
-    if (["1", "2", "X", "1X", "2X"].includes(bet_type)) params = { pick: bet_type };
+    // -------- ODD derivation --------
+    let odd;
+    if (tf.market === "1X2") odd = 1.55;
+    else if (tf.market === "OVER_1_5") odd = 1.35;
+    else if (tf.market === "BTTS") odd = 1.70;
+    else continue;
+
+    const bet_type = detectBetType(tf);
+    const params = detectParams(tf);
 
     const sel = {
+      // 🔑 IDENTITATE
       match_id: safe(tf.flashscore_id),
       flashscore_url: `https://www.flashscore.mobi/match/${safe(tf.flashscore_id)}/`,
+
+      // 🔑 AFIȘARE WP
       teams: `${safe(tf.home)} - ${safe(tf.away)}`,
+      time: parseKickoffToTime(tf.flashscore_kickoff || tf.kickoff),
+      country: safe(tf.country || ""),
+      competition: safe(tf.league || ""),
+
+      // 🔑 BET
       bet_type,
-      bet_text_ro: betText(tf),
-      bet_text_en: "",
-      params,
+      market_raw: tf.market,
       odd: Number(odd.toFixed(3)),
-      source: "talkfootball"
+      source: "talkfootball",
+
+      // 🔑 META EDITORIAL (CRITICAL)
+      meta: {
+        bet_text: betText(tf),
+        source: "talkfootball"
+      },
+
+      // 🔑 PARAMS (verify-safe)
+      params
     };
 
-    const k = keyOf(sel);
-    if (existing.has(k)) continue;
-
-    master.selections.push(sel);
-    existing.add(k);
+    selections.push(sel);
     added++;
   }
 
-  await fs.writeFile(MASTER, JSON.stringify(master, null, 2), "utf8");
-  console.log(`✅ TalkFootball odds added to master_pool.json: +${added}`);
+  const out = {
+    date: pool.date,
+    source: "master_pool",
+    selections
+  };
+
+  await fs.writeFile(OUTPUT_POOL, JSON.stringify(out, null, 2), "utf8");
+
+  console.log(`✅ TalkFootball odds added: +${added}`);
 })();
