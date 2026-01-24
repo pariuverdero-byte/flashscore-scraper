@@ -1,38 +1,37 @@
-import https from "https";
-
-function fetch(url) {
-  return new Promise((resolve, reject) => {
-    https
-      .get(
-        url,
-        { headers: { "User-Agent": "Mozilla/5.0" } },
-        (res) => {
-          let data = "";
-          res.on("data", (c) => (data += c));
-          res.on("end", () => resolve(data));
-        }
-      )
-      .on("error", reject);
-  });
+/**
+ * Curăță prefixe editoriale frecvente
+ */
+function cleanText(text) {
+  return text
+    .replace(/meciul ales pentru acest bilet este/i, "")
+    .replace(/meciul ales este/i, "")
+    .replace(/pentru acest bilet/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
- * 🔹 STEP 1 — strict match extraction (corect)
+ * 🔹 STEP 1 — strict match extraction (fotbal + tenis)
  */
 function extractMatchRegex(rawText) {
+  const text = cleanText(rawText);
+
   const patterns = [
-    // Team A vs Team B
-    /([A-Z][A-Za-z\s]+?)\s+(?:vs|v\.?|–|-)\s+([A-Z][A-Za-z\s]+)/,
+    // Team A vs Team B / A - B
+    /\b([A-Z][A-Za-z\s]+?)\s+(?:vs|v\.?|–|-)\s+([A-Z][A-Za-z\s]+)\b/,
 
     // Team A împotriva lui Team B
-    /([A-Z][A-Za-z\s]+?)\s+împotriva\s+(?:lui\s+)?([A-Z][A-Za-z\s]+)/i,
+    /\b([A-Z][A-Za-z\s]+?)\s+împotriva\s+(?:lui\s+)?([A-Z][A-Za-z\s]+)\b/i,
 
     // meciul dintre A și B
-    /dintre\s+([A-Z][A-Za-z\s]+?)\s+și\s+([A-Z][A-Za-z\s]+)/i,
+    /dintre\s+([A-Z][A-Za-z\s]+?)\s+și\s+([A-Z][A-Za-z\s]+)\b/i,
+
+    // TENIS: X va juca cu Y / X va juca împotriva lui Y
+    /\b([A-Z][A-Za-z\s]+?)\s+va\s+juca\s+(?:împotriva|cu)\s+(?:lui\s+)?([A-Z][A-Za-z\s]+)\b/i,
   ];
 
   for (const p of patterns) {
-    const m = rawText.match(p);
+    const m = text.match(p);
     if (m) {
       return {
         home: m[1].trim(),
@@ -46,22 +45,22 @@ function extractMatchRegex(rawText) {
 }
 
 /**
- * 🔹 STEP 2 — Flashscore fallback (DOAR cu match clar)
+ * 🔹 EXPORT PUBLIC
  */
 export async function flashscoreMapMatch({ sport, rawText, log = console }) {
-  // 1️⃣ Regex FIRST (asta rezolvă 90%)
-  const regexMatch = extractMatchRegex(rawText);
-  if (regexMatch) {
+  const match = extractMatchRegex(rawText);
+
+  if (match) {
     log.info?.(
-      `[MATCH][regex] ${regexMatch.home} vs ${regexMatch.away}`
+      `[MATCH][regex] ${match.home} vs ${match.away}`
     );
+
     return {
-      ...regexMatch,
+      ...match,
       type: sport === "tennis" ? "players" : "teams",
     };
   }
 
-  // 2️⃣ Dacă NU avem pereche clară → STOP
   log.info?.("[MATCH] no explicit match pattern found");
   return null;
 }
