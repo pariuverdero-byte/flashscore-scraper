@@ -1,9 +1,5 @@
 /**
- * Match / Players extractor – production ready
- * Strategy:
- *  A. Strict VS / intalni / joaca cu
- *  B. Contextual extraction (echipele sunt: X si Y)
- *  C. Otherwise: null (Flashscore fallback)
+ * Match / Players extractor – FINAL STABLE VERSION
  */
 
 const STOP_WORDS = [
@@ -28,10 +24,11 @@ function normalize(str) {
 
 function looksLikeEntity(str) {
   if (!str) return false;
+
   const s = str.toLowerCase();
 
-  if (str.split(" ").length < 2) return false;
   if (!/[A-Z]/.test(str)) return false;
+  if (str.split(" ").length > 5) return false;
 
   for (const w of STOP_WORDS) {
     if (s.includes(w)) return false;
@@ -41,15 +38,15 @@ function looksLikeEntity(str) {
 }
 
 export function extractMatch({ sport, title, rawText }) {
-  const text = `${title}. ${rawText}`;
-
   /* =========================
-   * TENNIS
+   * TENNIS – ONLY rawText
    * ========================= */
   if (sport === "tennis") {
+    const text = rawText;
+
     const tennisRegexes = [
       // Daniil Medvedev il va intalni pe Learner Tien
-      /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s+(?:il va intalni pe|va juca cu|vs\.?|contra)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/,
+      /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(?:il va intalni pe|va juca cu|vs\.?|contra)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/,
 
       // Medvedev vs Tien
       /([A-Z][a-z]+)\s+vs\.?\s+([A-Z][a-z]+)/,
@@ -65,17 +62,19 @@ export function extractMatch({ sport, title, rawText }) {
         };
       }
     }
+
+    return null;
   }
 
   /* =========================
-   * FOOTBALL – PHASE A (VS)
+   * FOOTBALL – title + rawText
    * ========================= */
   if (sport === "football") {
-    const vsRegexes = [
-      // Aston Villa U21 vs Ipswich Town U21
-      /([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)+)\s+(?:vs\.?|-\s?|va juca cu)\s+([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)+)/,
+    const text = `${title}. ${rawText}`;
 
-      // Manchester City si Wolves
+    // Phase A – explicit VS / si
+    const vsRegexes = [
+      /([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)+)\s+(?:vs\.?|-\s?|va juca cu)\s+([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)+)/,
       /([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)+)\s+(?:si|și)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)+)/,
     ];
 
@@ -90,10 +89,7 @@ export function extractMatch({ sport, title, rawText }) {
       }
     }
 
-    /* =========================
-     * FOOTBALL – PHASE B (contextual)
-     * ex: "Echipele pe care voi miza sunt: Aston Villa U21 si Ipswich Town U21"
-     * ========================= */
+    // Phase B – contextual (echipele sunt X si Y)
     const contextualRegex =
       /(?:echipele|meciul|partida)\s+(?:care|pe care)?\s*(?:voi|vom)?\s*(?:miza|alege|selecta)?\s*(?:sunt|este)?[:\-]?\s*([A-Z][A-Za-z0-9\s]+)\s+(?:si|și)\s+([A-Z][A-Za-z0-9\s]+)/i;
 
@@ -105,10 +101,9 @@ export function extractMatch({ sport, title, rawText }) {
         type: "teams",
       };
     }
+
+    return null;
   }
 
-  /* =========================
-   * NOT FOUND
-   * ========================= */
   return null;
 }
