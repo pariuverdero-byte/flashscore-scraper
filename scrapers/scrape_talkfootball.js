@@ -1,6 +1,5 @@
-import fetch from 'node-fetch'
-import * as cheerio from 'cheerio'
 import fs from 'fs'
+import * as cheerio from 'cheerio'
 
 const BASE_URL = 'https://talkfootball.co.uk'
 
@@ -49,9 +48,13 @@ function normalizePick(market, raw) {
   return null
 }
 
-async function scrapeMarket({ market, path }) {
+async function fetchHtml(path) {
   const res = await fetch(BASE_URL + path)
-  const html = await res.text()
+  return await res.text()
+}
+
+async function scrapeMarket({ market, path }) {
+  const html = await fetchHtml(path)
   const $ = cheerio.load(html)
 
   const selected = []
@@ -100,19 +103,16 @@ async function run() {
   for (const source of SOURCES) {
     const events = await scrapeMarket(source)
     pool.push(...events)
-    console.log(`[talkfootball] ${source.market}: ${events.length} events`)
+    console.log(`[talkfootball] ${source.market}: ${events.length}`)
   }
 
   fs.mkdirSync('artifacts', { recursive: true })
-  fs.writeFileSync(
-    'artifacts/talkfootball_pool.json',
-    JSON.stringify(pool, null, 2)
-  )
+  fs.writeFileSync('artifacts/talkfootball_pool.json', JSON.stringify(pool, null, 2))
 
-  console.log(`[talkfootball] total events: ${pool.length}`)
+  console.log(`[talkfootball] total: ${pool.length}`)
 }
 
 run().catch(err => {
-  console.error('[talkfootball] scrape failed', err)
+  console.error(err)
   process.exit(1)
 })
