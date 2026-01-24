@@ -1,8 +1,7 @@
-import { parse10pariuriGeneric } from "../parsers/parse10pariuri_generic.js";
+import parse10pariuriGeneric from "../parsers/parse10pariuri_generic.js";
 import { flashscoreMapMatch } from "../engine/flashscore_mapper.js";
 
 /**
- * Test runner pentru mai multe surse 10pariuri
  * Rulează cu:
  * node --require ./scripts/undici_shim.cjs scripts/test_parse_10pariuri_multi.js
  */
@@ -34,42 +33,4 @@ const SOURCES = [
   },
 ];
 
-async function run() {
-  for (const src of SOURCES) {
-    console.log("\n====", src.label, "====");
-
-    const parsed = await parse10pariuriGeneric(src.url);
-
-    // 🔥 AICI este integrarea corectă cu motorul Flashscore
-    parsed.match = await flashscoreMapMatch({
-      sport: parsed.sport,
-      rawText: parsed.rawText,
-      log: console, // ← LOG TRANSPARENT
-    });
-
-    // Pretty print final
-    console.log(
-      JSON.stringify(
-        {
-          source: parsed.source,
-          sourceKey: parsed.sourceKey,
-          url: parsed.url,
-          title: parsed.title,
-          publishedAt: parsed.publishedAt,
-          sport: parsed.sport,
-          market: parsed.market,
-          odd: parsed.odd,
-          confidence: parsed.confidence,
-          match: parsed.match,
-        },
-        null,
-        2
-      )
-    );
-  }
-}
-
-run().catch((e) => {
-  console.error("❌ TEST FAILED:", e);
-  process.exit(1);
-});
+async functi
