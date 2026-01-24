@@ -1,4 +1,4 @@
-// verify_and_update_wp.js — FINAL MULTI-LANG (RO / EN)
+// verify_and_update_wp.js — FINAL FIX (RO + EN, async SAFE)
 
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
@@ -133,13 +133,16 @@ async function verifyPost(id) {
 
   let changed = false;
 
-  $("table.bilet-pariu tbody tr").each(async (_, row) => {
+  const rows = $("table.bilet-pariu tbody tr").toArray();
+
+  for (const row of rows) {
     const $r = $(row);
     const cur = $r.attr("data-status") || PENDING;
-    if (!RECHECK_ONCE && cur !== PENDING) return;
+
+    if (!RECHECK_ONCE && cur !== PENDING) continue;
 
     const score = await fetchFlashscore($r.attr("data-id"));
-    if (!score) return;
+    if (!score) continue;
 
     const market = ($r.attr("data-market") || "").toLowerCase();
     const stat = ($r.attr("data-stat") || "").toLowerCase();
@@ -147,6 +150,7 @@ async function verifyPost(id) {
     const thr = parseFloat($r.attr("data-threshold"));
 
     let verdict = null;
+
     if (market === "1") verdict = outcome1X2(score, side);
     else if (stat === "goals") verdict = outcomeGoals(score, side, thr);
     else if (stat === "btts") verdict = outcomeBTTS(score);
@@ -155,7 +159,7 @@ async function verifyPost(id) {
       paintRow($, row, verdict);
       changed = true;
     }
-  });
+  }
 
   if (changed) {
     const status = computeTicketStatus($, $("table.bilet-pariu"));
@@ -164,16 +168,23 @@ async function verifyPost(id) {
     await put(`${WP_BASE}/wp-json/wp/v2/posts/${id}`, {
       content: $.html(),
     });
+
+    console.log(`✔ Updated post ${id}`);
   }
 }
 
 /* ================= RUN ================= */
 (async () => {
   const r = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=25`);
-  if (!r.ok) return;
+  if (!r.ok) {
+    console.error("Cannot load posts");
+    return;
+  }
 
   const posts = await r.json();
-  for (const p of posts) await verifyPost(p.id);
+  for (const p of posts) {
+    await verifyPost(p.id);
+  }
 
   if (HOMEPAGE_ID) {
     const page = await get(`${WP_BASE}/wp-json/wp/v2/pages/${HOMEPAGE_ID}?context=edit`);
