@@ -1,14 +1,12 @@
-import cheerio from "cheerio";
+import * as cheerio from "cheerio";
 
 export function parse10PariuriCota2(html, url) {
   const $ = cheerio.load(html);
 
-  // Title
   const title =
     $('meta[property="og:title"]').attr("content") ||
     $("h1").first().text().trim();
 
-  // Published date (JSON-LD)
   let publishedAt = null;
   $('script[type="application/ld+json"]').each((_, el) => {
     try {
@@ -19,7 +17,6 @@ export function parse10PariuriCota2(html, url) {
     } catch {}
   });
 
-  // Main text
   const contentText = $(".elementor-widget-text-editor")
     .map((_, el) => $(el).text())
     .get()
@@ -27,11 +24,9 @@ export function parse10PariuriCota2(html, url) {
     .replace(/\s+/g, " ")
     .trim();
 
-  // Odd
   const oddMatch = contentText.match(/cota\s+(de\s+)?([0-9]+\.[0-9]+)/i);
   const odd = oddMatch ? parseFloat(oddMatch[2]) : null;
 
-  // Bet type
   let betType = null;
   if (/peste\s+1\.5\s+goluri\s+in\s+prima\s+repriza/i.test(contentText)) {
     betType = "Over 1.5 goals 1st half";
