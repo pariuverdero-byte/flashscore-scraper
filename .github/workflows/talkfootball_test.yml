@@ -2,37 +2,20 @@ name: Test TalkFootball Scraper
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 9 * * *"
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 18
 
-      - name: Force install dependencies
-        run: |
-          npm init -y || true
-          npm install axios cheerio
+      - name: Install dependencies
+        run: npm install node-fetch cheerio
 
-      - name: Run TalkFootball scraper
+      - name: Run scraper
         run: node scrapers/scrape_talkfootball.js
-
-      - name: Show scraped pool
-        run: |
-          echo "====== TALKFOOTBALL POOL ======"
-          cat artifacts/talkfootball_pool.json
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: talkfootball_pool
-          path: artifacts/talkfootball_pool.json
