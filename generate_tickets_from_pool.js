@@ -3,7 +3,7 @@
 
 import fs from "fs/promises";
 
-const POOL_FILE = "claudiu_pool.json";
+const POOL_FILE = "master_pool.json";
 
 // ---------------- RULES ----------------
 
