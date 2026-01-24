@@ -4,21 +4,30 @@ import fs from 'fs'
    Utils
 ========================= */
 
-function normalize(str) {
+function normalizeTeam(str = '') {
   return str
     .toLowerCase()
+    .replace(/['’.]/g, '')
     .replace(/fc|cf|sc|ac/g, '')
-    .replace(/[^a-z0-9 ]/g, '')
+    .replace(/[^a-z0-9 ]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
 }
 
-function toTimestamp(dateStr) {
+function tfKickoffToIso(tfKickoff) {
+  // "01/24 19:00" → "2026-01-24 19:00"
+  const year = new Date().getFullYear()
+  const [md, time] = tfKickoff.split(' ')
+  const [mm, dd] = md.split('/')
+  return `${year}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')} ${time}`
+}
+
+function toTs(dateStr) {
   return new Date(dateStr.replace(' ', 'T')).getTime()
 }
 
-function kickoffClose(a, b, minutes = 30) {
-  return Math.abs(toTimestamp(a) - toTimestamp(b)) <= minutes * 60 * 1000
+function kickoffClose(a, b, minutes = 90) {
+  return Math.abs(toTs(a) - toTs(b)) <= minutes * 60 * 1000
 }
 
 /* =========================
@@ -41,16 +50,17 @@ const matched = []
 const dropped = []
 
 for (const tf of talkfootball) {
-  const tfHome = normalize(tf.home)
-  const tfAway = normalize(tf.away)
+  const tfHome = normalizeTeam(tf.home)
+  const tfAway = normalizeTeam(tf.away)
+  const tfKickoffIso = tfKickoffToIso(tf.kickoff)
 
-  const candidate = flashscore.find(fsEvent => {
-    const fsHome = normalize(fsEvent.home)
-    const fsAway = normalize(fsEvent.away)
+  const candidate = flashscore.find(fsEv => {
+    const fsHome = normalizeTeam(fsEv.home)
+    const fsAway = normalizeTeam(fsEv.away)
 
     if (tfHome !== fsHome) return false
     if (tfAway !== fsAway) return false
-    if (!kickoffClose(tf.kickoff, fsEvent.kickoff)) return false
+    if (!kickoffClose(tfKickoffIso, fsEv.kickoff)) return false
 
     return true
   })
@@ -58,13 +68,15 @@ for (const tf of talkfootball) {
   if (candidate) {
     matched.push({
       ...tf,
+      kickoff_iso: tfKickoffIso,
       flashscore_id: candidate.id,
-      flashscore_league: candidate.league,
+      flashscore_kickoff: candidate.kickoff,
       status: 'matched'
     })
   } else {
     dropped.push({
       ...tf,
+      kickoff_iso: tfKickoffIso,
       status: 'dropped_not_on_flashscore'
     })
   }
