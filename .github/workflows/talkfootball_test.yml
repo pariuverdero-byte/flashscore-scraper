@@ -3,7 +3,7 @@ name: Test TalkFootball Scraper
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 9 * * *"   # rulează zilnic la 09:00 (doar pentru test)
+    - cron: "0 9 * * *"
 
 jobs:
   scrape:
@@ -19,12 +19,19 @@ jobs:
           node-version: 18
 
       - name: Install dependencies
-        run: npm install
+        working-directory: .
+        run: |
+          node -v
+          npm -v
+          ls -la
+          npm install
 
       - name: Run TalkFootball scraper
+        working-directory: .
         run: node scrapers/scrape_talkfootball.js
 
       - name: Show scraped pool
+        working-directory: .
         run: |
           echo "====== TALKFOOTBALL POOL ======"
           cat artifacts/talkfootball_pool.json
