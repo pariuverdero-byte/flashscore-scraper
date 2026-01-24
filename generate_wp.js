@@ -1,5 +1,6 @@
 // generate_wp.js
 // FINAL — RO / EN clean, aligned with verify + publish flows
+// FIX: robust Flashscore link resolution (url → flashscore_url → id fallback)
 
 import fs from "fs/promises";
 
@@ -22,49 +23,39 @@ function translateBetText(sel) {
   const t = raw.toLowerCase();
   let m;
 
-  // BTTS
   if (t.includes("ambele echipe marchează")) return "Both teams to score";
   if (t.includes("ambele") && t.includes("nu"))
     return "Both teams to score – NO";
 
-  // Team goals (minim X)
-  if ((m = t.match(/(.+?) minim (\d+) goluri/))) {
+  if ((m = t.match(/(.+?) minim (\d+) goluri/)))
     return `${capitalize(m[1])} to score at least ${m[2]} goals`;
-  }
 
-  // Over / Under full match
   if ((m = t.match(/peste (\d+(\.\d+)?)/)))
     return `Over ${m[1]} goals`;
   if ((m = t.match(/sub (\d+(\.\d+)?)/)))
     return `Under ${m[1]} goals`;
 
-  // First half O/U
   if ((m = t.match(/peste (\d+(\.\d+)?) goluri.*prima repriz/)))
     return `Over ${m[1]} goals (1st half)`;
   if ((m = t.match(/sub (\d+(\.\d+)?) goluri.*prima repriz/)))
     return `Under ${m[1]} goals (1st half)`;
 
-  // Interval goals – first half
   if ((m = t.match(/interval (\d+)\s*-\s*(\d+).*prima repriz/)))
     return `Total goals 1st half: ${m[1]}–${m[2]}`;
 
-  // Interval goals – full match
   if ((m = t.match(/interval (\d+)\s*-\s*(\d+).*meci/)))
     return `Total goals: ${m[1]}–${m[2]}`;
 
-  // Double chance
   if (t.includes("șansă dublă")) {
     if (t.includes("1x")) return "Double chance 1X";
     if (t.includes("x2")) return "Double chance X2";
     if (t.includes("12")) return "Double chance 12";
   }
 
-  // 1X2
   if (t.includes("victorie gazde")) return "Home win";
   if (t === "egal") return "Draw";
   if (t.includes("victorie oaspeți")) return "Away win";
 
-  // HT / FT
   if (t.includes("pauză") && t.includes("final"))
     return raw
       .replace(/pauză/gi, "Half-time")
@@ -78,26 +69,37 @@ function capitalize(s) {
 }
 
 /* ======================================================
+ * 🔗 RESOLVE FLASHCORE URL (CRITICAL FIX)
+ * ====================================================== */
+function resolveEventUrl(sel) {
+  if (sel.url) return sel.url;
+  if (sel.flashscore_url) return sel.flashscore_url;
+  if (sel.id) return `https://www.flashscore.mobi/match/${sel.id}/`;
+  return null;
+}
+
+/* ======================================================
  * 🧱 RENDER ONE ROW
  * ====================================================== */
 function renderRow(sel) {
   const betText = translateBetText(sel);
+  const link = resolveEventUrl(sel);
+
+  const eventCell = link
+    ? `<a href="${link}" target="_blank" rel="nofollow noopener">${sel.teams}</a>`
+    : `<span>${sel.teams}</span>`;
 
   return `
 <tr
-  data-id="${sel.id}"
+  data-id="${sel.id || ""}"
   data-status="pending"
   data-market="${sel.market || "STAT"}"
   ${sel.stat ? `data-stat="${sel.stat}"` : ""}
   ${sel.side ? `data-side="${sel.side}"` : ""}
   ${sel.threshold ? `data-threshold="${sel.threshold}"` : ""}
 >
-  <td>
-    <a href="${sel.url}" target="_blank" rel="nofollow noopener">
-      ${sel.teams}
-    </a>
-  </td>
-  <td>${sel.country} / ${sel.competition}</td>
+  <td>${eventCell}</td>
+  <td>${sel.country || "-"} / ${sel.competition || "-"}</td>
   <td>${sel.time || "-"}</td>
   <td><strong>${betText}</strong></td>
   <td><strong>${sel.odd}</strong></td>
@@ -135,8 +137,7 @@ function renderTicket(ticket) {
       <td></td>
     </tr>
   </tfoot>
-</table>
-`;
+</table>`;
 }
 
 /* ======================================================
