@@ -1,4 +1,4 @@
-name: Scrape Flashscore + Claudiu Pool + Generate Tickets + WordPress (RO)
+name: Scrape Flashscore + Claudiu Pool + TalkFootball + Generate Tickets + WordPress (RO)
 
 on:
   workflow_dispatch:
@@ -13,11 +13,11 @@ jobs:
       # ------------------
       # GLOBAL CONTROLS
       # ------------------
-      DAY_OFFSET: "0"          # 0 = azi, -1 = ieri
+      DAY_OFFSET: "0"
       INCLUDE_LIVE: "true"
 
       # ------------------
-      # LANGUAGE (CRITICAL)
+      # LANGUAGE
       # ------------------
       LANG: "ro"
 
@@ -66,34 +66,55 @@ jobs:
             --no-fund --no-audit --prefer-offline
 
       # ------------------
-      # 1) FLASHSCORE FIXTURES (MECIURI)
+      # 1) FLASHSCORE FIXTURES
       # ------------------
       - name: Scrape Flashscore fixtures
         timeout-minutes: 5
         run: node scrape_mobi.js
 
       # ------------------
-      # 2) CLAUDIU HOOD → POOL (FLASHCORE SAFE)
+      # 2) CLAUDIU HOOD → POOL
       # ------------------
       - name: Build Claudiu Hood POOL
         timeout-minutes: 5
         run: node scrape_claudiu_pool.js
 
       # ------------------
-      # 3) MASTER POOL → TICKETS
+      # 3) TALKFOOTBALL → SCRAPE
+      # ------------------
+      - name: Scrape TalkFootball
+        timeout-minutes: 5
+        run: node scrapers/scrape_talkfootball.js
+
+      # ------------------
+      # 4) TALKFOOTBALL → MATCH FLASHCORE
+      # ------------------
+      - name: Match TalkFootball to Flashscore
+        timeout-minutes: 5
+        run: node engine/match_talkfootball_flashscore.js
+
+      # ------------------
+      # 5) TALKFOOTBALL → ODD SOURCE
+      # ------------------
+      - name: Inject TalkFootball odds into MASTER pool
+        timeout-minutes: 5
+        run: node parsers/parse_talkfootball_as_odds.js
+
+      # ------------------
+      # 6) MASTER POOL → TICKETS
       # ------------------
       - name: Generate tickets from MASTER pool
         timeout-minutes: 5
         run: node generate_tickets_from_pool.js
 
       # ------------------
-      # 4) WORDPRESS HTML
+      # 7) WORDPRESS HTML
       # ------------------
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
       # ------------------
-      # 5) ARTIFACTS (DEBUG / TRACE)
+      # 8) ARTIFACTS
       # ------------------
       - name: Upload artifacts (raw)
         if: always()
@@ -104,6 +125,9 @@ jobs:
             matches.json
             claudiu_pool.json
             master_pool.json
+            artifacts/talkfootball_pool.json
+            artifacts/talkfootball_matched.json
+            artifacts/talkfootball_dropped.json
 
       - name: Upload artifacts (tickets)
         if: always()
@@ -117,7 +141,7 @@ jobs:
             biletul-zilei.html
 
       # ------------------
-      # 6) PUBLISH → PARIUVERDE.RO
+      # 9) PUBLISH → PARIUVERDE.RO
       # ------------------
       - name: Publish posts to WordPress (pariuverde.ro)
         if: success()
