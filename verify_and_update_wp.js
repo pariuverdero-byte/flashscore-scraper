@@ -1,4 +1,4 @@
-// verify_and_update_wp.js — FINAL FIXED VERSION
+// verify_and_update_wp.js — FINAL ROBUST VERSION
 // Node 18 / 20 compatible
 
 import fetch from "node-fetch";
@@ -51,24 +51,93 @@ function parseScore(text) {
   return { h:+m[1], a:+m[2] };
 }
 
+/* ================= MARKET NORMALIZER ================= */
+/**
+ * Normalizează orice bet într-un "tip logic"
+ * Tot ce nu e sigur → null
+ */
+function normalizeBet({ market, stat, side, threshold }) {
+  market = (market || "").toLowerCase();
+  stat   = (stat || "").toLowerCase();
+  side   = (side || "").toLowerCase();
+
+  // 1X2
+  if (market.includes("1x2")) {
+    return { type:"1x2", side };
+  }
+
+  // BTTS
+  if (market.includes("btts") || stat.includes("btts")) {
+    return { type:"btts" };
+  }
+
+  // Over / Under TOTAL GOALS
+  if (
+    market.includes("over") ||
+    market.includes("under") ||
+    stat.includes("goal")
+  ) {
+    if (isNaN(threshold)) return null;
+
+    return {
+      type: "goals",
+      side,
+      threshold
+    };
+  }
+
+  // Interval goluri (ex: 1-3)
+  if (market.includes("interval") || stat.includes("range")) {
+    if (isNaN(threshold)) return null;
+
+    const [min, max] = threshold.toString().split("-").map(Number);
+    if (isNaN(min) || isNaN(max)) return null;
+
+    return {
+      type: "range",
+      min,
+      max
+    };
+  }
+
+  // Prima repriză → NU putem evalua sigur din FT
+  if (market.includes("first half") || market.includes("1st half")) {
+    return null;
+  }
+
+  return null;
+}
+
 /* ================= OUTCOME ================= */
-function outcomeGoals(score, side, threshold) {
-  if (!score || isNaN(threshold)) return null;
+
+function evalOutcome(bet, score) {
+  if (!bet || !score) return null;
+
   const total = score.h + score.a;
-  return side === "over"
-    ? total > threshold ? WIN : LOSS
-    : total < threshold ? WIN : LOSS;
-}
 
-function outcomeBTTS(score) {
-  if (!score) return null;
-  return score.h > 0 && score.a > 0 ? WIN : LOSS;
-}
+  switch (bet.type) {
 
-function outcome1X2(score, side) {
-  if (!score) return null;
-  const res = score.h > score.a ? "1" : score.h < score.a ? "2" : "x";
-  return res === side ? WIN : LOSS;
+    case "1x2": {
+      const res =
+        score.h > score.a ? "1" :
+        score.h < score.a ? "2" : "x";
+      return res === bet.side ? WIN : LOSS;
+    }
+
+    case "btts":
+      return score.h > 0 && score.a > 0 ? WIN : LOSS;
+
+    case "goals":
+      return bet.side === "over"
+        ? total > bet.threshold ? WIN : LOSS
+        : total < bet.threshold ? WIN : LOSS;
+
+    case "range":
+      return total >= bet.min && total <= bet.max ? WIN : LOSS;
+
+    default:
+      return null;
+  }
 }
 
 /* ================= FLASHSCORE ================= */
@@ -84,7 +153,6 @@ async function fetchFlashscore(matchId) {
     const $ = cheerio.load(html);
     const body = $("body").text();
 
-    // FIX: mult mai robust
     const finished =
       /Finished|FT|After Penalties|AET/i.test(body);
 
@@ -97,10 +165,7 @@ async function fetchFlashscore(matchId) {
       $("div.detail b").first().text() ||
       body.match(/(\d{1,2}\s*:\s*\d{1,2})/)?.[1];
 
-    if (!scoreText) {
-      console.log(`   [FS] ❌ Score not found`);
-      return null;
-    }
+    if (!scoreText) return null;
 
     console.log(`   [FS] Score FOUND ${scoreText}`);
     return parseScore(scoreText);
@@ -137,31 +202,30 @@ async function verifyPost(postId) {
   for (const row of rows) {
     const $r = $(row);
 
-    const cur = ($r.attr("data-status") || PENDING).toLowerCase(); // FIX
+    const cur = ($r.attr("data-status") || PENDING).toLowerCase();
     if (!RECHECK_ONCE && cur !== PENDING) continue;
 
     const matchId = getMatchId($r);
     console.log(`[ROW] Match ${matchId}`);
+    if (!matchId) continue;
 
-    if (!matchId) {
-      console.log(`   ⚠️ No matchId → SKIP`);
-      continue;
-    }
+    const bet = normalizeBet({
+      market: $r.attr("data-market"),
+      stat:   $r.attr("data-stat"),
+      side:   $r.attr("data-side"),
+      threshold: $r.attr("data-threshold")
+    });
 
-    const market = ($r.attr("data-market") || "").toLowerCase();
-    const stat   = ($r.attr("data-stat") || "").toLowerCase();
-    const side   = ($r.attr("data-side") || "").toLowerCase();
-    const thr    = parseFloat($r.attr("data-threshold"));
+    console.log(`   [BET]`, bet);
+    if (!bet) continue;
 
     const score = await fetchFlashscore(matchId);
     if (!score) continue;
 
-    let verdict = null;
-    if (market === "1x2") verdict = outcome1X2(score, side); // FIX
-    else if (stat === "goals") verdict = outcomeGoals(score, side, thr);
-    else if (stat === "btts") verdict = outcomeBTTS(score);
+    const verdict = evalOutcome(bet, score);
+    if (!verdict) continue;
 
-    if (verdict && verdict !== cur) {
+    if (verdict !== cur) {
       console.log(`   ✅ Verdict ${verdict}`);
       paintRow($r, verdict);
       changed = true;
@@ -183,10 +247,7 @@ async function verifyPost(postId) {
   console.log("=== VERIFY FLOW START ===");
 
   const r = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=25&search=Bilet`);
-  if (!r.ok) {
-    console.log("❌ Cannot load posts");
-    return;
-  }
+  if (!r.ok) return;
 
   const posts = await r.json();
   console.log(`[MAIN] Posts found: ${posts.length}`);
