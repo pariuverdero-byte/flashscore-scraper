@@ -1,4 +1,4 @@
-// verify_and_update_wp.js — FINAL ROBUST VERSION
+// verify_and_update_wp.js — FINAL, ADAPTED TO REAL HTML
 // Node 18 / 20 compatible
 
 import fetch from "node-fetch";
@@ -12,10 +12,10 @@ const WP_APP_PASS = process.env.WP_APP_PASS;
 const RECHECK_ONCE = /^(1|true|yes)$/i.test(process.env.RECHECK_ONCE || "");
 
 const FS_BASE = "https://www.flashscore.mobi/match/";
-const PENDING = "pending";
 const WIN  = "win";
 const LOSS = "loss";
 
+/* ================= AUTH ================= */
 const auth =
   "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASS}`).toString("base64");
 
@@ -35,12 +35,8 @@ const put = (url, body) =>
 /* ================= HELPERS ================= */
 
 function getMatchId($row) {
-  let id = $row.attr("data-id");
-  if (id && id !== "undefined") return id;
-
-  const href = $row.find("a[href*='flashscore']").attr("href");
+  const href = $row.find("td").eq(0).find("a[href*='flashscore']").attr("href");
   if (!href) return null;
-
   const m = href.match(/match\/([A-Za-z0-9]+)/);
   return m ? m[1] : null;
 }
@@ -51,68 +47,42 @@ function parseScore(text) {
   return { h:+m[1], a:+m[2] };
 }
 
-/* ================= MARKET NORMALIZER ================= */
-/**
- * Normalizează orice bet într-un "tip logic"
- * Tot ce nu e sigur → null
- */
-function normalizeBet({ market, stat, side, threshold }) {
-  market = (market || "").toLowerCase();
-  stat   = (stat || "").toLowerCase();
-  side   = (side || "").toLowerCase();
+/* ================= PARSE BET FROM TEXT ================= */
+function parseBetFromText(text) {
+  if (!text) return null;
+  text = text.toLowerCase().trim();
 
   // 1X2
-  if (market.includes("1x2")) {
-    return { type:"1x2", side };
+  if (text.includes("victorie gazde")) return { type:"1x2", side:"1" };
+  if (text.includes("victorie oaspe")) return { type:"1x2", side:"2" };
+  if (text === "egal" || text.includes("rezultat egal"))
+    return { type:"1x2", side:"x" };
+
+  // Șansă dublă
+  if (text.includes("șansă dublă 1x")) return { type:"double", sides:["1","x"] };
+  if (text.includes("șansă dublă x2")) return { type:"double", sides:["x","2"] };
+  if (text.includes("șansă dublă 12")) return { type:"double", sides:["1","2"] };
+
+  // Over / Under goluri
+  const ou = text.match(/(peste|sub)\s*([\d\.]+)/);
+  if (ou) {
+    return {
+      type: "goals",
+      side: ou[1] === "peste" ? "over" : "under",
+      threshold: parseFloat(ou[2])
+    };
   }
 
   // BTTS
-  if (market.includes("btts") || stat.includes("btts")) {
+  if (text.includes("ambele") && text.includes("marchează")) {
     return { type:"btts" };
-  }
-
-  // Over / Under TOTAL GOALS
-  if (
-    market.includes("over") ||
-    market.includes("under") ||
-    stat.includes("goal")
-  ) {
-    if (isNaN(threshold)) return null;
-
-    return {
-      type: "goals",
-      side,
-      threshold
-    };
-  }
-
-  // Interval goluri (ex: 1-3)
-  if (market.includes("interval") || stat.includes("range")) {
-    if (isNaN(threshold)) return null;
-
-    const [min, max] = threshold.toString().split("-").map(Number);
-    if (isNaN(min) || isNaN(max)) return null;
-
-    return {
-      type: "range",
-      min,
-      max
-    };
-  }
-
-  // Prima repriză → NU putem evalua sigur din FT
-  if (market.includes("first half") || market.includes("1st half")) {
-    return null;
   }
 
   return null;
 }
 
-/* ================= OUTCOME ================= */
-
+/* ================= EVAL BET ================= */
 function evalOutcome(bet, score) {
-  if (!bet || !score) return null;
-
   const total = score.h + score.a;
 
   switch (bet.type) {
@@ -124,16 +94,20 @@ function evalOutcome(bet, score) {
       return res === bet.side ? WIN : LOSS;
     }
 
-    case "btts":
-      return score.h > 0 && score.a > 0 ? WIN : LOSS;
+    case "double": {
+      const res =
+        score.h > score.a ? "1" :
+        score.h < score.a ? "2" : "x";
+      return bet.sides.includes(res) ? WIN : LOSS;
+    }
 
     case "goals":
       return bet.side === "over"
         ? total > bet.threshold ? WIN : LOSS
         : total < bet.threshold ? WIN : LOSS;
 
-    case "range":
-      return total >= bet.min && total <= bet.max ? WIN : LOSS;
+    case "btts":
+      return score.h > 0 && score.a > 0 ? WIN : LOSS;
 
     default:
       return null;
@@ -145,42 +119,33 @@ async function fetchFlashscore(matchId) {
   const url = `${FS_BASE}${matchId}/?s=1&d=-1`;
   console.log(`   [FS] Fetching ${url}`);
 
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
+  const res = await fetch(url);
+  if (!res.ok) return null;
 
-    const html = await res.text();
-    const $ = cheerio.load(html);
-    const body = $("body").text();
+  const html = await res.text();
+  const $ = cheerio.load(html);
+  const body = $("body").text();
 
-    const finished =
-      /Finished|FT|After Penalties|AET/i.test(body);
-
-    if (!finished) {
-      console.log(`   ⏳ Match LIVE / NOT FINISHED`);
-      return null;
-    }
-
-    const scoreText =
-      $("div.detail b").first().text() ||
-      body.match(/(\d{1,2}\s*:\s*\d{1,2})/)?.[1];
-
-    if (!scoreText) return null;
-
-    console.log(`   [FS] Score FOUND ${scoreText}`);
-    return parseScore(scoreText);
-
-  } catch (e) {
-    console.log(`   [FS] ERROR`, e.message);
+  const finished = /Finished|FT|After Penalties|AET/i.test(body);
+  if (!finished) {
+    console.log(`   ⏳ Match LIVE / NOT FINISHED`);
     return null;
   }
+
+  const scoreText =
+    $("div.detail b").first().text() ||
+    body.match(/(\d{1,2}\s*:\s*\d{1,2})/)?.[1];
+
+  if (!scoreText) return null;
+
+  console.log(`   [FS] Score FOUND ${scoreText}`);
+  return parseScore(scoreText);
 }
 
 /* ================= UI ================= */
-function paintRow($row, status) {
-  $row.attr("data-status", status);
-  $row.find("td").last().html(
-    status === WIN ? "✅" : status === LOSS ? "❌" : "⏳"
+function setStatus($row, status) {
+  $row.find("td").eq(5).html(
+    status === WIN ? "✅" : "❌"
   );
 }
 
@@ -202,21 +167,17 @@ async function verifyPost(postId) {
   for (const row of rows) {
     const $r = $(row);
 
-    const cur = ($r.attr("data-status") || PENDING).toLowerCase();
-    if (!RECHECK_ONCE && cur !== PENDING) continue;
+    const statusCell = $r.find("td").eq(5).text().trim();
+    if (!RECHECK_ONCE && statusCell !== "⏳") continue;
 
     const matchId = getMatchId($r);
     console.log(`[ROW] Match ${matchId}`);
     if (!matchId) continue;
 
-    const bet = normalizeBet({
-      market: $r.attr("data-market"),
-      stat:   $r.attr("data-stat"),
-      side:   $r.attr("data-side"),
-      threshold: $r.attr("data-threshold")
-    });
+    const betText = $r.find("td").eq(3).text();
+    const bet = parseBetFromText(betText);
 
-    console.log(`   [BET]`, bet);
+    console.log(`   [BET] "${betText}" →`, bet);
     if (!bet) continue;
 
     const score = await fetchFlashscore(matchId);
@@ -225,11 +186,9 @@ async function verifyPost(postId) {
     const verdict = evalOutcome(bet, score);
     if (!verdict) continue;
 
-    if (verdict !== cur) {
-      console.log(`   ✅ Verdict ${verdict}`);
-      paintRow($r, verdict);
-      changed = true;
-    }
+    console.log(`   ✅ Verdict ${verdict}`);
+    setStatus($r, verdict);
+    changed = true;
   }
 
   if (changed) {
