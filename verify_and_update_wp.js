@@ -1,4 +1,4 @@
-// verify_and_update_wp.js — FINAL DEBUG + FIX
+// verify_and_update_wp.js — FINAL FIXED VERSION
 // Node 18 / 20 compatible
 
 import fetch from "node-fetch";
@@ -34,13 +34,10 @@ const put = (url, body) =>
 
 /* ================= HELPERS ================= */
 
-// 🔑 Extract matchId safely
 function getMatchId($row) {
   let id = $row.attr("data-id");
-
   if (id && id !== "undefined") return id;
 
-  // fallback: extract from href
   const href = $row.find("a[href*='flashscore']").attr("href");
   if (!href) return null;
 
@@ -70,7 +67,7 @@ function outcomeBTTS(score) {
 
 function outcome1X2(score, side) {
   if (!score) return null;
-  const res = score.h > score.a ? "1" : score.h < score.a ? "2" : "X";
+  const res = score.h > score.a ? "1" : score.h < score.a ? "2" : "x";
   return res === side ? WIN : LOSS;
 }
 
@@ -87,8 +84,12 @@ async function fetchFlashscore(matchId) {
     const $ = cheerio.load(html);
     const body = $("body").text();
 
-    if (!/Finished|Full Time|After Extra Time|Penalties/i.test(body)) {
-      console.log(`   [FS] Not finished yet`);
+    // FIX: mult mai robust
+    const finished =
+      /Finished|FT|After Penalties|AET/i.test(body);
+
+    if (!finished) {
+      console.log(`   ⏳ Match LIVE / NOT FINISHED`);
       return null;
     }
 
@@ -103,6 +104,7 @@ async function fetchFlashscore(matchId) {
 
     console.log(`   [FS] Score FOUND ${scoreText}`);
     return parseScore(scoreText);
+
   } catch (e) {
     console.log(`   [FS] ERROR`, e.message);
     return null;
@@ -135,7 +137,7 @@ async function verifyPost(postId) {
   for (const row of rows) {
     const $r = $(row);
 
-    const cur = $r.attr("data-status") || PENDING;
+    const cur = ($r.attr("data-status") || PENDING).toLowerCase(); // FIX
     if (!RECHECK_ONCE && cur !== PENDING) continue;
 
     const matchId = getMatchId($r);
@@ -155,7 +157,7 @@ async function verifyPost(postId) {
     if (!score) continue;
 
     let verdict = null;
-    if (market === "1") verdict = outcome1X2(score, side);
+    if (market === "1x2") verdict = outcome1X2(score, side); // FIX
     else if (stat === "goals") verdict = outcomeGoals(score, side, thr);
     else if (stat === "btts") verdict = outcomeBTTS(score);
 
