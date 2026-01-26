@@ -1,4 +1,4 @@
-// verify_and_update_wp.js — FIXED + EXTENDED (TEAM GOALS SUPPORTED RO + EN)
+// verify_and_update_wp.js — DEBUG VERSION (DETAILED LOGS, GREENBETTIPS SAFE)
 // Node 18 / 20 compatible
 
 import fetch from "node-fetch";
@@ -19,11 +19,14 @@ const LOSS = "loss";
 const auth =
   "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASS}`).toString("base64");
 
-const get = (url) =>
-  fetch(url, { headers:{ Authorization: auth } });
+const get = (url) => {
+  console.log("[HTTP GET]", url);
+  return fetch(url, { headers:{ Authorization: auth } });
+};
 
-const put = (url, body) =>
-  fetch(url, {
+const put = (url, body) => {
+  console.log("[HTTP PUT]", url);
+  return fetch(url, {
     method:"PUT",
     headers:{
       Authorization: auth,
@@ -31,11 +34,13 @@ const put = (url, body) =>
     },
     body: JSON.stringify(body),
   });
+};
 
 /* ================= HELPERS ================= */
 
 function getMatchId($row) {
   const href = $row.find("td").eq(0).find("a[href*='flashscore']").attr("href");
+  console.log("   [MATCH LINK]", href);
   if (!href) return null;
   const m = href.match(/match\/([A-Za-z0-9]+)/);
   return m ? m[1] : null;
@@ -57,171 +62,127 @@ function normalizeTeam(name) {
 
 function extractTeamsFromRow($row) {
   const raw = $row.find("td").eq(0).text();
+  console.log("   [RAW TEAMS]", raw);
   const parts = raw.split("–").map(t => normalizeTeam(t));
   if (parts.length !== 2) return null;
   return { home: parts[0], away: parts[1] };
 }
 
-/* ================= PARSE BET FROM TEXT ================= */
+/* ================= PARSE BET ================= */
 function parseBetFromText(text, teams) {
   if (!text) return null;
   const t = text.toLowerCase().replace(/\s+/g," ").trim();
+  console.log("   [BET TEXT]", t);
 
-  // 1X2
-  if (t.includes("victorie gazde") || t.includes("home win")) return { type:"1x2", side:"1" };
-  if (t.includes("victorie oaspe") || t.includes("away win")) return { type:"1x2", side:"2" };
-  if (t === "egal" || t.includes("draw")) return { type:"1x2", side:"x" };
+  if (t.includes("double chance 1x") || t.includes("șansă dublă 1x"))
+    return { type:"double", sides:["1","x"] };
 
-  // Double chance
-  if (t.includes("șansă dublă 1x") || t.includes("double chance 1x")) return { type:"double", sides:["1","x"] };
-  if (t.includes("șansă dublă x2") || t.includes("double chance x2")) return { type:"double", sides:["x","2"] };
-  if (t.includes("șansă dublă 12") || t.includes("double chance 12")) return { type:"double", sides:["1","2"] };
+  let m =
+    t.match(/minim\s*(\d+(?:\.\d+)?).*goluri/) ||
+    t.match(/minimum\s*(\d+(?:\.\d+)?).*goals/);
+  if (m) return { type:"goals_min", threshold:parseFloat(m[1]) };
 
-  // TEAM goals (ex: FCSB minim 1.5 goluri / Galati sub 3 goluri)
   if (teams) {
     for (const side of ["home","away"]) {
       const team = teams[side];
       if (!team) continue;
 
       if (t.includes(team)) {
-        let m =
-          t.match(/(minim|min|minimum)\s*(\d+(?:\.\d+)?)/) ||
-          t.match(/(peste|over)\s*(\d+(?:\.\d+)?)/);
-        if (m) {
-          return {
-            type:"team_goals",
-            team: side,
-            side:"over",
-            threshold: parseFloat(m[2])
-          };
-        }
-
         m =
-          t.match(/(sub|under)\s*(\d+(?:\.\d+)?)/);
+          t.match(/(minim|min|minimum|peste|over)\s*(\d+(?:\.\d+)?)/);
         if (m) {
+          console.log("   [TEAM GOALS DETECTED]", team);
           return {
             type:"team_goals",
-            team: side,
-            side:"under",
-            threshold: parseFloat(m[2])
+            team:side,
+            side:"over",
+            threshold:parseFloat(m[2])
           };
         }
       }
     }
   }
 
-  // MINIMUM total goals
-  let m =
-    t.match(/minim\s*(\d+(?:\.\d+)?).*goluri/) ||
-    t.match(/minimum\s*(\d+(?:\.\d+)?).*goals/);
-  if (m) {
-    return { type:"goals_min", threshold: parseFloat(m[1]) };
+  return null;
+}
+
+/* ================= EVAL ================= */
+function evalOutcome(bet, score) {
+  console.log("   [EVAL]", bet, score);
+  const total = score.h + score.a;
+
+  if (bet.type === "goals_min")
+    return total >= bet.threshold ? WIN : LOSS;
+
+  if (bet.type === "team_goals") {
+    const g = bet.team === "home" ? score.h : score.a;
+    return g >= bet.threshold ? WIN : LOSS;
   }
 
-  // Over / Under total goals
-  m =
-    t.match(/(peste|over)\s*(\d+(?:\.\d+)?)/) ||
-    t.match(/(sub|under)\s*(\d+(?:\.\d+)?)/);
-  if (m) {
-    return {
-      type:"goals",
-      side: (m[1]==="peste"||m[1]==="over") ? "over" : "under",
-      threshold: parseFloat(m[2])
-    };
-  }
-
-  // BTTS
-  if (
-    (t.includes("ambele") && t.includes("marchează")) ||
-    (t.includes("both") && t.includes("score"))
-  ) {
-    return { type:"btts" };
+  if (bet.type === "double") {
+    const r = score.h > score.a ? "1" : score.h < score.a ? "2" : "x";
+    return bet.sides.includes(r) ? WIN : LOSS;
   }
 
   return null;
 }
 
-/* ================= EVAL BET ================= */
-function evalOutcome(bet, score) {
-  const total = score.h + score.a;
-
-  switch (bet.type) {
-
-    case "1x2": {
-      const res =
-        score.h > score.a ? "1" :
-        score.h < score.a ? "2" : "x";
-      return res === bet.side ? WIN : LOSS;
-    }
-
-    case "double": {
-      const res =
-        score.h > score.a ? "1" :
-        score.h < score.a ? "2" : "x";
-      return bet.sides.includes(res) ? WIN : LOSS;
-    }
-
-    case "goals":
-      return bet.side === "over"
-        ? total > bet.threshold ? WIN : LOSS
-        : total < bet.threshold ? WIN : LOSS;
-
-    case "goals_min":
-      return total >= bet.threshold ? WIN : LOSS;
-
-    case "team_goals": {
-      const g = bet.team === "home" ? score.h : score.a;
-      return bet.side === "over"
-        ? g >= bet.threshold ? WIN : LOSS
-        : g < bet.threshold ? WIN : LOSS;
-    }
-
-    case "btts":
-      return score.h > 0 && score.a > 0 ? WIN : LOSS;
-
-    default:
-      return null;
-  }
-}
-
 /* ================= FLASHSCORE ================= */
 async function fetchFlashscore(matchId) {
-  const res = await fetch(`${FS_BASE}${matchId}/?s=1&d=-1`);
+  const url = `${FS_BASE}${matchId}/?s=1&d=-1`;
+  console.log("   [FS FETCH]", url);
+
+  const res = await fetch(url);
   if (!res.ok) return null;
 
   const html = await res.text();
   const $ = cheerio.load(html);
   const body = $("body").text();
 
-  if (!/Finished|FT|After Penalties|AET/i.test(body)) return null;
+  if (!/Finished|FT|AET|After Penalties/i.test(body)) {
+    console.log("   [FS] NOT FINISHED");
+    return null;
+  }
 
   const scoreText =
     $("div.detail b").first().text() ||
     body.match(/(\d{1,2}\s*:\s*\d{1,2})/)?.[1];
 
+  console.log("   [FS SCORE RAW]", scoreText);
   if (!scoreText) return null;
+
   return parseScore(scoreText);
 }
 
 /* ================= UI ================= */
 function setStatus($row, status) {
+  console.log("   [SET STATUS]", status);
   $row.find("td").eq(5).html(status === WIN ? "✅" : "❌");
 }
 
-/* ================= VERIFY POST ================= */
+/* ================= VERIFY ================= */
 async function verifyPost(postId) {
+  console.log("\n[POST]", postId);
+
   const res = await get(`${WP_BASE}/wp-json/wp/v2/posts/${postId}?context=edit`);
-  if (!res.ok) return;
+  if (!res.ok) {
+    console.log("   [ERROR] Cannot load post");
+    return;
+  }
 
   const post = await res.json();
   const $ = cheerio.load(post.content.raw || post.content.rendered);
 
   const rows = $("table.bilet-pariu tbody tr").toArray();
+  console.log("   [ROWS FOUND]", rows.length);
+
   let changed = false;
 
   for (const row of rows) {
     const $r = $(row);
     const statusCell = $r.find("td").eq(5).text().trim();
+    console.log(" [ROW STATUS]", statusCell);
+
     if (!RECHECK_ONCE && statusCell !== "⏳") continue;
 
     const matchId = getMatchId($r);
@@ -229,8 +190,12 @@ async function verifyPost(postId) {
 
     const teams = extractTeamsFromRow($r);
     const betText = $r.find("td").eq(3).text();
+
     const bet = parseBetFromText(betText, teams);
-    if (!bet) continue;
+    if (!bet) {
+      console.log("   [SKIP] BET NOT PARSED");
+      continue;
+    }
 
     const score = await fetchFlashscore(matchId);
     if (!score) continue;
@@ -246,16 +211,25 @@ async function verifyPost(postId) {
     await put(`${WP_BASE}/wp-json/wp/v2/posts/${postId}`, {
       content: $.html()
     });
+    console.log("   [POST UPDATED]");
+  } else {
+    console.log("   [NO CHANGE]");
   }
 }
 
 /* ================= RUN ================= */
 (async () => {
+  console.log("=== VERIFY FLOW START ===");
+
   const r = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=50`);
   if (!r.ok) return;
 
   const posts = await r.json();
+  console.log("[POSTS FOUND]", posts.length);
+
   for (const p of posts) {
     await verifyPost(p.id);
   }
+
+  console.log("=== VERIFY FLOW END ===");
 })();
