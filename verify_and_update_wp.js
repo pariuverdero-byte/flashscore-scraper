@@ -1,4 +1,4 @@
-// verify_and_update_wp.js — FULL FINAL VERSION (RO + EN, MATCH + HALVES)
+// verify_and_update_wp.js — FULL FINAL (RO + EN, MATCH + HALVES, FIXED PENDING + TEAM SPLIT)
 // Node 18 / 20 compatible
 
 import fetch from "node-fetch";
@@ -32,21 +32,23 @@ const put = (url, body) =>
 
 /* ================= HELPERS ================= */
 function normalize(s) {
-  return s
+  return (s || "")
     .toLowerCase()
-    .replace(/[^\w\s.-]/g, "")
+    .replace(/[^\w\s.-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 function getMatchId($row) {
-  const href = $row.find("a[href*='flashscore']").attr("href");
+  const href =
+    $row.find("a[href*='flashscore.mobi/match/']").attr("href") ||
+    $row.find("a[href*='flashscore']").attr("href");
   const m = href?.match(/match\/([A-Za-z0-9]+)/);
   return m ? m[1] : null;
 }
 
 function parseScore(txt) {
-  const m = txt.match(/(\d+)\s*[:\-]\s*(\d+)/);
+  const m = (txt || "").match(/(\d+)\s*[:\-]\s*(\d+)/);
   return m ? { h: +m[1], a: +m[2] } : null;
 }
 
@@ -58,63 +60,84 @@ function parseHT(body) {
 }
 
 function extractTeams($row) {
-  const txt = normalize($row.find("td").eq(0).text());
-  const p = txt.split(" - ");
-  return p.length === 2 ? { home: p[0], away: p[1] } : null;
+  const raw = normalize($row.find("td").eq(0).text());
+  const parts = raw.split(/\s*[-–—]\s*/).filter(Boolean);
+  if (parts.length >= 2) return { home: parts[0], away: parts[1] };
+  return null;
+}
+
+function isPendingStatusCell($cell) {
+  const html = ($cell.html() || "").toLowerCase();
+  const txt = ($cell.text() || "").trim();
+  if (txt.includes("✅") || txt.includes("❌")) return false;
+  if (html.includes("✅") || html.includes("❌")) return false;
+  // hourglass icons (emoji or image/font icons) or empty = pending
+  return true;
 }
 
 /* ================= PARSE BET ================= */
 function parseBetFromText(text, teams) {
-  if (!text) return null;
   const t = normalize(text);
 
-  if (t.includes("home win") || t.includes("victorie gazde"))
+  // 1X2
+  if (t.includes("home win") || t.includes("victorie gazde") || t === "1 (gazde)" || t === "1 gazde" || t === "1")
     return { type: "1x2", side: "1" };
 
-  if (t.includes("away win") || t.includes("victorie oaspeti"))
+  if (t.includes("away win") || t.includes("victorie oaspe") || t === "2 (oaspeti)" || t === "2 oaspeti" || t === "2")
     return { type: "1x2", side: "2" };
 
-  if (t === "x" || t.includes("draw"))
+  if (t === "x" || t.includes("draw") || t.includes("egal"))
     return { type: "1x2", side: "x" };
 
-  if (t.includes("1x")) return { type: "double", sides: ["1", "x"] };
-  if (t.includes("x2")) return { type: "double", sides: ["x", "2"] };
+  // Double chance
+  if (t.includes("double chance 1x") || t.includes("sansa dubla 1x") || t.includes("șansă dublă 1x") || t === "1x")
+    return { type: "double", sides: ["1", "x"] };
 
-  if (t.includes("ambele") || t.includes("both teams"))
-    return { type: "btts" };
+  if (t.includes("double chance x2") || t.includes("sansa dubla x2") || t.includes("șansă dublă x2") || t === "x2")
+    return { type: "double", sides: ["x", "2"] };
 
+  // BTTS
+  if (
+    t.includes("both teams to score") ||
+    t.includes("ambele echipe marcheaza") ||
+    t.includes("ambele echipe marchează") ||
+    (t.includes("ambele") && t.includes("marche"))
+  ) return { type: "btts" };
+
+  // Team goals: "FCSB minim 1 gol", "Chelsea to score at least 2 goals"
   if (teams) {
-    for (const side of ["home", "away"]) {
-      if (!t.includes(teams[side])) continue;
+    const th = normalize(teams.home);
+    const ta = normalize(teams.away);
 
-      let m = t.match(/(minim|min|minimum|at least|over)\s*(\d+(\.\d+)?)/);
-      if (m)
-        return { type: "team_goals", side, mode: "over", val: +m[2] };
+    const hasHome = th && t.includes(th);
+    const hasAway = ta && t.includes(ta);
+
+    if (hasHome || hasAway) {
+      const side = hasHome ? "home" : "away";
+
+      let m = t.match(/(minim|min|minimum|at least|over|peste)\s*(\d+(\.\d+)?)/);
+      if (m) return { type: "team_goals", side, mode: "over", val: +m[2] };
 
       m = t.match(/(sub|under)\s*(\d+(\.\d+)?)/);
-      if (m)
-        return { type: "team_goals", side, mode: "under", val: +m[2] };
+      if (m) return { type: "team_goals", side, mode: "under", val: +m[2] };
 
+      // "echipa inscrie 1-3 goluri" / "team to score 1-3 goals"
       m = t.match(/(\d+)\s*-\s*(\d+)\s*gol/);
-      if (m)
-        return {
-          type: "team_interval",
-          side,
-          min: +m[1],
-          max: +m[2],
-        };
+      if (m) return { type: "team_interval", side, min: +m[1], max: +m[2] };
     }
   }
 
-  let m = t.match(/interval\s*(\d+)\s*-\s*(\d+).*meci/);
+  // Interval match / halves
+  let m = t.match(/interval\s*(\d+)\s*-\s*(\d+).*total.*meci/);
   if (m) return { type: "interval_match", min: +m[1], max: +m[2] };
 
-  m = t.match(/interval\s*(\d+)\s*-\s*(\d+).*prima repriza/);
+  m = t.match(/interval\s*(\d+)\s*-\s*(\d+).*prima repriz/);
   if (m) return { type: "interval_ht", min: +m[1], max: +m[2] };
 
-  m = t.match(/interval\s*(\d+)\s*-\s*(\d+).*repriza a doua/);
+  m = t.match(/interval\s*(\d+)\s*-\s*(\d+).*(repriza a doua|repriza secund)/);
   if (m) return { type: "interval_sh", min: +m[1], max: +m[2] };
 
+  // Total goals over/under
   m = t.match(/(over|peste|minim)\s*(\d+(\.\d+)?)/);
   if (m) return { type: "goals", side: "over", val: +m[2] };
 
@@ -147,8 +170,8 @@ function evalOutcome(bet, data) {
     case "team_goals": {
       const g = bet.side === "home" ? ft.h : ft.a;
       return bet.mode === "over"
-        ? g >= bet.val ? WIN : LOSS
-        : g < bet.val ? WIN : LOSS;
+        ? (g >= bet.val ? WIN : LOSS)
+        : (g < bet.val ? WIN : LOSS);
     }
 
     case "team_interval": {
@@ -158,15 +181,15 @@ function evalOutcome(bet, data) {
 
     case "goals":
       return bet.side === "over"
-        ? totalFT >= Math.ceil(bet.val) ? WIN : LOSS
-        : totalFT < bet.val ? WIN : LOSS;
+        ? (totalFT >= Math.ceil(bet.val) ? WIN : LOSS)  // over 1.5 => >=2
+        : (totalFT < bet.val ? WIN : LOSS);
 
     case "interval_match":
       return totalFT >= bet.min && totalFT <= bet.max ? WIN : LOSS;
 
     case "interval_ht":
       if (!ht) return null;
-      return ht.h + ht.a >= bet.min && ht.h + ht.a <= bet.max ? WIN : LOSS;
+      return (ht.h + ht.a) >= bet.min && (ht.h + ht.a) <= bet.max ? WIN : LOSS;
 
     case "interval_sh":
       if (!ht) return null;
@@ -185,14 +208,15 @@ async function fetchFlashscore(matchId) {
 
   const html = await res.text();
   const $ = cheerio.load(html);
-  const body = $("body").text();
+  const bodyText = $("body").text();
 
-  if (!/Finished|FT|After Penalties|AET/i.test(body)) return null;
+  if (!/Finished|FT|After Penalties|AET/i.test(bodyText)) return null;
 
-  const ft = parseScore(body);
+  // FT: safest is first score pattern found in body
+  const ft = parseScore(bodyText);
   if (!ft) return null;
 
-  const ht = parseHT(body);
+  const ht = parseHT(bodyText);
   return { ft, ht };
 }
 
@@ -211,15 +235,21 @@ async function fetchFlashscore(matchId) {
     const $ = cheerio.load(post.content.raw || post.content.rendered);
     let changed = false;
 
-    for (const row of $("table.bilet-pariu tbody tr").toArray()) {
+    const rows = $("table.bilet-pariu tbody tr").toArray();
+
+    for (const row of rows) {
       const $r = $(row);
-      const status = $r.find("td").eq(5).text().trim();
-      if (!RECHECK_ONCE && status !== "⏳") continue;
+      const $statusCell = $r.find("td").eq(5);
+
+      if (!RECHECK_ONCE && !isPendingStatusCell($statusCell)) continue;
 
       const matchId = getMatchId($r);
+      if (!matchId) continue;
+
       const teams = extractTeams($r);
-      const bet = parseBetFromText($r.find("td").eq(3).text(), teams);
-      if (!matchId || !bet) continue;
+      const betText = $r.find("td").eq(3).text();
+      const bet = parseBetFromText(betText, teams);
+      if (!bet) continue;
 
       const data = await fetchFlashscore(matchId);
       if (!data) continue;
@@ -227,14 +257,12 @@ async function fetchFlashscore(matchId) {
       const verdict = evalOutcome(bet, data);
       if (!verdict) continue;
 
-      $r.find("td").eq(5).html(verdict === WIN ? "✅" : "❌");
+      $statusCell.html(verdict === WIN ? "✅" : "❌");
       changed = true;
     }
 
     if (changed) {
-      await put(`${WP_BASE}/wp-json/wp/v2/posts/${p.id}`, {
-        content: $.html(),
-      });
+      await put(`${WP_BASE}/wp-json/wp/v2/posts/${p.id}`, { content: $.html() });
     }
   }
 })();
