@@ -1,4 +1,4 @@
-// verify_and_update_wp.js — FINAL, ADAPTED TO REAL HTML
+// verify_and_update_wp.js — FIXED + EXTENDED (TEAM GOALS SUPPORTED RO + EN)
 // Node 18 / 20 compatible
 
 import fetch from "node-fetch";
@@ -47,34 +47,94 @@ function parseScore(text) {
   return { h:+m[1], a:+m[2] };
 }
 
+function normalizeTeam(name) {
+  return name
+    .toLowerCase()
+    .replace(/[^\w\s]/g,"")
+    .replace(/\s+/g," ")
+    .trim();
+}
+
+function extractTeamsFromRow($row) {
+  const raw = $row.find("td").eq(0).text();
+  const parts = raw.split("–").map(t => normalizeTeam(t));
+  if (parts.length !== 2) return null;
+  return { home: parts[0], away: parts[1] };
+}
+
 /* ================= PARSE BET FROM TEXT ================= */
-function parseBetFromText(text) {
+function parseBetFromText(text, teams) {
   if (!text) return null;
-  text = text.toLowerCase().trim();
+  const t = text.toLowerCase().replace(/\s+/g," ").trim();
 
   // 1X2
-  if (text.includes("victorie gazde")) return { type:"1x2", side:"1" };
-  if (text.includes("victorie oaspe")) return { type:"1x2", side:"2" };
-  if (text === "egal" || text.includes("rezultat egal"))
-    return { type:"1x2", side:"x" };
+  if (t.includes("victorie gazde") || t.includes("home win")) return { type:"1x2", side:"1" };
+  if (t.includes("victorie oaspe") || t.includes("away win")) return { type:"1x2", side:"2" };
+  if (t === "egal" || t.includes("draw")) return { type:"1x2", side:"x" };
 
-  // Șansă dublă
-  if (text.includes("șansă dublă 1x")) return { type:"double", sides:["1","x"] };
-  if (text.includes("șansă dublă x2")) return { type:"double", sides:["x","2"] };
-  if (text.includes("șansă dublă 12")) return { type:"double", sides:["1","2"] };
+  // Double chance
+  if (t.includes("șansă dublă 1x") || t.includes("double chance 1x")) return { type:"double", sides:["1","x"] };
+  if (t.includes("șansă dublă x2") || t.includes("double chance x2")) return { type:"double", sides:["x","2"] };
+  if (t.includes("șansă dublă 12") || t.includes("double chance 12")) return { type:"double", sides:["1","2"] };
 
-  // Over / Under goluri
-  const ou = text.match(/(peste|sub)\s*([\d\.]+)/);
-  if (ou) {
+  // TEAM goals (ex: FCSB minim 1.5 goluri / Galati sub 3 goluri)
+  if (teams) {
+    for (const side of ["home","away"]) {
+      const team = teams[side];
+      if (!team) continue;
+
+      if (t.includes(team)) {
+        let m =
+          t.match(/(minim|min|minimum)\s*(\d+(?:\.\d+)?)/) ||
+          t.match(/(peste|over)\s*(\d+(?:\.\d+)?)/);
+        if (m) {
+          return {
+            type:"team_goals",
+            team: side,
+            side:"over",
+            threshold: parseFloat(m[2])
+          };
+        }
+
+        m =
+          t.match(/(sub|under)\s*(\d+(?:\.\d+)?)/);
+        if (m) {
+          return {
+            type:"team_goals",
+            team: side,
+            side:"under",
+            threshold: parseFloat(m[2])
+          };
+        }
+      }
+    }
+  }
+
+  // MINIMUM total goals
+  let m =
+    t.match(/minim\s*(\d+(?:\.\d+)?).*goluri/) ||
+    t.match(/minimum\s*(\d+(?:\.\d+)?).*goals/);
+  if (m) {
+    return { type:"goals_min", threshold: parseFloat(m[1]) };
+  }
+
+  // Over / Under total goals
+  m =
+    t.match(/(peste|over)\s*(\d+(?:\.\d+)?)/) ||
+    t.match(/(sub|under)\s*(\d+(?:\.\d+)?)/);
+  if (m) {
     return {
-      type: "goals",
-      side: ou[1] === "peste" ? "over" : "under",
-      threshold: parseFloat(ou[2])
+      type:"goals",
+      side: (m[1]==="peste"||m[1]==="over") ? "over" : "under",
+      threshold: parseFloat(m[2])
     };
   }
 
   // BTTS
-  if (text.includes("ambele") && text.includes("marchează")) {
+  if (
+    (t.includes("ambele") && t.includes("marchează")) ||
+    (t.includes("both") && t.includes("score"))
+  ) {
     return { type:"btts" };
   }
 
@@ -106,6 +166,16 @@ function evalOutcome(bet, score) {
         ? total > bet.threshold ? WIN : LOSS
         : total < bet.threshold ? WIN : LOSS;
 
+    case "goals_min":
+      return total >= bet.threshold ? WIN : LOSS;
+
+    case "team_goals": {
+      const g = bet.team === "home" ? score.h : score.a;
+      return bet.side === "over"
+        ? g >= bet.threshold ? WIN : LOSS
+        : g < bet.threshold ? WIN : LOSS;
+    }
+
     case "btts":
       return score.h > 0 && score.a > 0 ? WIN : LOSS;
 
@@ -116,43 +186,30 @@ function evalOutcome(bet, score) {
 
 /* ================= FLASHSCORE ================= */
 async function fetchFlashscore(matchId) {
-  const url = `${FS_BASE}${matchId}/?s=1&d=-1`;
-  console.log(`   [FS] Fetching ${url}`);
-
-  const res = await fetch(url);
+  const res = await fetch(`${FS_BASE}${matchId}/?s=1&d=-1`);
   if (!res.ok) return null;
 
   const html = await res.text();
   const $ = cheerio.load(html);
   const body = $("body").text();
 
-  const finished = /Finished|FT|After Penalties|AET/i.test(body);
-  if (!finished) {
-    console.log(`   ⏳ Match LIVE / NOT FINISHED`);
-    return null;
-  }
+  if (!/Finished|FT|After Penalties|AET/i.test(body)) return null;
 
   const scoreText =
     $("div.detail b").first().text() ||
     body.match(/(\d{1,2}\s*:\s*\d{1,2})/)?.[1];
 
   if (!scoreText) return null;
-
-  console.log(`   [FS] Score FOUND ${scoreText}`);
   return parseScore(scoreText);
 }
 
 /* ================= UI ================= */
 function setStatus($row, status) {
-  $row.find("td").eq(5).html(
-    status === WIN ? "✅" : "❌"
-  );
+  $row.find("td").eq(5).html(status === WIN ? "✅" : "❌");
 }
 
 /* ================= VERIFY POST ================= */
 async function verifyPost(postId) {
-  console.log(`\n[POST] Verifying post ${postId}`);
-
   const res = await get(`${WP_BASE}/wp-json/wp/v2/posts/${postId}?context=edit`);
   if (!res.ok) return;
 
@@ -160,24 +217,19 @@ async function verifyPost(postId) {
   const $ = cheerio.load(post.content.raw || post.content.rendered);
 
   const rows = $("table.bilet-pariu tbody tr").toArray();
-  console.log(`[POST] Rows found: ${rows.length}`);
-
   let changed = false;
 
   for (const row of rows) {
     const $r = $(row);
-
     const statusCell = $r.find("td").eq(5).text().trim();
     if (!RECHECK_ONCE && statusCell !== "⏳") continue;
 
     const matchId = getMatchId($r);
-    console.log(`[ROW] Match ${matchId}`);
     if (!matchId) continue;
 
+    const teams = extractTeamsFromRow($r);
     const betText = $r.find("td").eq(3).text();
-    const bet = parseBetFromText(betText);
-
-    console.log(`   [BET] "${betText}" →`, bet);
+    const bet = parseBetFromText(betText, teams);
     if (!bet) continue;
 
     const score = await fetchFlashscore(matchId);
@@ -186,7 +238,6 @@ async function verifyPost(postId) {
     const verdict = evalOutcome(bet, score);
     if (!verdict) continue;
 
-    console.log(`   ✅ Verdict ${verdict}`);
     setStatus($r, verdict);
     changed = true;
   }
@@ -195,25 +246,16 @@ async function verifyPost(postId) {
     await put(`${WP_BASE}/wp-json/wp/v2/posts/${postId}`, {
       content: $.html()
     });
-    console.log(`[POST] Updated`);
-  } else {
-    console.log(`[POST] No changes`);
   }
 }
 
 /* ================= RUN ================= */
 (async () => {
-  console.log("=== VERIFY FLOW START ===");
-
-  const r = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=25&search=Bilet`);
+  const r = await get(`${WP_BASE}/wp-json/wp/v2/posts?per_page=50`);
   if (!r.ok) return;
 
   const posts = await r.json();
-  console.log(`[MAIN] Posts found: ${posts.length}`);
-
   for (const p of posts) {
     await verifyPost(p.id);
   }
-
-  console.log("=== VERIFY FLOW END ===");
 })();
