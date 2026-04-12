@@ -1,5 +1,5 @@
 // publish_wp.js
-// FINAL — LANG-aware (RO / EN), safe publish, no-picks safe, HTML-response safe
+// FINAL — CLEAN HTML + DATE + ROBUST
 
 import fs from "fs/promises";
 import fetch from "node-fetch";
@@ -16,7 +16,7 @@ if (!WP_URL || !WP_USER || !WP_APP_PASS) {
  * 🔧 NORMALIZE REST API BASE
  * ===================================================== */
 function normalizeApiBase(url) {
-  const u = url.replace(/\/$/, "");
+  let u = url.replace(/\/$/, "");
   if (u.includes("/wp-json/wp/v2")) return u;
   return `${u}/index.php/wp-json/wp/v2`;
 }
@@ -32,6 +32,34 @@ const read = async (p) =>
   fs.readFile(p, "utf8").catch(() => null);
 
 /* =====================================================
+ * 🧹 HTML SANITIZER (CRITICAL FIX)
+ * ===================================================== */
+function sanitizeHtmlFragment(html = "") {
+  return html
+    .replace(/<html[^>]*>/gi, "")
+    .replace(/<\/html>/gi, "")
+    .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, "")
+    .replace(/<body[^>]*>/gi, "")
+    .replace(/<\/body>/gi, "")
+    .trim();
+}
+
+/* =====================================================
+ * 📅 DATE FORMAT
+ * ===================================================== */
+function formatTicketDate(dateStr) {
+  if (!dateStr) return "";
+
+  const d = new Date(dateStr);
+
+  if (LANG === "en") {
+    return d.toLocaleDateString("en-GB");
+  }
+
+  return d.toLocaleDateString("ro-RO");
+}
+
+/* =====================================================
  * 🌍 TRANSLATIONS
  * ===================================================== */
 const I18N = {
@@ -42,8 +70,7 @@ const I18N = {
       `Bilet Cota 2 cu ${t.selections.length} selecții • Cotă totală ${t.product}`,
     zi_excerpt: (t) =>
       `Biletul Zilei cu ${t.selections.length} selecții • Cotă totală ${t.product}`,
-    no_picks: "Nu există bilete valide astăzi. Publicarea a fost omisă.",
-    ticket_date_label: "Data biletului",
+    ticket_date_label: "Data biletului"
   },
   en: {
     cota2_title: "Odds 2 Ticket",
@@ -52,65 +79,32 @@ const I18N = {
       `Odds 2 Ticket with ${t.selections.length} selections • Total odds ${t.product}`,
     zi_excerpt: (t) =>
       `Bet of the Day with ${t.selections.length} selections • Total odds ${t.product}`,
-    no_picks: "No valid tickets today. Publish skipped.",
-    ticket_date_label: "Ticket date",
+    ticket_date_label: "Ticket date"
   },
 };
 
 const T = I18N[LANG] || I18N.ro;
 
 /* =====================================================
- * 📅 DATE
- * ===================================================== */
-function formatTicketDate(isoDate) {
-  if (!isoDate) {
-    return LANG === "ro"
-      ? new Date().toLocaleDateString("ro-RO")
-      : new Date().toLocaleDateString("en-GB");
-  }
-
-  const [y, m, d] = isoDate.split("-");
-  if (!y || !m || !d) return isoDate;
-
-  return LANG === "ro" ? `${d}.${m}.${y}` : `${d}/${m}/${y}`;
-}
-
-/* =====================================================
- * 🌐 SAFE JSON / TEXT
- * ===================================================== */
-async function safeJsonResponse(response, label) {
-  const text = await response.text();
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    console.error(`❌ ${label} returned non-JSON response`);
-    console.error(text.slice(0, 800));
-    throw new Error(`${label} returned HTML/non-JSON instead of JSON`);
-  }
-}
-
-/* =====================================================
  * CATEGORY
  * ===================================================== */
 async function getCategoryId(slug) {
   try {
-    const r = await fetch(`${CATEGORIES_ENDPOINT}?slug=${encodeURIComponent(slug)}`, {
-      headers: {
-        Authorization: auth,
-        Accept: "application/json",
-      },
+    const r = await fetch(`${CATEGORIES_ENDPOINT}?slug=${slug}`, {
+      headers: { Authorization: auth },
     });
 
-    if (!r.ok) {
-      console.log(`⚠ Category lookup failed: ${slug} (${r.status})`);
+    const text = await r.text();
+
+    try {
+      const j = JSON.parse(text);
+      return j?.[0]?.id || null;
+    } catch {
+      console.log(`⚠ Category lookup returned non-JSON for ${slug}`);
       return null;
     }
 
-    const j = await safeJsonResponse(r, `Category lookup for slug "${slug}"`);
-    return j?.[0]?.id || null;
-  } catch (err) {
-    console.log(`⚠ Category missing or blocked: ${slug} (${err.message})`);
+  } catch {
     return null;
   }
 }
@@ -124,21 +118,20 @@ async function publish({ title, html, excerpt, categorySlug, ticketDate }) {
     return;
   }
 
+  const cleanHtml = sanitizeHtmlFragment(html);
+
   let categories = [];
   if (categorySlug) {
     const catId = await getCategoryId(categorySlug);
-    if (catId) {
-      categories = [catId];
-    } else {
-      console.log(`⚠ Category missing: ${categorySlug}`);
-    }
+    if (catId) categories = [catId];
+    else console.log(`⚠ Category missing: ${categorySlug}`);
   }
 
   const content = `
 <p><strong>${excerpt}</strong></p>
 <p><em>${T.ticket_date_label}: ${formatTicketDate(ticketDate)}</em></p>
 <!--more-->
-${html}
+${cleanHtml}
 `.trim();
 
   const r = await fetch(POSTS_ENDPOINT, {
@@ -146,7 +139,6 @@ ${html}
     headers: {
       Authorization: auth,
       "Content-Type": "application/json",
-      Accept: "application/json",
     },
     body: JSON.stringify({
       title,
@@ -156,18 +148,18 @@ ${html}
     }),
   });
 
+  const text = await r.text();
+
   if (!r.ok) {
-    const text = await r.text();
-    console.error(`❌ Publish failed "${title}" (${r.status})`);
-    console.error(text.slice(0, 800));
+    console.error(`❌ Publish failed "${title}"`, r.status, text);
     return;
   }
 
   try {
-    const data = await safeJsonResponse(r, `Publish "${title}"`);
+    const data = JSON.parse(text);
     console.log(`✅ Published: ${data.link}`);
-  } catch (err) {
-    console.error(`❌ Publish parse failed "${title}": ${err.message}`);
+  } catch {
+    console.error(`❌ Publish parse failed "${title}"`, text);
   }
 }
 
@@ -175,54 +167,39 @@ ${html}
  * MAIN
  * ===================================================== */
 (async () => {
-  try {
-    const ticketsRaw = await read("tickets.json");
-    if (!ticketsRaw) {
-      console.log("ℹ tickets.json missing → skip publish");
-      process.exit(0);
-    }
+  const ticketsRaw = await read("tickets.json");
+  const tickets = ticketsRaw ? JSON.parse(ticketsRaw) : {};
 
-    const tickets = JSON.parse(ticketsRaw);
+  const ticketDate = tickets.date;
 
-    if (tickets.status === "no_picks") {
-      console.log(`ℹ ${T.no_picks}`);
-      process.exit(0);
-    }
+  const today =
+    LANG === "ro"
+      ? new Date().toLocaleDateString("ro-RO")
+      : new Date().toLocaleDateString("en-GB");
 
-    const ticketDateLabel = formatTicketDate(tickets.date);
+  const cota2Html = await read("cota2.html");
+  const ziHtml = await read("biletul-zilei.html");
 
-    const cota2Html = await read("cota2.html");
-    const ziHtml = await read("biletul-zilei.html");
-
-    // ---- COTA 2 ----
-    if (cota2Html && tickets.bilet_cota2) {
-      await publish({
-        title: `${T.cota2_title} (${ticketDateLabel})`,
-        html: cota2Html,
-        excerpt: T.cota2_excerpt(tickets.bilet_cota2),
-        categorySlug: "cota-2",
-        ticketDate: tickets.date,
-      });
-    } else {
-      console.log("ℹ No Cota 2 content to publish");
-    }
-
-    // ---- BILETUL ZILEI ----
-    if (ziHtml && tickets.biletul_zilei) {
-      await publish({
-        title: `${T.zi_title} (${ticketDateLabel})`,
-        html: ziHtml,
-        excerpt: T.zi_excerpt(tickets.biletul_zilei),
-        categorySlug: "biletul-zilei",
-        ticketDate: tickets.date,
-      });
-    } else {
-      console.log("ℹ No Bet of the Day content to publish");
-    }
-
-    process.exit(0);
-  } catch (err) {
-    console.error(`❌ publish_wp fatal: ${err.message}`);
-    process.exit(1);
+  // ---- COTA 2 ----
+  if (cota2Html && tickets.bilet_cota2) {
+    await publish({
+      title: `${T.cota2_title} (${today})`,
+      html: cota2Html,
+      excerpt: T.cota2_excerpt(tickets.bilet_cota2),
+      categorySlug: "cota-2",
+      ticketDate
+    });
   }
+
+  // ---- BILETUL ZILEI ----
+  if (ziHtml && tickets.biletul_zilei) {
+    await publish({
+      title: `${T.zi_title} (${today})`,
+      html: ziHtml,
+      excerpt: T.zi_excerpt(tickets.biletul_zilei),
+      categorySlug: "biletul-zilei",
+      ticketDate
+    });
+  }
+
 })();
