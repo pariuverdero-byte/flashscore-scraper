@@ -1,5 +1,6 @@
 // parsers/parse_talkfootball_as_odds.js
-// FINAL — TalkFootball as fallback/source merge for master_pool
+// FINAL — Claudiu + TalkFootball merged into master_pool
+// IMPORTANT: Claudiu selections are included ONLY if matched to Flashscore
 
 import fs from "fs/promises";
 
@@ -8,6 +9,7 @@ import fs from "fs/promises";
  * ========================= */
 const INPUT_MATCHED = "artifacts/talkfootball_matched.json";
 const CLAUDIU_POOL = "claudiu_pool.json";
+const MATCHES_FILE = "matches.json";
 const OUTPUT_POOL = "master_pool.json";
 
 /* =========================
@@ -42,6 +44,57 @@ function slugify(text = "") {
 function normalizeOdd(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+function normalizeTeam(text = "") {
+  return safe(text)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\b(fc|cf|sc|ac|fk|if|bk|sk|u19|u20|u21)\b/g, "")
+    .replace(/\b\d{2}\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function splitTeams(teams = "") {
+  const parts = safe(teams).split(" - ").map((x) => x.trim());
+  if (parts.length < 2) return { home: "", away: "" };
+  return { home: parts[0], away: parts.slice(1).join(" - ") };
+}
+
+function softEq(a, b) {
+  return a === b || a.includes(b) || b.includes(a);
+}
+
+/* =========================
+ * CLAUDIU → FLASHSCORE MATCH
+ * ========================= */
+function buildFlashscoreUrl(match) {
+  if (safe(match.url)) return safe(match.url);
+  if (safe(match.flashscore_url)) return safe(match.flashscore_url);
+  if (safe(match.id)) return `https://www.flashscore.mobi/match/${safe(match.id)}/`;
+  return "";
+}
+
+function matchClaudiuToFlashscore(sel, matches) {
+  const { home, away } = splitTeams(sel.teams);
+  const nHome = normalizeTeam(home);
+  const nAway = normalizeTeam(away);
+
+  if (!nHome || !nAway) return null;
+
+  for (const m of matches) {
+    const mh = normalizeTeam(m.home || m.home_team || "");
+    const ma = normalizeTeam(m.away || m.away_team || "");
+
+    if (softEq(mh, nHome) && softEq(ma, nAway)) {
+      return m;
+    }
+  }
+
+  return null;
 }
 
 /* =========================
@@ -93,18 +146,39 @@ function detectParams(tf) {
 /* =========================
  * NORMALIZERS
  * ========================= */
-function normalizeClaudiuSelection(sel) {
+function normalizeClaudiuSelection(sel, matches) {
   const odd = normalizeOdd(sel.odd);
   if (!sel || !safe(sel.teams) || !odd) return null;
 
+  const flashscoreMatch = matchClaudiuToFlashscore(sel, matches);
+  if (!flashscoreMatch) {
+    console.log(`[MASTER] drop Claudiu (no Flashscore match): ${sel.teams}`);
+    return null;
+  }
+
+  const flashscoreId = safe(
+    flashscoreMatch.id || flashscoreMatch.flashscore_id || flashscoreMatch.match_id || ""
+  );
+
+  const flashscoreUrl = buildFlashscoreUrl(flashscoreMatch);
+
+  if (!flashscoreId || !flashscoreUrl) {
+    console.log(`[MASTER] drop Claudiu (missing Flashscore id/url): ${sel.teams}`);
+    return null;
+  }
+
   return {
-    match_id: safe(sel.match_id) || slugify(sel.teams),
-    flashscore_url: safe(sel.flashscore_url || sel.url || ""),
-    url: safe(sel.url || sel.flashscore_url || ""),
+    match_id: flashscoreId,
+    id: flashscoreId,
+    flashscore_url: flashscoreUrl,
+    url: flashscoreUrl,
     teams: safe(sel.teams),
-    time: safe(sel.time || ""),
-    country: safe(sel.country || ""),
-    competition: safe(sel.competition || ""),
+    time: safe(
+      flashscoreMatch.time ||
+      parseKickoffToTime(flashscoreMatch.kickoff || flashscoreMatch.flashscore_kickoff || "")
+    ),
+    country: safe(flashscoreMatch.country || ""),
+    competition: safe(flashscoreMatch.competition || flashscoreMatch.league || ""),
     bet_type: safe(sel.bet_type || sel.market || "stat"),
     market_raw: safe(sel.market_raw || sel.market || "Pariu special"),
     odd: Number(odd.toFixed(3)),
@@ -115,7 +189,6 @@ function normalizeClaudiuSelection(sel) {
       source: safe(sel.meta?.source || sel.source || "claudiuhood")
     },
     params: sel.params || {},
-    id: safe(sel.id || "")
   };
 }
 
@@ -133,6 +206,7 @@ function normalizeTalkfootballSelection(tf) {
 
   return {
     match_id: safe(tf.flashscore_id),
+    id: safe(tf.flashscore_id),
     flashscore_url: `https://www.flashscore.mobi/match/${safe(tf.flashscore_id)}/`,
     url: `https://www.flashscore.mobi/match/${safe(tf.flashscore_id)}/`,
     teams: `${safe(tf.home)} - ${safe(tf.away)}`,
@@ -150,7 +224,6 @@ function normalizeTalkfootballSelection(tf) {
       pick: safe(tf.pick)
     },
     params,
-    id: safe(tf.flashscore_id)
   };
 }
 
@@ -183,9 +256,10 @@ function dedupeSelections(items) {
     selections: [],
     errors: []
   });
+  const matches = await readJsonSafe(MATCHES_FILE, []);
 
   const claudiuSelections = Array.isArray(claudiuPool.selections)
-    ? claudiuPool.selections.map(normalizeClaudiuSelection).filter(Boolean)
+    ? claudiuPool.selections.map((s) => normalizeClaudiuSelection(s, matches)).filter(Boolean)
     : [];
 
   const talkfootballSelections = Array.isArray(matched)
@@ -218,8 +292,10 @@ function dedupeSelections(items) {
     source_mode: sourceMode,
     sources_used: sourcesUsed,
     upstream_counts: {
-      claudiu: claudiuSelections.length,
-      talkfootball: talkfootballSelections.length
+      claudiu_raw: Array.isArray(claudiuPool.selections) ? claudiuPool.selections.length : 0,
+      claudiu_matched_to_flashscore: claudiuSelections.length,
+      talkfootball: talkfootballSelections.length,
+      flashscore_matches: Array.isArray(matches) ? matches.length : 0
     },
     selections
   };
@@ -227,7 +303,8 @@ function dedupeSelections(items) {
   await fs.writeFile(OUTPUT_POOL, JSON.stringify(out, null, 2), "utf8");
 
   console.log(`[MASTER] mode: ${sourceMode}`);
-  console.log(`[MASTER] claudiu: ${claudiuSelections.length}`);
+  console.log(`[MASTER] claudiu raw: ${out.upstream_counts.claudiu_raw}`);
+  console.log(`[MASTER] claudiu matched: ${out.upstream_counts.claudiu_matched_to_flashscore}`);
   console.log(`[MASTER] talkfootball: ${talkfootballSelections.length}`);
   console.log(`[MASTER] total unique selections: ${selections.length}`);
 })();
