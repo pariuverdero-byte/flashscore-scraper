@@ -1,15 +1,8 @@
-// generate_wp.js
-// FINAL — RO / EN clean, aligned with verify + publish flows
-// FIX: robust Flashscore link resolution (url → flashscore_url → id fallback)
-
 import fs from "fs/promises";
 
 const TICKETS_FILE = "tickets.json";
 const LANG = process.env.LANG || "ro";
 
-/* ======================================================
- * 🔁 TRANSLATE BET TEXT (RO → EN)
- * ====================================================== */
 function translateBetText(sel) {
   const raw =
     sel.meta?.bet_text ||
@@ -68,9 +61,15 @@ function capitalize(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/* ======================================================
- * 🔗 RESOLVE FLASHCORE URL (CRITICAL FIX)
- * ====================================================== */
+function formatTicketDate(isoDate) {
+  if (!isoDate) return "-";
+
+  const [y, m, d] = isoDate.split("-");
+
+  if (LANG === "en") return `${d}/${m}/${y}`;
+  return `${d}.${m}.${y}`;
+}
+
 function resolveEventUrl(sel) {
   if (sel.url) return sel.url;
   if (sel.flashscore_url) return sel.flashscore_url;
@@ -78,9 +77,6 @@ function resolveEventUrl(sel) {
   return null;
 }
 
-/* ======================================================
- * 🧱 RENDER ONE ROW
- * ====================================================== */
 function renderRow(sel) {
   const betText = translateBetText(sel);
   const link = resolveEventUrl(sel);
@@ -107,9 +103,17 @@ function renderRow(sel) {
 </tr>`;
 }
 
-/* ======================================================
- * 📊 RENDER TICKET TABLE
- * ====================================================== */
+function renderTicketHeader(title, date) {
+  return `
+<div class="ticket-meta">
+  <h2>${title}</h2>
+  <div class="ticket-date">
+    <strong>${LANG === "en" ? "Ticket date" : "Data biletului"}:</strong>
+    ${formatTicketDate(date)}
+  </div>
+</div>`;
+}
+
 function renderTicket(ticket) {
   if (!ticket || !ticket.selections?.length) {
     return `<p>(No ticket generated)</p>`;
@@ -140,11 +144,22 @@ function renderTicket(ticket) {
 </table>`;
 }
 
-/* ======================================================
- * 🎨 CSS (safe for WP)
- * ====================================================== */
 const STYLE = `
 <style>
+.ticket-meta {
+  margin-bottom: 14px;
+}
+
+.ticket-meta h2 {
+  margin: 0 0 6px 0;
+}
+
+.ticket-date {
+  font-size: 14px;
+  color: #555;
+  margin-bottom: 10px;
+}
+
 .bilet-pariu {
   width:100%;
   border-collapse:collapse;
@@ -161,21 +176,32 @@ const STYLE = `
 </style>
 `;
 
-/* ======================================================
- * 🚀 MAIN
- * ====================================================== */
 (async () => {
   const raw = await fs.readFile(TICKETS_FILE, "utf8");
   const data = JSON.parse(raw);
 
   if (data.bilet_cota2) {
-    const html = STYLE + renderTicket(data.bilet_cota2);
+    const html =
+      STYLE +
+      renderTicketHeader(
+        LANG === "en" ? "Odds 2 Ticket" : "Bilet Cota 2",
+        data.date
+      ) +
+      renderTicket(data.bilet_cota2);
+
     await fs.writeFile("cota2.html", html, "utf8");
     console.log("[WP] cota2.html generated");
   }
 
   if (data.biletul_zilei) {
-    const html = STYLE + renderTicket(data.biletul_zilei);
+    const html =
+      STYLE +
+      renderTicketHeader(
+        LANG === "en" ? "Bet of the Day" : "Biletul Zilei",
+        data.date
+      ) +
+      renderTicket(data.biletul_zilei);
+
     await fs.writeFile("biletul-zilei.html", html, "utf8");
     console.log("[WP] biletul-zilei.html generated");
   }
