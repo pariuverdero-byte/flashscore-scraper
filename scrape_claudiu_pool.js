@@ -69,24 +69,26 @@ function clean(text = "") {
     .trim();
 }
 
+function stripDiacritics(text = "") {
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
 function slugify(text = "") {
-  return text
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+  return stripDiacritics(text)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
 }
 
 function extractOdd(text = "") {
-  const normalized = clean(text);
+  const normalized = stripDiacritics(clean(text)).toLowerCase();
   const match = normalized.match(/cota\s*([0-9]+(?:[.,][0-9]+)?)/i);
   if (!match) return null;
   return Number(match[1].replace(",", "."));
 }
 
 function looksLikeMatch(text = "") {
-  const t = clean(text);
+  const t = stripDiacritics(clean(text)).toLowerCase();
   if (!t.includes(" - ")) return false;
   if (/^cota/i.test(t)) return false;
   if (/unibet/i.test(t)) return false;
@@ -95,9 +97,8 @@ function looksLikeMatch(text = "") {
 }
 
 function looksLikeSummaryRow(teams = "", market = "", oddText = "") {
-  const t = clean(teams).toLowerCase();
-  const m = clean(market).toLowerCase();
-  const o = clean(oddText).toLowerCase();
+  const t = stripDiacritics(clean(teams)).toLowerCase();
+  const m = stripDiacritics(clean(market)).toLowerCase();
 
   if (t.includes("cota 2 zilnica")) return true;
   if (t.includes("biletul zilei")) return true;
@@ -105,7 +106,6 @@ function looksLikeSummaryRow(teams = "", market = "", oddText = "") {
   if (t.includes("varianta rezerva")) return true;
   if (t.includes("varianta islanda")) return true;
   if (m === "unibet") return true;
-  if (o.startsWith("cota ")) return false;
 
   return false;
 }
@@ -127,7 +127,9 @@ function parseSelectionsFromTables(html, url, sourceKey) {
   const fallbackTables = $("table");
   const tables = preferredTables.length ? preferredTables : fallbackTables;
 
-  log(`${sourceKey}: preferredTables=${preferredTables.length}, fallbackTables=${fallbackTables.length}, using=${tables.length}`);
+  log(
+    `${sourceKey}: preferredTables=${preferredTables.length}, fallbackTables=${fallbackTables.length}, using=${tables.length}`
+  );
 
   tables.each((tableIndex, table) => {
     const rows = $(table).find("tr");
@@ -142,7 +144,9 @@ function parseSelectionsFromTables(html, url, sourceKey) {
 
       if (cells.length < 3) {
         if (cells.length > 0) {
-          log(`${sourceKey}: skip row #${rowIndex + 1} cells=${cells.length} content=${JSON.stringify(cells)}`);
+          log(
+            `${sourceKey}: skip row #${rowIndex + 1} cells=${cells.length} content=${JSON.stringify(cells)}`
+          );
         }
         return;
       }
