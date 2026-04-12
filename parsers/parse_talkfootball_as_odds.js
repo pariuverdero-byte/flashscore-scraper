@@ -32,15 +32,6 @@ function parseKickoffToTime(kickoff) {
   return m ? m[1] : "";
 }
 
-function slugify(text = "") {
-  return safe(text)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
-
 function normalizeOdd(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -68,6 +59,14 @@ function softEq(a, b) {
   return a === b || a.includes(b) || b.includes(a);
 }
 
+function getMatchesArray(rawMatches) {
+  if (Array.isArray(rawMatches)) return rawMatches;
+  if (Array.isArray(rawMatches?.matches)) return rawMatches.matches;
+  if (Array.isArray(rawMatches?.fixtures)) return rawMatches.fixtures;
+  if (Array.isArray(rawMatches?.data)) return rawMatches.data;
+  return [];
+}
+
 /* =========================
  * CLAUDIU → FLASHSCORE MATCH
  * ========================= */
@@ -79,13 +78,15 @@ function buildFlashscoreUrl(match) {
 }
 
 function matchClaudiuToFlashscore(sel, matches) {
+  const arr = getMatchesArray(matches);
+
   const { home, away } = splitTeams(sel.teams);
   const nHome = normalizeTeam(home);
   const nAway = normalizeTeam(away);
 
   if (!nHome || !nAway) return null;
 
-  for (const m of matches) {
+  for (const m of arr) {
     const mh = normalizeTeam(m.home || m.home_team || "");
     const ma = normalizeTeam(m.away || m.away_team || "");
 
@@ -256,7 +257,10 @@ function dedupeSelections(items) {
     selections: [],
     errors: []
   });
-  const matches = await readJsonSafe(MATCHES_FILE, []);
+  const rawMatches = await readJsonSafe(MATCHES_FILE, []);
+  const matches = getMatchesArray(rawMatches);
+
+  console.log(`[MASTER] matches loaded: ${matches.length}`);
 
   const claudiuSelections = Array.isArray(claudiuPool.selections)
     ? claudiuPool.selections.map((s) => normalizeClaudiuSelection(s, matches)).filter(Boolean)
@@ -295,7 +299,7 @@ function dedupeSelections(items) {
       claudiu_raw: Array.isArray(claudiuPool.selections) ? claudiuPool.selections.length : 0,
       claudiu_matched_to_flashscore: claudiuSelections.length,
       talkfootball: talkfootballSelections.length,
-      flashscore_matches: Array.isArray(matches) ? matches.length : 0
+      flashscore_matches: matches.length
     },
     selections
   };
