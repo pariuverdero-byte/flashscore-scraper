@@ -1,5 +1,5 @@
-const fs = require("fs/promises");
-const cheerio = require("cheerio");
+import fs from "fs/promises";
+import * as cheerio from "cheerio";
 
 const DAY_OFFSET = Number(process.env.DAY_OFFSET || "0");
 
