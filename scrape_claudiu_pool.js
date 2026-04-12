@@ -1,12 +1,38 @@
+// scrape_claudiu_pool.js
+// FULL VERSION with verbose logging for Claudiu Hood pages
+// ESM-compatible
+
 import fs from "fs/promises";
 import * as cheerio from "cheerio";
 
 const DAY_OFFSET = Number(process.env.DAY_OFFSET || "0");
 
 const MONTHS_RO = [
-  "ianuarie", "februarie", "martie", "aprilie", "mai", "iunie",
-  "iulie", "august", "septembrie", "octombrie", "noiembrie", "decembrie"
+  "ianuarie",
+  "februarie",
+  "martie",
+  "aprilie",
+  "mai",
+  "iunie",
+  "iulie",
+  "august",
+  "septembrie",
+  "octombrie",
+  "noiembrie",
+  "decembrie",
 ];
+
+function log(...args) {
+  console.log("[claudiu]", ...args);
+}
+
+function warn(...args) {
+  console.warn("[claudiu][warn]", ...args);
+}
+
+function errlog(...args) {
+  console.error("[claudiu][error]", ...args);
+}
 
 function getTargetDate(offset = 0) {
   const d = new Date();
@@ -31,7 +57,7 @@ function buildClaudiuUrls(date) {
     biletul_zilei: `https://www.claudiuhood.ro/biletul-zilei-${dd}-${mm}-${yyyy}/`,
     varianta_speciala: `https://www.claudiuhood.ro/variante-speciale-${date.getDate()}-${monthRo}-${yyyy}/`,
     varianta_rezerva: `https://www.claudiuhood.ro/varianta-rezerva-${dd}-${mm}-${yyyy}/`,
-    varianta_islanda: `https://www.claudiuhood.ro/varianta-islanda-${date.getDate()}-${monthRo}-${yyyy}/`
+    varianta_islanda: `https://www.claudiuhood.ro/varianta-islanda-${date.getDate()}-${monthRo}-${yyyy}/`,
   };
 }
 
@@ -43,19 +69,6 @@ function clean(text = "") {
     .trim();
 }
 
-function extractOdd(text = "") {
-  const m = clean(text).match(/cota\s*([0-9]+(?:[.,][0-9]+)?)/i);
-  return m ? Number(m[1].replace(",", ".")) : null;
-}
-
-function looksLikeMatch(text = "") {
-  const t = clean(text);
-  if (!t.includes(" - ")) return false;
-  if (/^cota/i.test(t)) return false;
-  if (/unibet/i.test(t)) return false;
-  return true;
-}
-
 function slugify(text = "") {
   return text
     .normalize("NFD")
@@ -65,41 +78,113 @@ function slugify(text = "") {
     .replace(/^_+|_+$/g, "");
 }
 
+function extractOdd(text = "") {
+  const normalized = clean(text);
+  const match = normalized.match(/cota\s*([0-9]+(?:[.,][0-9]+)?)/i);
+  if (!match) return null;
+  return Number(match[1].replace(",", "."));
+}
+
+function looksLikeMatch(text = "") {
+  const t = clean(text);
+  if (!t.includes(" - ")) return false;
+  if (/^cota/i.test(t)) return false;
+  if (/unibet/i.test(t)) return false;
+  if (/^event$/i.test(t)) return false;
+  return true;
+}
+
+function looksLikeSummaryRow(teams = "", market = "", oddText = "") {
+  const t = clean(teams).toLowerCase();
+  const m = clean(market).toLowerCase();
+  const o = clean(oddText).toLowerCase();
+
+  if (t.includes("cota 2 zilnica")) return true;
+  if (t.includes("biletul zilei")) return true;
+  if (t.includes("varianta speciala")) return true;
+  if (t.includes("varianta rezerva")) return true;
+  if (t.includes("varianta islanda")) return true;
+  if (m === "unibet") return true;
+  if (o.startsWith("cota ")) return false;
+
+  return false;
+}
+
+function getTableStats($) {
+  return {
+    wpBlockTables: $("figure.wp-block-table").length,
+    tables: $("table").length,
+    trs: $("tr").length,
+    tds: $("td").length,
+  };
+}
+
 function parseSelectionsFromTables(html, url, sourceKey) {
   const $ = cheerio.load(html);
   const selections = [];
 
-  $("figure.wp-block-table table").each((_, table) => {
-    $(table).find("tr").each((__, tr) => {
+  const preferredTables = $("figure.wp-block-table table");
+  const fallbackTables = $("table");
+  const tables = preferredTables.length ? preferredTables : fallbackTables;
+
+  log(`${sourceKey}: preferredTables=${preferredTables.length}, fallbackTables=${fallbackTables.length}, using=${tables.length}`);
+
+  tables.each((tableIndex, table) => {
+    const rows = $(table).find("tr");
+    log(`${sourceKey}: table #${tableIndex + 1} rows=${rows.length}`);
+
+    rows.each((rowIndex, tr) => {
       const cells = $(tr)
         .find("td, th")
-        .map((___, el) => clean($(el).text()))
+        .map((_, el) => clean($(el).text()))
         .get()
         .filter(Boolean);
 
-      if (cells.length < 3) return;
+      if (cells.length < 3) {
+        if (cells.length > 0) {
+          log(`${sourceKey}: skip row #${rowIndex + 1} cells=${cells.length} content=${JSON.stringify(cells)}`);
+        }
+        return;
+      }
 
-      const teams = cells[0];
-      const market = cells[1];
-      const oddText = cells[2];
+      const [teams, market, oddText] = cells;
       const odd = extractOdd(oddText);
 
-      if (!looksLikeMatch(teams)) return;
-      if (!market) return;
-      if (!odd || !Number.isFinite(odd)) return;
+      if (looksLikeSummaryRow(teams, market, oddText)) {
+        log(`${sourceKey}: summary row skipped -> ${teams} | ${market} | ${oddText}`);
+        return;
+      }
 
-      selections.push({
+      if (!looksLikeMatch(teams)) {
+        log(`${sourceKey}: invalid match row skipped -> ${teams} | ${market} | ${oddText}`);
+        return;
+      }
+
+      if (!market) {
+        log(`${sourceKey}: empty market skipped -> ${teams}`);
+        return;
+      }
+
+      if (!odd || !Number.isFinite(odd)) {
+        log(`${sourceKey}: invalid odd skipped -> ${teams} | ${market} | ${oddText}`);
+        return;
+      }
+
+      const selection = {
         source: sourceKey,
         teams,
         market_raw: market,
         odd,
         url,
-        match_id: slugify(teams)
-      });
+        match_id: slugify(teams),
+      };
+
+      selections.push(selection);
+      log(`${sourceKey}: added -> ${teams} | ${market} | ${odd}`);
     });
   });
 
-  return selections;
+  return { selections, stats: getTableStats($) };
 }
 
 function dedupeSelections(items) {
@@ -111,10 +196,14 @@ function dedupeSelections(items) {
       item.source,
       item.match_id,
       item.market_raw.toLowerCase(),
-      item.odd.toFixed(2)
+      item.odd.toFixed(2),
     ].join("|");
 
-    if (seen.has(key)) continue;
+    if (seen.has(key)) {
+      log(`dedupe: removed duplicate ${key}`);
+      continue;
+    }
+
     seen.add(key);
     out.push(item);
   }
@@ -123,82 +212,143 @@ function dedupeSelections(items) {
 }
 
 async function fetchHtml(url) {
+  log(`fetch: ${url}`);
+
   const res = await fetch(url, {
     headers: {
-      "user-agent": "Mozilla/5.0",
+      "user-agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
       "accept-language": "ro-RO,ro;q=0.9,en;q=0.8",
-      "accept": "text/html,application/xhtml+xml"
-    }
+      accept: "text/html,application/xhtml+xml",
+      "cache-control": "no-cache",
+      pragma: "no-cache",
+    },
+    redirect: "follow",
   });
+
+  log(`fetch status: ${url} -> ${res.status}`);
 
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} for ${url}`);
   }
 
-  return await res.text();
+  const html = await res.text();
+  log(`fetch size: ${url} -> ${html.length} chars`);
+  return html;
 }
 
 async function scrapeOne(url, sourceKey) {
   const html = await fetchHtml(url);
-  await fs.writeFile(`claudiu_${sourceKey}.html`, html, "utf8");
 
-  const selections = parseSelectionsFromTables(html, url, sourceKey);
+  const htmlFile = `claudiu_${sourceKey}.html`;
+  await fs.writeFile(htmlFile, html, "utf8");
+  log(`${sourceKey}: saved raw html to ${htmlFile}`);
 
-  console.log(`[claudiu] ${sourceKey}: ${selections.length} selections`);
-  return selections;
+  const { selections, stats } = parseSelectionsFromTables(html, url, sourceKey);
+
+  log(
+    `${sourceKey}: stats tables=${stats.tables}, wpBlockTables=${stats.wpBlockTables}, trs=${stats.trs}, tds=${stats.tds}, selections=${selections.length}`
+  );
+
+  if (selections.length === 0) {
+    warn(`${sourceKey}: ZERO selections extracted`);
+  }
+
+  return {
+    sourceKey,
+    url,
+    htmlFile,
+    selections,
+    stats,
+  };
 }
 
 async function main() {
   const targetDate = getTargetDate(DAY_OFFSET);
   const urls = buildClaudiuUrls(targetDate);
 
+  log(`target date=${urls.dateISO}`);
+  log(`urls=${JSON.stringify(urls, null, 2)}`);
+
   const allSelections = [];
   const errors = [];
+  const diagnostics = [];
 
-  for (const [sourceKey, url] of Object.entries({
+  const sources = {
     cota2: urls.cota2,
     biletul_zilei: urls.biletul_zilei,
     varianta_speciala: urls.varianta_speciala,
     varianta_rezerva: urls.varianta_rezerva,
-    varianta_islanda: urls.varianta_islanda
-  })) {
+    varianta_islanda: urls.varianta_islanda,
+  };
+
+  for (const [sourceKey, url] of Object.entries(sources)) {
     try {
-      const selections = await scrapeOne(url, sourceKey);
-      allSelections.push(...selections);
-    } catch (err) {
-      console.error(`[claudiu] FAIL ${sourceKey}: ${err.message}`);
+      const result = await scrapeOne(url, sourceKey);
+      allSelections.push(...result.selections);
+
+      diagnostics.push({
+        source: sourceKey,
+        url,
+        html_file: result.htmlFile,
+        selections_found: result.selections.length,
+        stats: result.stats,
+      });
+    } catch (error) {
+      errlog(`${sourceKey}: ${error.message}`);
+
       errors.push({
         source: sourceKey,
         url,
-        error: err.message
+        error: error.message,
+      });
+
+      diagnostics.push({
+        source: sourceKey,
+        url,
+        html_file: null,
+        selections_found: 0,
+        stats: null,
+        error: error.message,
       });
     }
   }
 
+  const deduped = dedupeSelections(allSelections);
+
   const output = {
     date: urls.dateISO,
     source: "claudiuhood",
-    selections: dedupeSelections(allSelections),
-    errors
+    selections: deduped,
+    errors,
+    diagnostics,
   };
 
   await fs.writeFile("claudiu_pool.json", JSON.stringify(output, null, 2), "utf8");
-  console.log(`[claudiu] total selections: ${output.selections.length}`);
+
+  log(`raw selections total=${allSelections.length}`);
+  log(`deduped selections total=${deduped.length}`);
+  log(`errors total=${errors.length}`);
+  log(`claudiu_pool.json written successfully`);
 }
 
-main().catch(async (err) => {
-  console.error("[claudiu] fatal:", err.message);
+main().catch(async (error) => {
+  errlog(`fatal: ${error.message}`);
 
-  await fs.writeFile(
-    "claudiu_pool.json",
-    JSON.stringify({
-      date: new Date().toISOString().slice(0, 10),
-      source: "claudiuhood",
-      selections: [],
-      errors: [{ source: "fatal", error: err.message }]
-    }, null, 2),
-    "utf8"
-  );
+  const fallback = {
+    date: new Date().toISOString().slice(0, 10),
+    source: "claudiuhood",
+    selections: [],
+    errors: [{ source: "fatal", error: error.message }],
+    diagnostics: [],
+  };
+
+  try {
+    await fs.writeFile("claudiu_pool.json", JSON.stringify(fallback, null, 2), "utf8");
+    errlog(`fallback claudiu_pool.json written`);
+  } catch (writeErr) {
+    errlog(`failed writing fallback claudiu_pool.json: ${writeErr.message}`);
+  }
 
   process.exit(1);
 });
