@@ -1,5 +1,5 @@
 // parsers/parse_talkfootball_as_odds.js
-// FINAL — TalkFootball ca odd source, FULL compat cu master_pool + WP
+// FINAL — TalkFootball as fallback/source merge for master_pool
 
 import fs from "fs/promises";
 
@@ -7,19 +7,41 @@ import fs from "fs/promises";
  * FILES
  * ========================= */
 const INPUT_MATCHED = "artifacts/talkfootball_matched.json";
-const MASTER_POOL  = "claudiu_pool.json";
-const OUTPUT_POOL  = "master_pool.json";
+const CLAUDIU_POOL = "claudiu_pool.json";
+const OUTPUT_POOL = "master_pool.json";
 
 /* =========================
  * UTILS
  * ========================= */
 const safe = (x) => (x ?? "").toString().trim();
 
+async function readJsonSafe(path, fallback) {
+  try {
+    const raw = await fs.readFile(path, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
 function parseKickoffToTime(kickoff) {
-  // expects "YYYY-MM-DD HH:MM"
   if (!kickoff) return "";
   const m = kickoff.match(/\b(\d{1,2}:\d{2})\b/);
   return m ? m[1] : "";
+}
+
+function slugify(text = "") {
+  return safe(text)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function normalizeOdd(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 /* =========================
@@ -69,70 +91,143 @@ function detectParams(tf) {
 }
 
 /* =========================
+ * NORMALIZERS
+ * ========================= */
+function normalizeClaudiuSelection(sel) {
+  const odd = normalizeOdd(sel.odd);
+  if (!sel || !safe(sel.teams) || !odd) return null;
+
+  return {
+    match_id: safe(sel.match_id) || slugify(sel.teams),
+    flashscore_url: safe(sel.flashscore_url || sel.url || ""),
+    url: safe(sel.url || sel.flashscore_url || ""),
+    teams: safe(sel.teams),
+    time: safe(sel.time || ""),
+    country: safe(sel.country || ""),
+    competition: safe(sel.competition || ""),
+    bet_type: safe(sel.bet_type || sel.market || "stat"),
+    market_raw: safe(sel.market_raw || sel.market || "Pariu special"),
+    odd: Number(odd.toFixed(3)),
+    source: safe(sel.source || "claudiuhood"),
+    meta: {
+      ...(sel.meta || {}),
+      bet_text: safe(sel.meta?.bet_text || sel.market_raw || sel.market || "Pariu special"),
+      source: safe(sel.meta?.source || sel.source || "claudiuhood")
+    },
+    params: sel.params || {},
+    id: safe(sel.id || "")
+  };
+}
+
+function normalizeTalkfootballSelection(tf) {
+  if (!tf || !tf.flashscore_id) return null;
+
+  let odd;
+  if (tf.market === "1X2") odd = 1.55;
+  else if (tf.market === "OVER_1_5") odd = 1.35;
+  else if (tf.market === "BTTS") odd = 1.7;
+  else return null;
+
+  const bet_type = detectBetType(tf);
+  const params = detectParams(tf);
+
+  return {
+    match_id: safe(tf.flashscore_id),
+    flashscore_url: `https://www.flashscore.mobi/match/${safe(tf.flashscore_id)}/`,
+    url: `https://www.flashscore.mobi/match/${safe(tf.flashscore_id)}/`,
+    teams: `${safe(tf.home)} - ${safe(tf.away)}`,
+    time: parseKickoffToTime(tf.flashscore_kickoff || tf.kickoff),
+    country: safe(tf.country || ""),
+    competition: safe(tf.league || ""),
+    bet_type,
+    market_raw: safe(betText(tf)),
+    odd: Number(odd.toFixed(3)),
+    source: "talkfootball",
+    meta: {
+      bet_text: betText(tf),
+      source: "talkfootball",
+      market_text: safe(tf.market),
+      pick: safe(tf.pick)
+    },
+    params,
+    id: safe(tf.flashscore_id)
+  };
+}
+
+function dedupeSelections(items) {
+  const seen = new Set();
+  const out = [];
+
+  for (const item of items) {
+    const key = [
+      safe(item.match_id),
+      safe(item.market_raw).toLowerCase(),
+      Number(item.odd).toFixed(2)
+    ].join("|");
+
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+
+  return out;
+}
+
+/* =========================
  * MAIN
  * ========================= */
 (async () => {
-  // ---------- load inputs ----------
-  const matchedRaw = await fs.readFile(INPUT_MATCHED, "utf8");
-  const matched = JSON.parse(matchedRaw);
+  const matched = await readJsonSafe(INPUT_MATCHED, []);
+  const claudiuPool = await readJsonSafe(CLAUDIU_POOL, {
+    date: null,
+    selections: [],
+    errors: []
+  });
 
-  const poolRaw = await fs.readFile(MASTER_POOL, "utf8");
-  const pool = JSON.parse(poolRaw);
+  const claudiuSelections = Array.isArray(claudiuPool.selections)
+    ? claudiuPool.selections.map(normalizeClaudiuSelection).filter(Boolean)
+    : [];
 
-  const selections = pool.selections || [];
-  let added = 0;
+  const talkfootballSelections = Array.isArray(matched)
+    ? matched.map(normalizeTalkfootballSelection).filter(Boolean)
+    : [];
 
-  for (const tf of matched) {
-    if (!tf.flashscore_id) continue;
+  let combined = [];
+  let sourcesUsed = [];
+  let sourceMode = "empty";
 
-    // -------- ODD derivation --------
-    let odd;
-    if (tf.market === "1X2") odd = 1.55;
-    else if (tf.market === "OVER_1_5") odd = 1.35;
-    else if (tf.market === "BTTS") odd = 1.70;
-    else continue;
-
-    const bet_type = detectBetType(tf);
-    const params = detectParams(tf);
-
-    const sel = {
-      // 🔑 IDENTITATE
-      match_id: safe(tf.flashscore_id),
-      flashscore_url: `https://www.flashscore.mobi/match/${safe(tf.flashscore_id)}/`,
-
-      // 🔑 AFIȘARE WP
-      teams: `${safe(tf.home)} - ${safe(tf.away)}`,
-      time: parseKickoffToTime(tf.flashscore_kickoff || tf.kickoff),
-      country: safe(tf.country || ""),
-      competition: safe(tf.league || ""),
-
-      // 🔑 BET
-      bet_type,
-      market_raw: tf.market,
-      odd: Number(odd.toFixed(3)),
-      source: "talkfootball",
-
-      // 🔑 META EDITORIAL (CRITICAL)
-      meta: {
-        bet_text: betText(tf),
-        source: "talkfootball"
-      },
-
-      // 🔑 PARAMS (verify-safe)
-      params
-    };
-
-    selections.push(sel);
-    added++;
+  if (claudiuSelections.length > 0 && talkfootballSelections.length > 0) {
+    combined = [...claudiuSelections, ...talkfootballSelections];
+    sourcesUsed = ["claudiuhood", "talkfootball"];
+    sourceMode = "claudiu_plus_talkfootball";
+  } else if (claudiuSelections.length > 0) {
+    combined = [...claudiuSelections];
+    sourcesUsed = ["claudiuhood"];
+    sourceMode = "claudiu_only";
+  } else if (talkfootballSelections.length > 0) {
+    combined = [...talkfootballSelections];
+    sourcesUsed = ["talkfootball"];
+    sourceMode = "talkfootball_only";
   }
 
+  const selections = dedupeSelections(combined);
+
   const out = {
-    date: pool.date,
+    date: safe(claudiuPool.date) || new Date().toISOString().slice(0, 10),
     source: "master_pool",
+    source_mode: sourceMode,
+    sources_used: sourcesUsed,
+    upstream_counts: {
+      claudiu: claudiuSelections.length,
+      talkfootball: talkfootballSelections.length
+    },
     selections
   };
 
   await fs.writeFile(OUTPUT_POOL, JSON.stringify(out, null, 2), "utf8");
 
-  console.log(`✅ TalkFootball odds added: +${added}`);
+  console.log(`[MASTER] mode: ${sourceMode}`);
+  console.log(`[MASTER] claudiu: ${claudiuSelections.length}`);
+  console.log(`[MASTER] talkfootball: ${talkfootballSelections.length}`);
+  console.log(`[MASTER] total unique selections: ${selections.length}`);
 })();
