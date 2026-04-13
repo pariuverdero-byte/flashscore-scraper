@@ -1,4 +1,4 @@
-name: Scrape Flashscore + Claudiu Pool + TalkFootball + Generate Tickets + WordPress (RO)
+name: Scrape Flashscore + Claudiu Pool + TalkFootball + PredictZ + Generate Tickets + WordPress (RO)
 
 on:
   workflow_dispatch:
@@ -66,21 +66,42 @@ jobs:
         timeout-minutes: 5
         run: node engine/match_talkfootball_flashscore.js
 
-      # 5) Create/Update master_pool.json with TalkFootball as odd source
+      # 5) Build/update MASTER pool with Claudiu + TalkFootball
       - name: Inject TalkFootball odds into MASTER pool
         timeout-minutes: 5
         run: node parsers/parse_talkfootball_as_odds.js
 
-      # 6) Generate tickets from MASTER pool
+      # 6) PredictZ scrape
+      - name: Scrape PredictZ
+        timeout-minutes: 5
+        run: node scrapers/scrape_predictz.js
+
+      # 7) PredictZ match to Flashscore
+      - name: Match PredictZ to Flashscore
+        timeout-minutes: 5
+        run: node engine/match_predictz_flashscore.js
+
+      # 8) Inject PredictZ into MASTER pool
+      - name: Inject PredictZ into MASTER pool
+        timeout-minutes: 5
+        run: node parsers/parse_predictz_as_odds.js
+
+      # 9) Generate tickets from MASTER pool
       - name: Generate tickets from MASTER pool
         timeout-minutes: 5
         run: node generate_tickets_from_pool.js
 
-      # 7) WordPress HTML
+      # dacă vrei să testezi optimizerul nou în locul generatorului actual,
+      # înlocuiești pasul de mai sus cu:
+      # - name: Optimize tickets from MASTER pool
+      #   timeout-minutes: 5
+      #   run: node engine/optimizer_tickets.js
+
+      # 10) WordPress HTML
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
-      # 8) Artifacts
+      # 11) Artifacts
       - name: Upload artifacts (raw)
         if: always()
         uses: actions/upload-artifact@v4
@@ -90,6 +111,17 @@ jobs:
             matches.json
             claudiu_pool.json
             master_pool.json
+            predictz_pool.json
+            predictz_matched.json
+            claudiu_cota2.html
+            claudiu_biletul_zilei.html
+            claudiu_varianta_speciala.html
+            claudiu_varianta_rezerva.html
+            claudiu_varianta_islanda.html
+            predictz_match_tips.html
+            predictz_btts.html
+            predictz_btts_and_win.html
+            predictz_over_under_25.html
             artifacts/talkfootball_pool.json
             artifacts/talkfootball_matched.json
             artifacts/talkfootball_dropped.json
@@ -105,7 +137,7 @@ jobs:
             cota2.html
             biletul-zilei.html
 
-      # 9) Publish
+      # 12) Publish
       - name: Publish posts to WordPress (pariuverde.ro)
         if: success()
         env:
