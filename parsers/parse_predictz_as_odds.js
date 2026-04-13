@@ -2,69 +2,66 @@
 
 import fs from "fs/promises";
 
-function mapMarket(item) {
-  switch (item.market) {
-    case "1X2":
-      return {
-        type: "1X2",
-        value: item.prediction,
-      };
-
-    case "BTTS":
-      return {
-        type: "BTTS",
-        value: item.prediction === "BTTS_YES" ? "YES" : "NO",
-      };
-
-    case "BTTS_AND_WIN":
-      return {
-        type: "BTTS_AND_WIN",
-        value: item.prediction,
-      };
-
-    case "OVER_UNDER_25":
-      return {
-        type: "GOALS_OU",
-        value: item.prediction === "OVER_2_5" ? "OVER_2_5" : "UNDER_2_5",
-      };
-
-    default:
-      return null;
+function betText(p) {
+  if (p.market === "BTTS") return "Ambele echipe marchează";
+  if (p.market === "OVER_2_5") return "Peste 2.5 goluri";
+  if (p.market === "1X2") {
+    if (p.prediction === "1") return "Victorie gazde";
+    if (p.prediction === "2") return "Victorie oaspeți";
+    if (p.prediction === "X") return "Egal";
   }
+  return "Pariu special";
+}
+
+function detectType(p) {
+  if (p.market === "BTTS") return "btts";
+  if (p.market === "OVER_2_5") return "goals_ou";
+  return "1x2";
 }
 
 (async () => {
-  const data = JSON.parse(await fs.readFile("predictz_matched.json", "utf8"));
+  const matched = JSON.parse(await fs.readFile("predictz_matched.json", "utf8"));
+  const pool = JSON.parse(await fs.readFile("master_pool.json", "utf8"));
 
-  const parsed = [];
+  const selections = pool.selections || [];
+  let added = 0;
 
-  for (const item of data.selections) {
-    const market = mapMarket(item);
+  for (const p of matched.selections) {
+    let odd = 1.45;
 
-    if (!market) continue;
+    if (p.market === "BTTS") odd = 1.70;
+    if (p.market === "OVER_2_5") odd = 1.50;
 
-    parsed.push({
+    selections.push({
+      match_id: p.flashscore_id,
+      flashscore_url: p.flashscore_url,
+
+      teams: p.teams,
+      time: p.flashscore_kickoff,
+
+      bet_type: detectType(p),
+      market_raw: p.market,
+      odd,
+
       source: "predictz",
-      event: item.teams,
-      market: market.type,
-      pick: market.value,
-      odd: item.odd,
-      match_id: item.flashscore_id,
-      match_url: item.flashscore_url,
-      time: item.match_time,
+
+      meta: {
+        bet_text: betText(p),
+        source: "predictz"
+      }
     });
+
+    added++;
   }
 
-  // 🔥 inject în MASTER
-  let master = { selections: [] };
+  await fs.writeFile(
+    "master_pool.json",
+    JSON.stringify({
+      date: pool.date,
+      source: "master_pool",
+      selections
+    }, null, 2)
+  );
 
-  try {
-    master = JSON.parse(await fs.readFile("master_pool.json", "utf8"));
-  } catch {}
-
-  master.selections.push(...parsed);
-
-  await fs.writeFile("master_pool.json", JSON.stringify(master, null, 2));
-
-  console.log("✅ predictz injected:", parsed.length);
+  console.log(`✅ predictz added: ${added}`);
 })();
