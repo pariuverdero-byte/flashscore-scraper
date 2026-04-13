@@ -1,47 +1,81 @@
 // engine/match_predictz_flashscore.js
 
-import fs from "fs/promises";
+import fs from "fs";
+import { matchEventToFlashscore } from "./matcher_core.js";
 
-function norm(s = "") {
-  return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+function safeReadJson(path, fallback) {
+  try {
+    return JSON.parse(fs.readFileSync(path, "utf8"));
+  } catch {
+    return fallback;
+  }
 }
 
-function matchTeams(a, b) {
-  const A = norm(a);
-  const B = norm(b);
-  return A.includes(B) || B.includes(A);
+function getMatchesArray(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw?.matches)) return raw.matches;
+  if (Array.isArray(raw?.fixtures)) return raw.fixtures;
+  if (Array.isArray(raw?.data)) return raw.data;
+  return [];
 }
 
-(async () => {
-  const predictz = JSON.parse(await fs.readFile("predictz_pool.json", "utf8"));
-  const flash = JSON.parse(await fs.readFile("matches.json", "utf8"));
+function getPredictzSelections(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw?.selections)) return raw.selections;
+  if (Array.isArray(raw?.picks)) return raw.picks;
+  if (Array.isArray(raw?.data)) return raw.data;
+  return [];
+}
 
-  const out = [];
+const pzRaw = safeReadJson("predictz_pool.json", { selections: [] });
+const matchesRaw = safeReadJson("matches.json", { matches: [] });
 
-  for (const p of predictz.selections) {
-    let found = null;
+const pzSelections = getPredictzSelections(pzRaw);
+const matches = getMatchesArray(matchesRaw);
 
-    for (const m of flash.matches) {
-      if (matchTeams(p.teams, m.teams)) {
-        found = m;
-        break;
-      }
-    }
+const matched = [];
+const dropped = [];
 
-    if (!found) continue; // 🔥 STRICT
-
-    out.push({
-      ...p,
-      flashscore_id: found.id,
-      flashscore_url: found.url,
-      flashscore_kickoff: found.time
+for (const pick of pzSelections) {
+  if (!pick.teams) {
+    dropped.push({
+      ...pick,
+      drop_reason: "missing teams",
     });
+    continue;
   }
 
-  await fs.writeFile(
-    "predictz_matched.json",
-    JSON.stringify({ selections: out }, null, 2)
-  );
+  const res = matchEventToFlashscore(pick.teams, matches);
 
-  console.log("✅ matched:", out.length);
-})();
+  if (res) {
+    matched.push({
+      ...pick,
+      flashscore_id: res.match.id || "",
+      flashscore_url: res.match.url || "",
+      flashscore_kickoff: res.match.time || "",
+      match_score: Number(res.score.toFixed(3)),
+    });
+  } else {
+    dropped.push({
+      ...pick,
+      drop_reason: "no flashscore match",
+    });
+  }
+}
+
+fs.writeFileSync(
+  "predictz_matched.json",
+  JSON.stringify(
+    {
+      matched: matched.length,
+      dropped: dropped.length,
+      selections: matched,
+      dropped_selections: dropped,
+    },
+    null,
+    2
+  )
+);
+
+console.log(`[predictz matcher] matched: ${matched.length}`);
+console.log(`[predictz matcher] dropped: ${dropped.length}`);
