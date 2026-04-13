@@ -10,33 +10,17 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # ------------------
-      # GLOBAL CONTROLS
-      # ------------------
-      DAY_OFFSET: "0"        # 0 = today, -1 = yesterday
+      DAY_OFFSET: "0"
       INCLUDE_LIVE: "true"
-
-      # ------------------
-      # LANGUAGE (CRITICAL)
-      # ------------------
       LANG: "en"
 
-      # ------------------
-      # CLAUDIU POOL RULES
-      # ------------------
       CLAUDIU_MIN_ODD: "1.15"
 
-      # ------------------
-      # GREENBETTIPS – ODDS 2
-      # ------------------
       PV_COTA2_MIN: "1.90"
       PV_COTA2_MAX: "2.50"
       PV_TARGET_COTA2: "2.05"
       PV_COTA2_TOL: "0.00"
 
-      # ------------------
-      # GREENBETTIPS – BET OF THE DAY
-      # ------------------
       PV_ZI_MIN: "3.50"
       PV_ZI_MAX: "7.00"
       PV_TARGET_ZI: "5.00"
@@ -66,76 +50,64 @@ jobs:
             --no-fund --no-audit --prefer-offline
 
       # ------------------
-      # 1) FLASHSCORE FIXTURES
+      # 1) FLASHSCORE
       # ------------------
       - name: Scrape Flashscore fixtures
         timeout-minutes: 5
         run: node scrape_mobi.js
 
       # ------------------
-      # 2) CLAUDIU HOOD → POOL
+      # 2) CLAUDIU
       # ------------------
       - name: Build Claudiu Hood POOL
         timeout-minutes: 5
         run: node scrape_claudiu_pool.js
 
       # ------------------
-      # 3) TALKFOOTBALL → SCRAPE
+      # 3) TALKFOOTBALL
       # ------------------
       - name: Scrape TalkFootball
         timeout-minutes: 5
         run: node scrapers/scrape_talkfootball.js
 
-      # ------------------
-      # 4) TALKFOOTBALL → MATCH FLASHSCORE
-      # ------------------
       - name: Match TalkFootball to Flashscore
         timeout-minutes: 5
         run: node engine/match_talkfootball_flashscore.js
 
-      # ------------------
-      # 5) TALKFOOTBALL → MASTER POOL
-      # ------------------
-      - name: Inject TalkFootball odds into MASTER pool
+      - name: Inject TalkFootball into MASTER pool
         timeout-minutes: 5
         run: node parsers/parse_talkfootball_as_odds.js
 
       # ------------------
-      # 6) PREDICTZ → SCRAPE
+      # 4) PREDICTZ
       # ------------------
       - name: Scrape PredictZ
         timeout-minutes: 5
         run: node scrapers/scrape_predictz.js
 
-      # ------------------
-      # 7) PREDICTZ → MATCH FLASHSCORE
-      # ------------------
       - name: Match PredictZ to Flashscore
         timeout-minutes: 5
         run: node engine/match_predictz_flashscore.js
 
-      # ------------------
-      # 8) PREDICTZ → MASTER POOL
-      # ------------------
       - name: Inject PredictZ into MASTER pool
         timeout-minutes: 5
         run: node parsers/parse_predictz_as_odds.js
 
       # ------------------
-      # 9) MASTER POOL → TICKETS
+      # 5) GENERATE TICKETS
       # ------------------
       - name: Generate tickets from MASTER pool
         timeout-minutes: 5
         run: node generate_tickets_from_pool.js
 
       # ------------------
-      # 10) WORDPRESS HTML
+      # 6) WORDPRESS HTML
       # ------------------
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
       # ------------------
-      # 11) ARTIFACTS (DEBUG / TRACE)
+      # 7) ARTIFACTS
       # ------------------
       - name: Upload artifacts (raw)
         if: always()
@@ -146,17 +118,21 @@ jobs:
             matches.json
             claudiu_pool.json
             master_pool.json
+
             predictz_pool.json
-predictz_matched.json
-predictz_match_tips.html
-predictz_btts.html
-predictz_btts_and_win.html
-predictz_over_under_25.html
+            predictz_matched.json
+
+            predictz_match_tips.html
+            predictz_btts.html
+            predictz_btts_and_win.html
+            predictz_over_under_25.html
+
             claudiu_cota2.html
             claudiu_biletul_zilei.html
             claudiu_varianta_speciala.html
             claudiu_varianta_rezerva.html
             claudiu_varianta_islanda.html
+
             artifacts/talkfootball_pool.json
             artifacts/talkfootball_matched.json
             artifacts/talkfootball_dropped.json
@@ -173,7 +149,7 @@ predictz_over_under_25.html
             biletul-zilei.html
 
       # ------------------
-      # 12) PUBLISH → GREENBETTIPS.COM
+      # 8) PUBLISH
       # ------------------
       - name: Publish posts to WordPress (greenbettips.com)
         if: success()
