@@ -118,10 +118,12 @@ jobs:
             claudiu_varianta_speciala.html
             claudiu_varianta_rezerva.html
             claudiu_varianta_islanda.html
-            predictz_match_tips.html
-            predictz_btts.html
-            predictz_btts_and_win.html
-            predictz_over_under_25.html
+            predictz_pool.json
+predictz_matched.json
+predictz_match_tips.html
+predictz_btts.html
+predictz_btts_and_win.html
+predictz_over_under_25.html
             artifacts/talkfootball_pool.json
             artifacts/talkfootball_matched.json
             artifacts/talkfootball_dropped.json
