@@ -1,4 +1,4 @@
-name: Scrape Flashscore + Claudiu Pool + TalkFootball + Generate Tickets + WordPress (EN)
+name: Scrape Flashscore + Claudiu Pool + TalkFootball + PredictZ + Generate Tickets + WordPress (EN)
 
 on:
   workflow_dispatch:
@@ -87,34 +87,55 @@ jobs:
         run: node scrapers/scrape_talkfootball.js
 
       # ------------------
-      # 4) TALKFOOTBALL → MATCH FLASHCORE
+      # 4) TALKFOOTBALL → MATCH FLASHSCORE
       # ------------------
       - name: Match TalkFootball to Flashscore
         timeout-minutes: 5
         run: node engine/match_talkfootball_flashscore.js
 
       # ------------------
-      # 5) TALKFOOTBALL → ODD SOURCE
+      # 5) TALKFOOTBALL → MASTER POOL
       # ------------------
       - name: Inject TalkFootball odds into MASTER pool
         timeout-minutes: 5
         run: node parsers/parse_talkfootball_as_odds.js
 
       # ------------------
-      # 6) MASTER POOL → TICKETS
+      # 6) PREDICTZ → SCRAPE
+      # ------------------
+      - name: Scrape PredictZ
+        timeout-minutes: 5
+        run: node scrapers/scrape_predictz.js
+
+      # ------------------
+      # 7) PREDICTZ → MATCH FLASHSCORE
+      # ------------------
+      - name: Match PredictZ to Flashscore
+        timeout-minutes: 5
+        run: node engine/match_predictz_flashscore.js
+
+      # ------------------
+      # 8) PREDICTZ → MASTER POOL
+      # ------------------
+      - name: Inject PredictZ into MASTER pool
+        timeout-minutes: 5
+        run: node parsers/parse_predictz_as_odds.js
+
+      # ------------------
+      # 9) MASTER POOL → TICKETS
       # ------------------
       - name: Generate tickets from MASTER pool
         timeout-minutes: 5
         run: node generate_tickets_from_pool.js
 
       # ------------------
-      # 7) WORDPRESS HTML
+      # 10) WORDPRESS HTML
       # ------------------
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
       # ------------------
-      # 8) ARTIFACTS (DEBUG / TRACE)
+      # 11) ARTIFACTS (DEBUG / TRACE)
       # ------------------
       - name: Upload artifacts (raw)
         if: always()
@@ -125,6 +146,13 @@ jobs:
             matches.json
             claudiu_pool.json
             master_pool.json
+            predictz_pool.json
+            predictz_matched.json
+            claudiu_cota2.html
+            claudiu_biletul_zilei.html
+            claudiu_varianta_speciala.html
+            claudiu_varianta_rezerva.html
+            claudiu_varianta_islanda.html
             artifacts/talkfootball_pool.json
             artifacts/talkfootball_matched.json
             artifacts/talkfootball_dropped.json
@@ -141,7 +169,7 @@ jobs:
             biletul-zilei.html
 
       # ------------------
-      # 9) PUBLISH → GREENBETTIPS.COM
+      # 12) PUBLISH → GREENBETTIPS.COM
       # ------------------
       - name: Publish posts to WordPress (greenbettips.com)
         if: success()
