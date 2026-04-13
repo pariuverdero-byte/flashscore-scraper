@@ -147,7 +147,11 @@ jobs:
             claudiu_pool.json
             master_pool.json
             predictz_pool.json
-            predictz_matched.json
+predictz_matched.json
+predictz_match_tips.html
+predictz_btts.html
+predictz_btts_and_win.html
+predictz_over_under_25.html
             claudiu_cota2.html
             claudiu_biletul_zilei.html
             claudiu_varianta_speciala.html
