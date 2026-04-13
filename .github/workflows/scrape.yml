@@ -91,12 +91,6 @@ jobs:
         timeout-minutes: 5
         run: node generate_tickets_from_pool.js
 
-      # dacă vrei să testezi optimizerul nou în locul generatorului actual,
-      # înlocuiești pasul de mai sus cu:
-      # - name: Optimize tickets from MASTER pool
-      #   timeout-minutes: 5
-      #   run: node engine/optimizer_tickets.js
-
       # 10) WordPress HTML
       - name: Generate WordPress HTML
         run: node generate_wp.js
@@ -118,12 +112,10 @@ jobs:
             claudiu_varianta_speciala.html
             claudiu_varianta_rezerva.html
             claudiu_varianta_islanda.html
-            predictz_pool.json
-predictz_matched.json
-predictz_match_tips.html
-predictz_btts.html
-predictz_btts_and_win.html
-predictz_over_under_25.html
+            predictz_match_tips.html
+            predictz_btts.html
+            predictz_btts_and_win.html
+            predictz_over_under_25.html
             artifacts/talkfootball_pool.json
             artifacts/talkfootball_matched.json
             artifacts/talkfootball_dropped.json
