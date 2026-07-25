@@ -1,4 +1,5 @@
 import fs from "fs";
+import path from "path";
 import { google } from "googleapis";
 
 const MANIFEST_FILE =
@@ -8,18 +9,6 @@ const MANIFEST_FILE =
 const RESULTS_FILE =
   process.env.DISTRIBUTION_RESULTS_FILE ||
   "output/distribution_results.json";
-
-function requireValue(name) {
-  const value = process.env[name];
-
-  if (!value) {
-    throw new Error(
-      `Missing required environment variable: ${name}`
-    );
-  }
-
-  return value;
-}
 
 function requireFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -31,10 +20,24 @@ function requireFile(filePath) {
   }
 }
 
-function writeResults(results) {
+function requireEnv(name) {
+  const value = process.env[name];
+
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+
+  return value;
+}
+
+function writeResults(data) {
+  fs.mkdirSync(path.dirname(RESULTS_FILE), {
+    recursive: true
+  });
+
   fs.writeFileSync(
     RESULTS_FILE,
-    JSON.stringify(results, null, 2),
+    JSON.stringify(data, null, 2),
     "utf8"
   );
 }
@@ -57,22 +60,13 @@ async function main() {
 
   requireFile(videoFile);
 
-  const clientId =
-    requireValue("YOUTUBE_CLIENT_ID");
-
-  const clientSecret =
-    requireValue("YOUTUBE_CLIENT_SECRET");
-
-  const refreshToken =
-    requireValue("YOUTUBE_REFRESH_TOKEN");
-
   const oauth2Client = new google.auth.OAuth2(
-    clientId,
-    clientSecret
+    requireEnv("YOUTUBE_CLIENT_ID"),
+    requireEnv("YOUTUBE_CLIENT_SECRET")
   );
 
   oauth2Client.setCredentials({
-    refresh_token: refreshToken
+    refresh_token: requireEnv("YOUTUBE_REFRESH_TOKEN")
   });
 
   const youtube = google.youtube({
@@ -81,14 +75,13 @@ async function main() {
   });
 
   console.log(
-    `[YOUTUBE] Uploading ${videoFile} as ${youtubeConfig.privacyStatus}...`
+    `[YOUTUBE] Uploading ${videoFile} as ${
+      youtubeConfig.privacyStatus || "private"
+    }...`
   );
 
   const response = await youtube.videos.insert({
-    part: [
-      "snippet",
-      "status"
-    ],
+    part: ["snippet", "status"],
 
     requestBody: {
       snippet: {
@@ -114,51 +107,44 @@ async function main() {
   const videoId = response.data.id;
 
   if (!videoId) {
-    throw new Error(
-      "YouTube upload completed without returning a video ID."
-    );
+    throw new Error("YouTube did not return a video ID.");
   }
 
-  const videoUrl =
-    `https://www.youtube.com/watch?v=${videoId}`;
-
-  const results = {
+  const result = {
     status: "success",
-    generatedAt: new Date().toISOString(),
+    publishedAt: new Date().toISOString(),
 
     youtube: {
       videoId,
-      url: videoUrl,
+      url: `https://www.youtube.com/watch?v=${videoId}`,
+      title: youtubeConfig.title,
       privacyStatus:
-        youtubeConfig.privacyStatus || "private",
-      title: youtubeConfig.title
+        youtubeConfig.privacyStatus || "private"
     }
   };
 
-  writeResults(results);
+  writeResults(result);
 
-  console.log(
-    `[YOUTUBE] Upload successful: ${videoUrl}`
-  );
+  console.log(`[YOUTUBE] Upload successful.`);
+  console.log(`[YOUTUBE] Video ID: ${videoId}`);
 }
 
 main().catch((error) => {
-  const results = {
+  const message =
+    error?.response?.data?.error?.message ||
+    error?.message ||
+    String(error);
+
+  writeResults({
     status: "failed",
-    generatedAt: new Date().toISOString(),
-
+    publishedAt: new Date().toISOString(),
     youtube: {
-      error:
-        error?.response?.data?.error?.message ||
-        error.message ||
-        String(error)
+      error: message
     }
-  };
-
-  writeResults(results);
+  });
 
   console.error("[YOUTUBE] Upload failed:");
-  console.error(error);
+  console.error(message);
 
   process.exit(1);
 });
