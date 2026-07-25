@@ -158,3 +158,24 @@ jobs:
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
         run: node publish_wp.js
+
+      # ------------------
+      # 9) YOUTUBE SHORTS PAYLOAD
+      # ------------------
+      - name: Generate YouTube Shorts payload
+        if: success()
+        env:
+          WP_URL: https://greenbettips.com
+          SHORTS_TICKET_TYPE: bilet_cota2
+        run: node shorts/generate_shorts_payload.js
+
+      - name: Upload Shorts payload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shorts-payload
+          path: |
+            published_posts.json
+            output/shorts_payload.json
+            output/voice_script.txt
+          if-no-files-found: warn
