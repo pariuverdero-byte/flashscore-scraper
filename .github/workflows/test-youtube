@@ -1,0 +1,38 @@
+      - name: Test YouTube OAuth credentials
+        if: success()
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RESPONSE=$(curl -sS \
+            -X POST \
+            https://oauth2.googleapis.com/token \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "client_id=${YOUTUBE_CLIENT_ID}" \
+            --data-urlencode "client_secret=${YOUTUBE_CLIENT_SECRET}" \
+            --data-urlencode "refresh_token=${YOUTUBE_REFRESH_TOKEN}" \
+            --data-urlencode "grant_type=refresh_token")
+
+          node -e "
+            const response = JSON.parse(process.argv[1]);
+
+            if (!response.access_token) {
+              console.error(
+                'OAuth test failed:',
+                response.error,
+                response.error_description || ''
+              );
+              process.exit(1);
+            }
+
+            console.log('YouTube OAuth credentials are valid.');
+            console.log(
+              'Access token expires in:',
+              response.expires_in,
+              'seconds'
+            );
+          " "$RESPONSE"
