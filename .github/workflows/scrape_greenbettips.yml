@@ -402,7 +402,80 @@ jobs:
           echo "YouTube Short validation passed."
 
       # ------------------
-      # 16) SHORTS ARTIFACT
+      # 16) GENERATE DISTRIBUTION MANIFEST
+      # ------------------
+      - name: Generate distribution manifest
+        if: success()
+        env:
+          SHORTS_PAYLOAD_FILE: output/shorts_payload.json
+          SHORTS_VIDEO_FILE: output/short.mp4
+          DISTRIBUTION_MANIFEST_FILE: output/distribution_manifest.json
+          YOUTUBE_PRIVACY_STATUS: private
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f output/shorts_payload.json ]; then
+            echo "Shorts payload does not exist."
+            exit 1
+          fi
+
+          STATUS=$(node -e "
+            const fs = require('fs');
+            const payload = JSON.parse(
+              fs.readFileSync('output/shorts_payload.json', 'utf8')
+            );
+            process.stdout.write(payload.status || '');
+          ")
+
+          if [ "$STATUS" = "skipped" ]; then
+            echo "Distribution manifest skipped because no suitable ticket was generated."
+            exit 0
+          fi
+
+          if [ "$STATUS" != "ready" ]; then
+            echo "Unexpected Shorts payload status: $STATUS"
+            exit 1
+          fi
+
+          if [ ! -s output/short.mp4 ]; then
+            echo "No rendered Short exists. Distribution manifest generation skipped."
+            exit 0
+          fi
+
+          if [ ! -f publish/generate_manifest.js ]; then
+            echo "Manifest generator not found:"
+            echo "publish/generate_manifest.js"
+            exit 1
+          fi
+
+          node publish/generate_manifest.js
+
+          if [ ! -s output/distribution_manifest.json ]; then
+            echo "Distribution manifest was not created or is empty."
+            exit 1
+          fi
+
+          echo "Distribution manifest generated successfully."
+
+          node -e "
+            const fs = require('fs');
+            const manifest = JSON.parse(
+              fs.readFileSync(
+                'output/distribution_manifest.json',
+                'utf8'
+              )
+            );
+
+            console.log('Content ID:', manifest.content?.id);
+            console.log('Video:', manifest.media?.video);
+            console.log('YouTube enabled:', manifest.platforms?.youtube?.enabled);
+            console.log('YouTube privacy:', manifest.platforms?.youtube?.privacyStatus);
+            console.log('YouTube title:', manifest.platforms?.youtube?.title);
+          "
+
+      # ------------------
+      # 17) SHORTS + DISTRIBUTION ARTIFACT
       # ------------------
       - name: Upload Shorts artifact
         if: always()
@@ -416,5 +489,6 @@ jobs:
             output/voice.mp3
             output/subs.srt
             output/short.mp4
+            output/distribution_manifest.json
             output/render_text/
           if-no-files-found: warn
