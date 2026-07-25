@@ -1,0 +1,551 @@
+name: Scrape + WordPress + Test Multi-Ticket Shorts Engine
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "35 11 * * *" # 14:35 RO during daylight saving time
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      DAY_OFFSET: "0"
+      INCLUDE_LIVE: "true"
+      LANG: "en"
+
+      CLAUDIU_MIN_ODD: "1.15"
+
+      PV_COTA2_MIN: "1.90"
+      PV_COTA2_MAX: "2.50"
+      PV_TARGET_COTA2: "2.05"
+      PV_COTA2_TOL: "0.00"
+
+      PV_ZI_MIN: "3.50"
+      PV_ZI_MAX: "7.00"
+      PV_TARGET_ZI: "5.00"
+      PV_ZI_TOL: "0.00"
+
+    steps:
+      # ------------------
+      # SETUP
+      # ------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-greenbettips
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      - name: Install Node dependencies
+        run: |
+          npm install \
+            cheerio@^1.0.0-rc.12 \
+            node-fetch@^3 \
+            googleapis \
+            --no-fund \
+            --no-audit \
+            --prefer-offline
+
+      # ------------------
+      # 1) FLASHSCORE
+      # ------------------
+      - name: Scrape Flashscore fixtures
+        timeout-minutes: 5
+        run: node scrape_mobi.js
+
+      # ------------------
+      # 2) CLAUDIU
+      # ------------------
+      - name: Build Claudiu Hood pool
+        timeout-minutes: 5
+        run: node scrape_claudiu_pool.js
+
+      # ------------------
+      # 3) TALKFOOTBALL
+      # ------------------
+      - name: Scrape TalkFootball
+        timeout-minutes: 5
+        run: node scrapers/scrape_talkfootball.js
+
+      - name: Match TalkFootball to Flashscore
+        timeout-minutes: 5
+        run: node engine/match_talkfootball_flashscore.js
+
+      - name: Inject TalkFootball into master pool
+        timeout-minutes: 5
+        run: node parsers/parse_talkfootball_as_odds.js
+
+      # ------------------
+      # 4) PREDICTZ
+      # ------------------
+      - name: Scrape PredictZ
+        timeout-minutes: 5
+        run: node scrapers/scrape_predictz.js
+
+      - name: Match PredictZ to Flashscore
+        timeout-minutes: 5
+        run: node engine/match_predictz_flashscore.js
+
+      - name: Inject PredictZ into master pool
+        timeout-minutes: 5
+        run: node parsers/parse_predictz_as_odds.js
+
+      # ------------------
+      # 5) GENERATE TICKETS
+      # ------------------
+      - name: Generate tickets from master pool
+        timeout-minutes: 5
+        run: node generate_tickets_from_pool.js
+
+      # ------------------
+      # 6) GENERATE WORDPRESS HTML
+      # ------------------
+      - name: Generate WordPress HTML
+        run: node generate_wp.js
+
+      # ------------------
+      # 7) RAW ARTIFACTS
+      # ------------------
+      - name: Upload raw artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-output
+          path: |
+            matches.json
+            claudiu_pool.json
+            master_pool.json
+
+            predictz_pool.json
+            predictz_matched.json
+
+            predictz_match_tips.html
+            predictz_btts.html
+            predictz_btts_and_win.html
+            predictz_over_under_25.html
+
+            claudiu_cota2.html
+            claudiu_biletul_zilei.html
+            claudiu_varianta_speciala.html
+            claudiu_varianta_rezerva.html
+            claudiu_varianta_islanda.html
+
+            artifacts/talkfootball_pool.json
+            artifacts/talkfootball_matched.json
+            artifacts/talkfootball_dropped.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload ticket artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tickets
+          path: |
+            tickets.json
+            tickets.md
+            cota2.html
+            biletul-zilei.html
+          if-no-files-found: warn
+          retention-days: 7
+
+      # ------------------
+      # 8) WORDPRESS PUBLISHING
+      # ------------------
+      - name: Publish posts to WordPress
+        if: success()
+        env:
+          WP_URL: https://greenbettips.com
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
+        run: node publish_wp.js
+
+      # ------------------
+      # 9A) GENERATE ODDS 2 PAYLOAD
+      # ------------------
+      - name: Generate Odds 2 Shorts payload
+        if: success()
+        env:
+          LANG: "en"
+          WP_URL: https://greenbettips.com
+          SHORTS_SITE_URL: https://greenbettips.com
+          SHORTS_TICKET_TYPE: bilet_cota2
+          SHORTS_OUTPUT_DIR: output/bilet_cota2
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p output/bilet_cota2
+
+          node shorts/generate_shorts_payload.js
+
+          if [ ! -s output/bilet_cota2/shorts_payload.json ]; then
+            echo "Odds 2 payload was not created."
+            exit 1
+          fi
+
+          echo "Odds 2 payload generated."
+
+          node -e "
+            const fs = require('fs');
+            const payload = JSON.parse(
+              fs.readFileSync(
+                'output/bilet_cota2/shorts_payload.json',
+                'utf8'
+              )
+            );
+
+            console.log('Status:', payload.status);
+            console.log('Ticket type:', payload.ticketType);
+            console.log('Ticket label:', payload.ticketLabel);
+          "
+
+      # ------------------
+      # 9B) GENERATE TICKET OF THE DAY PAYLOAD
+      # ------------------
+      - name: Generate Ticket of the Day Shorts payload
+        if: success()
+        env:
+          LANG: "en"
+          WP_URL: https://greenbettips.com
+          SHORTS_SITE_URL: https://greenbettips.com
+          SHORTS_TICKET_TYPE: biletul_zilei
+          SHORTS_OUTPUT_DIR: output/biletul_zilei
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p output/biletul_zilei
+
+          node shorts/generate_shorts_payload.js
+
+          if [ ! -s output/biletul_zilei/shorts_payload.json ]; then
+            echo "Ticket of the Day payload was not created."
+            exit 1
+          fi
+
+          echo "Ticket of the Day payload generated."
+
+          node -e "
+            const fs = require('fs');
+            const payload = JSON.parse(
+              fs.readFileSync(
+                'output/biletul_zilei/shorts_payload.json',
+                'utf8'
+              )
+            );
+
+            console.log('Status:', payload.status);
+            console.log('Ticket type:', payload.ticketType);
+            console.log('Ticket label:', payload.ticketLabel);
+          "
+
+      # ------------------
+      # 10) SET UP PYTHON + EDGE TTS
+      # ------------------
+      - name: Set up Python
+        if: success()
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Edge TTS
+        if: success()
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install edge-tts
+
+          edge-tts --version
+
+      # ------------------
+      # 11) INSTALL FFMPEG + FONTS
+      # ------------------
+      - name: Install FFmpeg and fonts
+        if: success()
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            ffmpeg \
+            fonts-dejavu-core
+
+          ffmpeg -version
+          ffprobe -version
+
+      # ------------------
+      # 12) VERIFY REQUIRED ENGINE FILES
+      # ------------------
+      - name: Verify Shorts engine files
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REQUIRED_FILES=(
+            "assets/presenters/presenter-01.mp4"
+            "shorts/build_all_shorts.js"
+            "shorts/render_short.js"
+            "publish/generate_manifest.js"
+          )
+
+          for FILE in "${REQUIRED_FILES[@]}"; do
+            if [ ! -s "$FILE" ]; then
+              echo "Required file is missing or empty: $FILE"
+              exit 1
+            fi
+
+            echo "Found: $FILE"
+          done
+
+          echo "Presenter video information:"
+
+          ffprobe \
+            -v error \
+            -show_entries stream=codec_name,width,height,r_frame_rate \
+            -show_entries format=duration,size \
+            -of default=noprint_wrappers=1 \
+            assets/presenters/presenter-01.mp4
+
+      # ------------------
+      # 13) RUN MULTI-TICKET SHORTS ENGINE
+      # ------------------
+      - name: Build all Shorts
+        if: success()
+        timeout-minutes: 30
+        env:
+          SHORTS_OUTPUT_ROOT: output
+          SHORTS_PRESENTER_FILE: assets/presenters/presenter-01.mp4
+
+          SHORTS_TTS_VOICE: en-US-GuyNeural
+          SHORTS_TTS_RATE: "+5%"
+
+          # Temporary test mode.
+          # No videos are uploaded by this workflow.
+          YOUTUBE_PRIVACY_STATUS: private
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node shorts/build_all_shorts.js
+
+          if [ ! -s output/build_summary.json ]; then
+            echo "Build summary was not created."
+            exit 1
+          fi
+
+          echo "Multi-ticket build summary:"
+          cat output/build_summary.json
+
+      # ------------------
+      # 14) VERIFY ODDS 2 OUTPUT
+      # ------------------
+      - name: Verify Odds 2 video output
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PAYLOAD="output/bilet_cota2/shorts_payload.json"
+
+          if [ ! -s "$PAYLOAD" ]; then
+            echo "Odds 2 payload is missing."
+            exit 1
+          fi
+
+          STATUS=$(node -e "
+            const fs = require('fs');
+            const payload = JSON.parse(
+              fs.readFileSync(
+                'output/bilet_cota2/shorts_payload.json',
+                'utf8'
+              )
+            );
+
+            process.stdout.write(payload.status || '');
+          ")
+
+          if [ "$STATUS" = "skipped" ]; then
+            echo "Odds 2 video was correctly skipped."
+            exit 0
+          fi
+
+          if [ "$STATUS" != "ready" ]; then
+            echo "Unexpected Odds 2 status: $STATUS"
+            exit 1
+          fi
+
+          REQUIRED_OUTPUTS=(
+            "output/bilet_cota2/voice.mp3"
+            "output/bilet_cota2/subs.srt"
+            "output/bilet_cota2/short.mp4"
+            "output/bilet_cota2/distribution_manifest.json"
+          )
+
+          for FILE in "${REQUIRED_OUTPUTS[@]}"; do
+            if [ ! -s "$FILE" ]; then
+              echo "Missing Odds 2 output: $FILE"
+              exit 1
+            fi
+          done
+
+          echo "Odds 2 video details:"
+
+          ffprobe \
+            -v error \
+            -show_entries stream=codec_name,width,height,r_frame_rate \
+            -show_entries format=duration,size \
+            -of default=noprint_wrappers=1 \
+            output/bilet_cota2/short.mp4
+
+      # ------------------
+      # 15) VERIFY TICKET OF THE DAY OUTPUT
+      # ------------------
+      - name: Verify Ticket of the Day video output
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PAYLOAD="output/biletul_zilei/shorts_payload.json"
+
+          if [ ! -s "$PAYLOAD" ]; then
+            echo "Ticket of the Day payload is missing."
+            exit 1
+          fi
+
+          STATUS=$(node -e "
+            const fs = require('fs');
+            const payload = JSON.parse(
+              fs.readFileSync(
+                'output/biletul_zilei/shorts_payload.json',
+                'utf8'
+              )
+            );
+
+            process.stdout.write(payload.status || '');
+          ")
+
+          if [ "$STATUS" = "skipped" ]; then
+            echo "Ticket of the Day video was correctly skipped."
+            exit 0
+          fi
+
+          if [ "$STATUS" != "ready" ]; then
+            echo "Unexpected Ticket of the Day status: $STATUS"
+            exit 1
+          fi
+
+          REQUIRED_OUTPUTS=(
+            "output/biletul_zilei/voice.mp3"
+            "output/biletul_zilei/subs.srt"
+            "output/biletul_zilei/short.mp4"
+            "output/biletul_zilei/distribution_manifest.json"
+          )
+
+          for FILE in "${REQUIRED_OUTPUTS[@]}"; do
+            if [ ! -s "$FILE" ]; then
+              echo "Missing Ticket of the Day output: $FILE"
+              exit 1
+            fi
+          done
+
+          echo "Ticket of the Day video details:"
+
+          ffprobe \
+            -v error \
+            -show_entries stream=codec_name,width,height,r_frame_rate \
+            -show_entries format=duration,size \
+            -of default=noprint_wrappers=1 \
+            output/biletul_zilei/short.mp4
+
+      # ------------------
+      # 16) DISPLAY GENERATED MANIFESTS
+      # ------------------
+      - name: Display distribution manifests
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for TICKET_TYPE in bilet_cota2 biletul_zilei; do
+            MANIFEST="output/${TICKET_TYPE}/distribution_manifest.json"
+
+            if [ -s "$MANIFEST" ]; then
+              echo ""
+              echo "Manifest for ${TICKET_TYPE}:"
+
+              node -e "
+                const fs = require('fs');
+                const manifest = JSON.parse(
+                  fs.readFileSync(
+                    process.argv[1],
+                    'utf8'
+                  )
+                );
+
+                console.log(
+                  JSON.stringify(
+                    {
+                      contentId:
+                        manifest.content?.id,
+                      ticketType:
+                        manifest.content?.ticketType,
+                      video:
+                        manifest.media?.video,
+                      youtubeEnabled:
+                        manifest.platforms?.youtube?.enabled,
+                      youtubePrivacy:
+                        manifest.platforms?.youtube?.privacyStatus,
+                      youtubeTitle:
+                        manifest.platforms?.youtube?.title
+                    },
+                    null,
+                    2
+                  )
+                );
+              " "$MANIFEST"
+            else
+              echo "No manifest for ${TICKET_TYPE}; ticket may have been skipped."
+            fi
+          done
+
+      # ------------------
+      # 17) UPLOAD MULTI-TICKET TEST ARTIFACT
+      # ------------------
+      - name: Upload multi-ticket Shorts artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: multi-ticket-shorts-test
+          path: |
+            published_posts.json
+            output/build_summary.json
+
+            output/bilet_cota2/shorts_payload.json
+            output/bilet_cota2/voice_script.txt
+            output/bilet_cota2/voice.mp3
+            output/bilet_cota2/subs.srt
+            output/bilet_cota2/short.mp4
+            output/bilet_cota2/distribution_manifest.json
+            output/bilet_cota2/render_text/
+
+            output/biletul_zilei/shorts_payload.json
+            output/biletul_zilei/voice_script.txt
+            output/biletul_zilei/voice.mp3
+            output/biletul_zilei/subs.srt
+            output/biletul_zilei/short.mp4
+            output/biletul_zilei/distribution_manifest.json
+            output/biletul_zilei/render_text/
+          if-no-files-found: warn
+          retention-days: 7
