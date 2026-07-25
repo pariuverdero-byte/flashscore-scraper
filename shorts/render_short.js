@@ -18,7 +18,9 @@ const OUTPUT_FILE =
   process.env.SHORTS_VIDEO_FILE ||
   "output/short.mp4";
 
-const TEMP_DIR = "output/render_text";
+const TEMP_DIR =
+  process.env.SHORTS_RENDER_TEXT_DIR ||
+  "output/render_text";
 
 const FONT_REGULAR =
   "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
