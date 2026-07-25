@@ -169,16 +169,136 @@ jobs:
         run: node publish_wp.js
 
       # ------------------
-      # 9) YOUTUBE SHORTS PAYLOAD
+      # 9A) ODDS 2 SHORTS PAYLOAD
       # ------------------
-      - name: Generate YouTube Shorts payload
+      - name: Generate Odds 2 Shorts payload
         if: success()
         env:
           LANG: "en"
           WP_URL: https://greenbettips.com
           SHORTS_SITE_URL: https://greenbettips.com
           SHORTS_TICKET_TYPE: bilet_cota2
-        run: node shorts/generate_shorts_payload.js
+          SHORTS_OUTPUT_DIR: output/bilet_cota2
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p output/bilet_cota2
+
+          node shorts/generate_shorts_payload.js
+
+          if [ ! -s output/bilet_cota2/shorts_payload.json ]; then
+            echo "Odds 2 payload was not generated."
+            exit 1
+          fi
+
+          echo "Odds 2 payload generated successfully."
+
+          node -e "
+            const fs = require('fs');
+            const payload = JSON.parse(
+              fs.readFileSync(
+                'output/bilet_cota2/shorts_payload.json',
+                'utf8'
+              )
+            );
+
+            console.log('Status:', payload.status);
+            console.log('Ticket type:', payload.ticketType);
+            console.log('Ticket label:', payload.ticketLabel);
+          "
+
+      # ------------------
+      # 9B) TICKET OF THE DAY SHORTS PAYLOAD
+      # ------------------
+      - name: Generate Ticket of the Day Shorts payload
+        if: success()
+        env:
+          LANG: "en"
+          WP_URL: https://greenbettips.com
+          SHORTS_SITE_URL: https://greenbettips.com
+          SHORTS_TICKET_TYPE: biletul_zilei
+          SHORTS_OUTPUT_DIR: output/biletul_zilei
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p output/biletul_zilei
+
+          node shorts/generate_shorts_payload.js
+
+          if [ ! -s output/biletul_zilei/shorts_payload.json ]; then
+            echo "Ticket of the Day payload was not generated."
+            exit 1
+          fi
+
+          echo "Ticket of the Day payload generated successfully."
+
+          node -e "
+            const fs = require('fs');
+            const payload = JSON.parse(
+              fs.readFileSync(
+                'output/biletul_zilei/shorts_payload.json',
+                'utf8'
+              )
+            );
+
+            console.log('Status:', payload.status);
+            console.log('Ticket type:', payload.ticketType);
+            console.log('Ticket label:', payload.ticketLabel);
+          "
+
+      # ------------------
+      # 9C) KEEP CURRENT ODDS 2 PIPELINE COMPATIBLE
+      # ------------------
+      - name: Prepare Odds 2 payload for existing video pipeline
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -s output/bilet_cota2/shorts_payload.json ]; then
+            echo "Odds 2 Shorts payload is missing."
+            exit 1
+          fi
+
+          STATUS=$(node -e "
+            const fs = require('fs');
+            const payload = JSON.parse(
+              fs.readFileSync(
+                'output/bilet_cota2/shorts_payload.json',
+                'utf8'
+              )
+            );
+            process.stdout.write(payload.status || '');
+          ")
+
+          if [ "$STATUS" = "skipped" ]; then
+            echo "Odds 2 ticket was skipped."
+            cp \
+              output/bilet_cota2/shorts_payload.json \
+              output/shorts_payload.json
+            exit 0
+          fi
+
+          if [ "$STATUS" != "ready" ]; then
+            echo "Unexpected Odds 2 payload status: $STATUS"
+            exit 1
+          fi
+
+          cp \
+            output/bilet_cota2/shorts_payload.json \
+            output/shorts_payload.json
+
+          cp \
+            output/bilet_cota2/voice_script.txt \
+            output/voice_script.txt
+
+          echo "Odds 2 payload copied to the existing pipeline paths."
+
+          ls -lh \
+            output/shorts_payload.json \
+            output/voice_script.txt
 
       # ------------------
       # 10) SET UP EDGE TTS
@@ -196,7 +316,7 @@ jobs:
           python -m pip install edge-tts
 
       # ------------------
-      # 11) GENERATE VOICE + SUBTITLES
+      # 11) GENERATE ODDS 2 VOICE + SUBTITLES
       # ------------------
       - name: Generate Shorts voice and subtitles
         if: success()
@@ -218,7 +338,7 @@ jobs:
           ")
 
           if [ "$STATUS" = "skipped" ]; then
-            echo "Shorts generation was skipped because no suitable ticket was generated."
+            echo "Shorts generation was skipped because no suitable Odds 2 ticket was generated."
             exit 0
           fi
 
@@ -232,7 +352,7 @@ jobs:
             exit 1
           fi
 
-          echo "Generating English voice and synchronized subtitles..."
+          echo "Generating English Odds 2 voice and synchronized subtitles..."
 
           edge-tts \
             --voice "en-US-GuyNeural" \
@@ -252,7 +372,10 @@ jobs:
             exit 1
           fi
 
-          echo "Voice and subtitles generated successfully."
+          cp output/voice.mp3 output/bilet_cota2/voice.mp3
+          cp output/subs.srt output/bilet_cota2/subs.srt
+
+          echo "Odds 2 voice and subtitles generated successfully."
 
           ls -lh \
             output/shorts_payload.json \
@@ -304,7 +427,7 @@ jobs:
             assets/presenters/presenter-01.mp4
 
       # ------------------
-      # 14) RENDER YOUTUBE SHORT
+      # 14) RENDER ODDS 2 YOUTUBE SHORT
       # ------------------
       - name: Render YouTube Short
         if: success()
@@ -327,7 +450,7 @@ jobs:
           ")
 
           if [ "$STATUS" = "skipped" ]; then
-            echo "Video rendering skipped because no suitable ticket was generated."
+            echo "Video rendering skipped because no suitable Odds 2 ticket was generated."
             exit 0
           fi
 
@@ -337,6 +460,8 @@ jobs:
             echo "Video rendering failed: output/short.mp4 is missing or empty."
             exit 1
           fi
+
+          cp output/short.mp4 output/bilet_cota2/short.mp4
 
           echo "Checking generated YouTube Short..."
 
@@ -348,7 +473,7 @@ jobs:
             output/short.mp4
 
       # ------------------
-      # 15) VALIDATE SHORT FORMAT
+      # 15) VALIDATE ODDS 2 SHORT FORMAT
       # ------------------
       - name: Validate YouTube Short
         if: success()
@@ -405,7 +530,7 @@ jobs:
           echo "YouTube Short validation passed."
 
       # ------------------
-      # 16) GENERATE DISTRIBUTION MANIFEST
+      # 16) GENERATE ODDS 2 DISTRIBUTION MANIFEST
       # ------------------
       - name: Generate distribution manifest
         if: success()
@@ -413,8 +538,6 @@ jobs:
           SHORTS_PAYLOAD_FILE: output/shorts_payload.json
           SHORTS_VIDEO_FILE: output/short.mp4
           DISTRIBUTION_MANIFEST_FILE: output/distribution_manifest.json
-
-          # Keep private during the first tests.
           YOUTUBE_PRIVACY_STATUS: public
         shell: bash
         run: |
@@ -434,7 +557,7 @@ jobs:
           ")
 
           if [ "$STATUS" = "skipped" ]; then
-            echo "Distribution manifest skipped because no suitable ticket was generated."
+            echo "Distribution manifest skipped because no suitable Odds 2 ticket was generated."
             exit 0
           fi
 
@@ -460,6 +583,10 @@ jobs:
             echo "Distribution manifest was not created or is empty."
             exit 1
           fi
+
+          cp \
+            output/distribution_manifest.json \
+            output/bilet_cota2/distribution_manifest.json
 
           echo "Distribution manifest generated successfully."
 
@@ -488,6 +615,9 @@ jobs:
             );
           "
 
+      # ------------------
+      # YOUTUBE OAUTH TEST
+      # ------------------
       - name: Test YouTube OAuth credentials
         if: success()
         env:
@@ -526,7 +656,6 @@ jobs:
               'seconds'
             );
           " "$RESPONSE"
-
 
       # ------------------
       # 17) VERIFY YOUTUBE PUBLISHER
@@ -570,7 +699,7 @@ jobs:
           echo "YouTube publisher and required credentials are configured."
 
       # ------------------
-      # 18) PUBLISH TO YOUTUBE
+      # 18) PUBLISH ODDS 2 TO YOUTUBE
       # ------------------
       - name: Publish Short to YouTube
         if: success()
@@ -596,7 +725,7 @@ jobs:
             exit 0
           fi
 
-          echo "Uploading Short to YouTube as a private video..."
+          echo "Uploading Odds 2 Short to YouTube as a public video..."
 
           node publish/platforms/youtube.js
 
@@ -621,6 +750,10 @@ jobs:
             cat output/distribution_results.json
             exit 1
           fi
+
+          cp \
+            output/distribution_results.json \
+            output/bilet_cota2/distribution_results.json
 
           echo "YouTube upload completed successfully."
 
@@ -659,6 +792,10 @@ jobs:
           name: shorts-output
           path: |
             published_posts.json
+
+            output/bilet_cota2/
+            output/biletul_zilei/
+
             output/shorts_payload.json
             output/voice_script.txt
             output/voice.mp3
