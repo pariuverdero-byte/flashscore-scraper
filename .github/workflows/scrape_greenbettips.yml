@@ -250,6 +250,7 @@ jobs:
           fi
 
           echo "Voice and subtitles generated successfully."
+
           ls -lh \
             output/shorts_payload.json \
             output/voice_script.txt \
@@ -257,7 +258,151 @@ jobs:
             output/subs.srt
 
       # ------------------
-      # 12) SHORTS ARTIFACT
+      # 12) INSTALL FFMPEG + FONTS
+      # ------------------
+      - name: Install FFmpeg and fonts
+        if: success()
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ffmpeg \
+            fonts-dejavu-core
+
+          ffmpeg -version
+          ffprobe -version
+
+      # ------------------
+      # 13) VERIFY PRESENTER VIDEO
+      # ------------------
+      - name: Verify presenter video
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f assets/presenters/presenter-01.mp4 ]; then
+            echo "Presenter video not found:"
+            echo "assets/presenters/presenter-01.mp4"
+            exit 1
+          fi
+
+          if [ ! -s assets/presenters/presenter-01.mp4 ]; then
+            echo "Presenter video exists but is empty."
+            exit 1
+          fi
+
+          echo "Presenter video found successfully."
+
+          ffprobe \
+            -v error \
+            -show_entries stream=codec_name,width,height,r_frame_rate \
+            -show_entries format=duration,size \
+            -of default=noprint_wrappers=1 \
+            assets/presenters/presenter-01.mp4
+
+      # ------------------
+      # 14) RENDER YOUTUBE SHORT
+      # ------------------
+      - name: Render YouTube Short
+        if: success()
+        env:
+          SHORTS_PAYLOAD_FILE: output/shorts_payload.json
+          SHORTS_PRESENTER_FILE: assets/presenters/presenter-01.mp4
+          SHORTS_AUDIO_FILE: output/voice.mp3
+          SHORTS_SUBTITLES_FILE: output/subs.srt
+          SHORTS_VIDEO_FILE: output/short.mp4
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STATUS=$(node -e "
+            const fs = require('fs');
+            const payload = JSON.parse(
+              fs.readFileSync('output/shorts_payload.json', 'utf8')
+            );
+            process.stdout.write(payload.status || '');
+          ")
+
+          if [ "$STATUS" = "skipped" ]; then
+            echo "Video rendering skipped because no suitable ticket was generated."
+            exit 0
+          fi
+
+          node shorts/render_short.js
+
+          if [ ! -s output/short.mp4 ]; then
+            echo "Video rendering failed: output/short.mp4 is missing or empty."
+            exit 1
+          fi
+
+          echo "Checking generated YouTube Short..."
+
+          ffprobe \
+            -v error \
+            -show_entries stream=codec_name,width,height,r_frame_rate \
+            -show_entries format=duration,size \
+            -of default=noprint_wrappers=1 \
+            output/short.mp4
+
+      # ------------------
+      # 15) VALIDATE SHORT FORMAT
+      # ------------------
+      - name: Validate YouTube Short
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f output/short.mp4 ]; then
+            echo "No Short was generated. Validation skipped."
+            exit 0
+          fi
+
+          WIDTH=$(ffprobe \
+            -v error \
+            -select_streams v:0 \
+            -show_entries stream=width \
+            -of csv=p=0 \
+            output/short.mp4)
+
+          HEIGHT=$(ffprobe \
+            -v error \
+            -select_streams v:0 \
+            -show_entries stream=height \
+            -of csv=p=0 \
+            output/short.mp4)
+
+          DURATION=$(ffprobe \
+            -v error \
+            -show_entries format=duration \
+            -of csv=p=0 \
+            output/short.mp4)
+
+          echo "Width: $WIDTH"
+          echo "Height: $HEIGHT"
+          echo "Duration: $DURATION seconds"
+
+          if [ "$WIDTH" != "1080" ]; then
+            echo "Invalid width. Expected 1080."
+            exit 1
+          fi
+
+          if [ "$HEIGHT" != "1920" ]; then
+            echo "Invalid height. Expected 1920."
+            exit 1
+          fi
+
+          awk -v duration="$DURATION" 'BEGIN {
+            if (duration > 60) {
+              print "Video is longer than 60 seconds.";
+              exit 1;
+            }
+          }'
+
+          echo "YouTube Short validation passed."
+
+      # ------------------
+      # 16) SHORTS ARTIFACT
       # ------------------
       - name: Upload Shorts artifact
         if: always()
@@ -270,4 +415,6 @@ jobs:
             output/voice_script.txt
             output/voice.mp3
             output/subs.srt
+            output/short.mp4
+            output/render_text/
           if-no-files-found: warn
