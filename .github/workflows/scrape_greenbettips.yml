@@ -48,7 +48,10 @@ jobs:
 
       - name: Install Node dependencies
         run: |
-          npm install cheerio@^1.0.0-rc.12 node-fetch@^3 \
+          npm install \
+            cheerio@^1.0.0-rc.12 \
+            node-fetch@^3 \
+            googleapis \
             --no-fund \
             --no-audit \
             --prefer-offline
@@ -410,6 +413,8 @@ jobs:
           SHORTS_PAYLOAD_FILE: output/shorts_payload.json
           SHORTS_VIDEO_FILE: output/short.mp4
           DISTRIBUTION_MANIFEST_FILE: output/distribution_manifest.json
+
+          # Keep private during the first tests.
           YOUTUBE_PRIVACY_STATUS: private
         shell: bash
         run: |
@@ -469,13 +474,143 @@ jobs:
 
             console.log('Content ID:', manifest.content?.id);
             console.log('Video:', manifest.media?.video);
-            console.log('YouTube enabled:', manifest.platforms?.youtube?.enabled);
-            console.log('YouTube privacy:', manifest.platforms?.youtube?.privacyStatus);
-            console.log('YouTube title:', manifest.platforms?.youtube?.title);
+            console.log(
+              'YouTube enabled:',
+              manifest.platforms?.youtube?.enabled
+            );
+            console.log(
+              'YouTube privacy:',
+              manifest.platforms?.youtube?.privacyStatus
+            );
+            console.log(
+              'YouTube title:',
+              manifest.platforms?.youtube?.title
+            );
           "
 
       # ------------------
-      # 17) SHORTS + DISTRIBUTION ARTIFACT
+      # 17) VERIFY YOUTUBE PUBLISHER
+      # ------------------
+      - name: Verify YouTube publisher configuration
+        if: success()
+        shell: bash
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -s output/distribution_manifest.json ]; then
+            echo "No distribution manifest exists. YouTube publishing skipped."
+            exit 0
+          fi
+
+          if [ ! -f publish/platforms/youtube.js ]; then
+            echo "YouTube publisher was not found:"
+            echo "publish/platforms/youtube.js"
+            exit 1
+          fi
+
+          if [ -z "${YOUTUBE_CLIENT_ID:-}" ]; then
+            echo "Missing GitHub secret: YOUTUBE_CLIENT_ID"
+            exit 1
+          fi
+
+          if [ -z "${YOUTUBE_CLIENT_SECRET:-}" ]; then
+            echo "Missing GitHub secret: YOUTUBE_CLIENT_SECRET"
+            exit 1
+          fi
+
+          if [ -z "${YOUTUBE_REFRESH_TOKEN:-}" ]; then
+            echo "Missing GitHub secret: YOUTUBE_REFRESH_TOKEN"
+            exit 1
+          fi
+
+          echo "YouTube publisher and required credentials are configured."
+
+      # ------------------
+      # 18) PUBLISH TO YOUTUBE
+      # ------------------
+      - name: Publish Short to YouTube
+        if: success()
+        timeout-minutes: 15
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+
+          DISTRIBUTION_MANIFEST_FILE: output/distribution_manifest.json
+          DISTRIBUTION_RESULTS_FILE: output/distribution_results.json
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -s output/distribution_manifest.json ]; then
+            echo "Distribution manifest is missing. YouTube publishing skipped."
+            exit 0
+          fi
+
+          if [ ! -s output/short.mp4 ]; then
+            echo "Rendered Short is missing. YouTube publishing skipped."
+            exit 0
+          fi
+
+          echo "Uploading Short to YouTube as a private video..."
+
+          node publish/platforms/youtube.js
+
+          if [ ! -s output/distribution_results.json ]; then
+            echo "YouTube upload result was not created."
+            exit 1
+          fi
+
+          STATUS=$(node -e "
+            const fs = require('fs');
+            const result = JSON.parse(
+              fs.readFileSync(
+                'output/distribution_results.json',
+                'utf8'
+              )
+            );
+            process.stdout.write(result.status || '');
+          ")
+
+          if [ "$STATUS" != "success" ]; then
+            echo "YouTube publishing did not return success."
+            cat output/distribution_results.json
+            exit 1
+          fi
+
+          echo "YouTube upload completed successfully."
+
+          node -e "
+            const fs = require('fs');
+            const result = JSON.parse(
+              fs.readFileSync(
+                'output/distribution_results.json',
+                'utf8'
+              )
+            );
+
+            console.log(
+              'YouTube video ID:',
+              result.youtube?.videoId
+            );
+
+            console.log(
+              'YouTube URL:',
+              result.youtube?.url
+            );
+
+            console.log(
+              'Privacy:',
+              result.youtube?.privacyStatus
+            );
+          "
+
+      # ------------------
+      # 19) SHORTS + DISTRIBUTION ARTIFACT
       # ------------------
       - name: Upload Shorts artifact
         if: always()
@@ -490,5 +625,6 @@ jobs:
             output/subs.srt
             output/short.mp4
             output/distribution_manifest.json
+            output/distribution_results.json
             output/render_text/
           if-no-files-found: warn
