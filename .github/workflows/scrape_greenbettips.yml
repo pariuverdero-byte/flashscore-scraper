@@ -3,7 +3,7 @@ name: Scrape Flashscore + Claudiu Pool + TalkFootball + PredictZ + Generate Tick
 on:
   workflow_dispatch:
   schedule:
-    - cron: "35 11 * * *"  # 14:35 RO (GitHub = UTC)
+    - cron: "35 11 * * *" # 14:35 RO during daylight saving time
 
 jobs:
   scrape:
@@ -30,9 +30,11 @@ jobs:
       # ------------------
       # SETUP
       # ------------------
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
 
@@ -44,10 +46,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-npm-
 
-      - name: Install dependencies
+      - name: Install Node dependencies
         run: |
           npm install cheerio@^1.0.0-rc.12 node-fetch@^3 \
-            --no-fund --no-audit --prefer-offline
+            --no-fund \
+            --no-audit \
+            --prefer-offline
 
       # ------------------
       # 1) FLASHSCORE
@@ -59,7 +63,7 @@ jobs:
       # ------------------
       # 2) CLAUDIU
       # ------------------
-      - name: Build Claudiu Hood POOL
+      - name: Build Claudiu Hood pool
         timeout-minutes: 5
         run: node scrape_claudiu_pool.js
 
@@ -74,7 +78,7 @@ jobs:
         timeout-minutes: 5
         run: node engine/match_talkfootball_flashscore.js
 
-      - name: Inject TalkFootball into MASTER pool
+      - name: Inject TalkFootball into master pool
         timeout-minutes: 5
         run: node parsers/parse_talkfootball_as_odds.js
 
@@ -89,14 +93,14 @@ jobs:
         timeout-minutes: 5
         run: node engine/match_predictz_flashscore.js
 
-      - name: Inject PredictZ into MASTER pool
+      - name: Inject PredictZ into master pool
         timeout-minutes: 5
         run: node parsers/parse_predictz_as_odds.js
 
       # ------------------
       # 5) GENERATE TICKETS
       # ------------------
-      - name: Generate tickets from MASTER pool
+      - name: Generate tickets from master pool
         timeout-minutes: 5
         run: node generate_tickets_from_pool.js
 
@@ -107,9 +111,9 @@ jobs:
         run: node generate_wp.js
 
       # ------------------
-      # 7) ARTIFACTS
+      # 7) RAW ARTIFACTS
       # ------------------
-      - name: Upload artifacts (raw)
+      - name: Upload raw artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -136,8 +140,9 @@ jobs:
             artifacts/talkfootball_pool.json
             artifacts/talkfootball_matched.json
             artifacts/talkfootball_dropped.json
+          if-no-files-found: warn
 
-      - name: Upload artifacts (tickets)
+      - name: Upload ticket artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -147,11 +152,12 @@ jobs:
             tickets.md
             cota2.html
             biletul-zilei.html
+          if-no-files-found: warn
 
       # ------------------
-      # 8) PUBLISH
+      # 8) WORDPRESS PUBLISHING
       # ------------------
-      - name: Publish posts to WordPress (greenbettips.com)
+      - name: Publish posts to WordPress
         if: success()
         env:
           WP_URL: https://greenbettips.com
@@ -165,17 +171,103 @@ jobs:
       - name: Generate YouTube Shorts payload
         if: success()
         env:
+          LANG: "en"
           WP_URL: https://greenbettips.com
+          SHORTS_SITE_URL: https://greenbettips.com
           SHORTS_TICKET_TYPE: bilet_cota2
         run: node shorts/generate_shorts_payload.js
 
-      - name: Upload Shorts payload artifact
+      # ------------------
+      # 10) SET UP EDGE TTS
+      # ------------------
+      - name: Set up Python
+        if: success()
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Edge TTS
+        if: success()
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install edge-tts
+
+      # ------------------
+      # 11) GENERATE VOICE + SUBTITLES
+      # ------------------
+      - name: Generate Shorts voice and subtitles
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f output/shorts_payload.json ]; then
+            echo "output/shorts_payload.json does not exist."
+            exit 1
+          fi
+
+          STATUS=$(node -e "
+            const fs = require('fs');
+            const payload = JSON.parse(
+              fs.readFileSync('output/shorts_payload.json', 'utf8')
+            );
+            process.stdout.write(payload.status || '');
+          ")
+
+          if [ "$STATUS" = "skipped" ]; then
+            echo "Shorts generation was skipped because no suitable ticket was generated."
+            exit 0
+          fi
+
+          if [ "$STATUS" != "ready" ]; then
+            echo "Unexpected Shorts payload status: $STATUS"
+            exit 1
+          fi
+
+          if [ ! -s output/voice_script.txt ]; then
+            echo "output/voice_script.txt is missing or empty."
+            exit 1
+          fi
+
+          echo "Generating English voice and synchronized subtitles..."
+
+          edge-tts \
+            --voice "en-US-GuyNeural" \
+            --rate="+5%" \
+            --volume="+0%" \
+            --file output/voice_script.txt \
+            --write-media output/voice.mp3 \
+            --write-subtitles output/subs.srt
+
+          if [ ! -s output/voice.mp3 ]; then
+            echo "Voice generation failed: output/voice.mp3 is missing or empty."
+            exit 1
+          fi
+
+          if [ ! -s output/subs.srt ]; then
+            echo "Subtitle generation failed: output/subs.srt is missing or empty."
+            exit 1
+          fi
+
+          echo "Voice and subtitles generated successfully."
+          ls -lh \
+            output/shorts_payload.json \
+            output/voice_script.txt \
+            output/voice.mp3 \
+            output/subs.srt
+
+      # ------------------
+      # 12) SHORTS ARTIFACT
+      # ------------------
+      - name: Upload Shorts artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: shorts-payload
+          name: shorts-output
           path: |
             published_posts.json
             output/shorts_payload.json
             output/voice_script.txt
+            output/voice.mp3
+            output/subs.srt
           if-no-files-found: warn
