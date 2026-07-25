@@ -415,7 +415,7 @@ jobs:
           DISTRIBUTION_MANIFEST_FILE: output/distribution_manifest.json
 
           # Keep private during the first tests.
-          YOUTUBE_PRIVACY_STATUS: private
+          YOUTUBE_PRIVACY_STATUS: public
         shell: bash
         run: |
           set -euo pipefail
