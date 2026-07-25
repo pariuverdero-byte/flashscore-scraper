@@ -14,10 +14,6 @@ const AUDIO_FILE =
   process.env.SHORTS_AUDIO_FILE ||
   "output/voice.mp3";
 
-const SUBTITLES_FILE =
-  process.env.SHORTS_SUBTITLES_FILE ||
-  "output/subs.srt";
-
 const OUTPUT_FILE =
   process.env.SHORTS_VIDEO_FILE ||
   "output/short.mp4";
@@ -158,7 +154,6 @@ function main() {
   requireFile(PAYLOAD_FILE);
   requireFile(PRESENTER_FILE);
   requireFile(AUDIO_FILE);
-  requireFile(SUBTITLES_FILE);
   requireFile(FONT_REGULAR);
   requireFile(FONT_BOLD);
 
@@ -200,6 +195,7 @@ function main() {
   );
 
   const audioDuration = getAudioDuration(AUDIO_FILE);
+
   const finalDuration =
     INTRO_DURATION +
     audioDuration +
@@ -232,12 +228,6 @@ function main() {
     "-";
 
   const formattedDate = formatDate(payload.date);
-
-  /*
-   * Text files are used instead of putting dynamic text
-   * directly inside FFmpeg commands. This avoids escaping
-   * problems with apostrophes, colons and team names.
-   */
 
   const introBrandFile = writeTextFile(
     "intro_brand.txt",
@@ -320,9 +310,8 @@ function main() {
     "WWW.GREENBETTIPS.COM"
   );
 
-  const boldFont = escapeFilterPath(FONT_BOLD);
-  const subtitlePath =
-    escapeFilterPath(SUBTITLES_FILE);
+  const boldFont =
+    escapeFilterPath(FONT_BOLD);
 
   const introBrandPath =
     escapeFilterPath(introBrandFile);
@@ -375,23 +364,13 @@ function main() {
   const outroFadeOutStart =
     OUTRO_DURATION - 0.35;
 
-  /*
-   * The complete video is generated in one FFmpeg run:
-   *
-   * intro video + silent audio
-   * main presenter video + narration
-   * outro video + silent audio
-   *
-   * The concat filter joins the three sections.
-   */
-
   const filter = [
     /*
-     * INTRO VIDEO
+     * INTRO
      */
     `color=c=0x07140D:s=1080x1920:r=30:d=${INTRO_DURATION}[intro_bg]`,
 
-    `[intro_bg]` +
+    "[intro_bg]" +
       "drawbox=x=0:y=0:w=1080:h=18:" +
       "color=0x38E878:t=fill," +
 
@@ -429,8 +408,7 @@ function main() {
       "fontcolor=0x38E878:fontsize=145:" +
       "x=(w-text_w)/2:y=920," +
 
-      "drawtext=" +
-      `fontfile='${boldFont}':` +
+      `drawtext=fontfile='${boldFont}':` +
       "text='DAILY FOOTBALL PREDICTIONS':" +
       "fontcolor=white@0.80:fontsize=32:" +
       "x=(w-text_w)/2:y=1550," +
@@ -442,14 +420,14 @@ function main() {
       "setpts=PTS-STARTPTS[intro_v]",
 
     /*
-     * INTRO SILENT AUDIO
+     * INTRO SILENCE
      */
-    `anullsrc=r=48000:cl=stereo,` +
+    "anullsrc=r=48000:cl=stereo," +
       `atrim=duration=${INTRO_DURATION},` +
       "asetpts=PTS-STARTPTS[intro_a]",
 
     /*
-     * PRESENTER GREEN-SCREEN PROCESSING
+     * PRESENTER
      */
     "[0:v]" +
       "scale=1080:1920:" +
@@ -476,61 +454,44 @@ function main() {
       "shortest=1[main_base]",
 
     "[main_base]" +
-      "drawbox=x=35:y=35:w=1010:h=450:" +
-      "color=black@0.70:t=fill," +
+      "drawbox=x=45:y=40:w=990:h=365:" +
+      "color=black@0.68:t=fill," +
 
-      "drawbox=x=35:y=35:w=1010:h=450:" +
+      "drawbox=x=45:y=40:w=990:h=365:" +
       "color=0x38E878@0.65:t=3," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${mainHeadlinePath}':` +
-      "fontcolor=white:fontsize=50:" +
-      "x=(w-text_w)/2:y=72," +
+      "fontcolor=white:fontsize=42:" +
+      "x=(w-text_w)/2:y=70," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${mainTotalOddsPath}':` +
-      "fontcolor=0x38E878:fontsize=42:" +
-      "x=(w-text_w)/2:y=148," +
+      "fontcolor=0x38E878:fontsize=36:" +
+      "x=(w-text_w)/2:y=130," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${selection1Path}':` +
-      "fontcolor=white:fontsize=29:" +
-      "x=(w-text_w)/2:y=245," +
+      "fontcolor=white:fontsize=25:" +
+      "x=(w-text_w)/2:y=205," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${selection2Path}':` +
-      "fontcolor=white:fontsize=29:" +
-      "x=(w-text_w)/2:y=315," +
+      "fontcolor=white:fontsize=25:" +
+      "x=(w-text_w)/2:y=260," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${selection3Path}':` +
-      "fontcolor=white:fontsize=29:" +
-      "x=(w-text_w)/2:y=385," +
+      "fontcolor=white:fontsize=25:" +
+      "x=(w-text_w)/2:y=315," +
 
-      "drawbox=x=35:y=1745:w=1010:h=105:" +
-      "color=black@0.75:t=fill," +
+      "drawbox=x=45:y=1765:w=990:h=85:" +
+      "color=black@0.72:t=fill," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${mainCtaPath}':` +
-      "fontcolor=0x38E878:fontsize=34:" +
-      "x=(w-text_w)/2:y=1777," +
-
-      `subtitles=filename='${subtitlePath}':` +
-      "force_style='" +
-      "FontName=DejaVu Sans," +
-      "FontSize=20," +
-      "Bold=1," +
-      "PrimaryColour=&H00FFFFFF," +
-      "OutlineColour=&H00000000," +
-      "BackColour=&H90000000," +
-      "BorderStyle=3," +
-      "Outline=2," +
-      "Shadow=0," +
-      "Alignment=2," +
-      "MarginL=65," +
-      "MarginR=65," +
-      "MarginV=220" +
-      "'," +
+      "fontcolor=0x38E878:fontsize=30:" +
+      "x=(w-text_w)/2:y=1790," +
 
       `trim=duration=${audioDuration.toFixed(3)},` +
       "setpts=PTS-STARTPTS," +
@@ -549,7 +510,7 @@ function main() {
       "asetpts=PTS-STARTPTS[main_a]",
 
     /*
-     * OUTRO VIDEO
+     * OUTRO
      */
     `color=c=0x07140D:s=1080x1920:r=30:d=${OUTRO_DURATION}[outro_bg]`,
 
@@ -559,32 +520,34 @@ function main() {
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${outroTopPath}':` +
-      "fontcolor=white:fontsize=44:" +
-      "x=(w-text_w)/2:y=400," +
+      "fontcolor=white:fontsize=42:" +
+      "x=(w-text_w)/2:y=410," +
+
+      "drawbox=x=165:y=565:w=750:h=180:" +
+      "color=0x38E878@0.16:t=fill," +
+
+      "drawbox=x=165:y=565:w=750:h=180:" +
+      "color=0x38E878@0.75:t=4," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${outroSubscribePath}':` +
-      "fontcolor=0x38E878:fontsize=110:" +
-      "x=(w-text_w)/2:y=585," +
-
-      "drawbox=x=165:y=565:w=750:h=170:" +
-      "color=0x38E878@0.20:t=4," +
+      "fontcolor=0x38E878:fontsize=100:" +
+      "x=(w-text_w)/2:y=600," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${outroMessagePath}':` +
-      "fontcolor=white:fontsize=34:" +
-      "x=(w-text_w)/2:y=860," +
+      "fontcolor=white:fontsize=32:" +
+      "x=(w-text_w)/2:y=865," +
 
-      "drawbox=x=130:y=1120:w=820:h=180:" +
+      "drawbox=x=130:y=1110:w=820:h=180:" +
       "color=black@0.42:t=fill," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${outroWebsitePath}':` +
-      "fontcolor=0x38E878:fontsize=49:" +
-      "x=(w-text_w)/2:y=1175," +
+      "fontcolor=0x38E878:fontsize=48:" +
+      "x=(w-text_w)/2:y=1165," +
 
-      "drawtext=" +
-      `fontfile='${boldFont}':` +
+      `drawtext=fontfile='${boldFont}':` +
       "text='GREENBETTIPS':" +
       "fontcolor=white@0.75:fontsize=34:" +
       "x=(w-text_w)/2:y=1560," +
@@ -596,14 +559,14 @@ function main() {
       "setpts=PTS-STARTPTS[outro_v]",
 
     /*
-     * OUTRO SILENT AUDIO
+     * OUTRO SILENCE
      */
-    `anullsrc=r=48000:cl=stereo,` +
+    "anullsrc=r=48000:cl=stereo," +
       `atrim=duration=${OUTRO_DURATION},` +
       "asetpts=PTS-STARTPTS[outro_a]",
 
     /*
-     * JOIN INTRO + MAIN + OUTRO
+     * CONCAT
      */
     "[intro_v][intro_a]" +
       "[main_v][main_a]" +
@@ -614,10 +577,6 @@ function main() {
   const ffmpegArguments = [
     "-y",
 
-    /*
-     * Presenter is looped because the generated narration
-     * can be longer than the original presenter clip.
-     */
     "-stream_loop",
     "-1",
     "-i",
@@ -672,7 +631,7 @@ function main() {
   ];
 
   console.log(
-    "[SHORTS] Rendering cover, presenter and subscribe ending..."
+    "[SHORTS] Rendering intro, presenter and subscribe ending..."
   );
 
   execFileSync(
