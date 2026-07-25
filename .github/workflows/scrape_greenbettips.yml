@@ -1,13 +1,14 @@
-name: Scrape Flashscore + Claudiu Pool + TalkFootball + PredictZ + Generate Tickets + WordPress (EN)
+name: GreenBetTips Daily Tickets + WordPress + YouTube Shorts
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "35 11 * * *" # 14:35 RO during daylight saving time
+    - cron: "35 11 * * *" # 14:35 Romania during daylight saving time
 
 jobs:
-  scrape:
+  scrape-build-publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 75
 
     env:
       DAY_OFFSET: "0"
@@ -26,10 +27,17 @@ jobs:
       PV_TARGET_ZI: "5.00"
       PV_ZI_TOL: "0.00"
 
+      SHORTS_OUTPUT_ROOT: "output"
+      SHORTS_PRESENTER_FILE: "assets/presenters/presenter-01.mp4"
+      SHORTS_TTS_VOICE: "en-US-GuyNeural"
+      SHORTS_TTS_RATE: "+5%"
+
+      YOUTUBE_PRIVACY_STATUS: "public"
+
     steps:
-      # ------------------
+      # ==================================================
       # SETUP
-      # ------------------
+      # ==================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -56,23 +64,45 @@ jobs:
             --no-audit \
             --prefer-offline
 
-      # ------------------
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Edge TTS
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install edge-tts
+          edge-tts --version
+
+      - name: Install FFmpeg and fonts
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            ffmpeg \
+            fonts-dejavu-core
+
+          ffmpeg -version
+          ffprobe -version
+
+      # ==================================================
       # 1) FLASHSCORE
-      # ------------------
+      # ==================================================
       - name: Scrape Flashscore fixtures
         timeout-minutes: 5
         run: node scrape_mobi.js
 
-      # ------------------
+      # ==================================================
       # 2) CLAUDIU
-      # ------------------
+      # ==================================================
       - name: Build Claudiu Hood pool
         timeout-minutes: 5
         run: node scrape_claudiu_pool.js
 
-      # ------------------
+      # ==================================================
       # 3) TALKFOOTBALL
-      # ------------------
+      # ==================================================
       - name: Scrape TalkFootball
         timeout-minutes: 5
         run: node scrapers/scrape_talkfootball.js
@@ -85,9 +115,9 @@ jobs:
         timeout-minutes: 5
         run: node parsers/parse_talkfootball_as_odds.js
 
-      # ------------------
+      # ==================================================
       # 4) PREDICTZ
-      # ------------------
+      # ==================================================
       - name: Scrape PredictZ
         timeout-minutes: 5
         run: node scrapers/scrape_predictz.js
@@ -100,22 +130,22 @@ jobs:
         timeout-minutes: 5
         run: node parsers/parse_predictz_as_odds.js
 
-      # ------------------
+      # ==================================================
       # 5) GENERATE TICKETS
-      # ------------------
+      # ==================================================
       - name: Generate tickets from master pool
         timeout-minutes: 5
         run: node generate_tickets_from_pool.js
 
-      # ------------------
+      # ==================================================
       # 6) WORDPRESS HTML
-      # ------------------
+      # ==================================================
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
-      # ------------------
-      # 7) RAW ARTIFACTS
-      # ------------------
+      # ==================================================
+      # 7) RAW + TICKET ARTIFACTS
+      # ==================================================
       - name: Upload raw artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -144,6 +174,7 @@ jobs:
             artifacts/talkfootball_matched.json
             artifacts/talkfootball_dropped.json
           if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload ticket artifacts
         if: always()
@@ -156,10 +187,11 @@ jobs:
             cota2.html
             biletul-zilei.html
           if-no-files-found: warn
+          retention-days: 7
 
-      # ------------------
+      # ==================================================
       # 8) WORDPRESS PUBLISHING
-      # ------------------
+      # ==================================================
       - name: Publish posts to WordPress
         if: success()
         env:
@@ -168,9 +200,9 @@ jobs:
           WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
         run: node publish_wp.js
 
-      # ------------------
-      # 9A) ODDS 2 SHORTS PAYLOAD
-      # ------------------
+      # ==================================================
+      # 9A) ODDS 2 PAYLOAD
+      # ==================================================
       - name: Generate Odds 2 Shorts payload
         if: success()
         env:
@@ -192,8 +224,6 @@ jobs:
             exit 1
           fi
 
-          echo "Odds 2 payload generated successfully."
-
           node -e "
             const fs = require('fs');
             const payload = JSON.parse(
@@ -203,14 +233,14 @@ jobs:
               )
             );
 
-            console.log('Status:', payload.status);
+            console.log('Odds 2 status:', payload.status);
             console.log('Ticket type:', payload.ticketType);
             console.log('Ticket label:', payload.ticketLabel);
           "
 
-      # ------------------
-      # 9B) TICKET OF THE DAY SHORTS PAYLOAD
-      # ------------------
+      # ==================================================
+      # 9B) TICKET OF THE DAY PAYLOAD
+      # ==================================================
       - name: Generate Ticket of the Day Shorts payload
         if: success()
         env:
@@ -232,8 +262,6 @@ jobs:
             exit 1
           fi
 
-          echo "Ticket of the Day payload generated successfully."
-
           node -e "
             const fs = require('fs');
             const payload = JSON.parse(
@@ -243,181 +271,38 @@ jobs:
               )
             );
 
-            console.log('Status:', payload.status);
+            console.log('Ticket of the Day status:', payload.status);
             console.log('Ticket type:', payload.ticketType);
             console.log('Ticket label:', payload.ticketLabel);
           "
 
-      # ------------------
-      # 9C) KEEP CURRENT ODDS 2 PIPELINE COMPATIBLE
-      # ------------------
-      - name: Prepare Odds 2 payload for existing video pipeline
+      # ==================================================
+      # 10) VERIFY CONTENT ENGINE FILES
+      # ==================================================
+      - name: Verify content engine files
         if: success()
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ ! -s output/bilet_cota2/shorts_payload.json ]; then
-            echo "Odds 2 Shorts payload is missing."
-            exit 1
-          fi
+          REQUIRED_FILES=(
+            "assets/presenters/presenter-01.mp4"
+            "shorts/build_all_shorts.js"
+            "shorts/render_short.js"
+            "publish/generate_manifest.js"
+            "publish/platforms/youtube.js"
+          )
 
-          STATUS=$(node -e "
-            const fs = require('fs');
-            const payload = JSON.parse(
-              fs.readFileSync(
-                'output/bilet_cota2/shorts_payload.json',
-                'utf8'
-              )
-            );
-            process.stdout.write(payload.status || '');
-          ")
+          for FILE in "${REQUIRED_FILES[@]}"; do
+            if [ ! -s "$FILE" ]; then
+              echo "Required file is missing or empty: $FILE"
+              exit 1
+            fi
 
-          if [ "$STATUS" = "skipped" ]; then
-            echo "Odds 2 ticket was skipped."
-            cp \
-              output/bilet_cota2/shorts_payload.json \
-              output/shorts_payload.json
-            exit 0
-          fi
+            echo "Found: $FILE"
+          done
 
-          if [ "$STATUS" != "ready" ]; then
-            echo "Unexpected Odds 2 payload status: $STATUS"
-            exit 1
-          fi
-
-          cp \
-            output/bilet_cota2/shorts_payload.json \
-            output/shorts_payload.json
-
-          cp \
-            output/bilet_cota2/voice_script.txt \
-            output/voice_script.txt
-
-          echo "Odds 2 payload copied to the existing pipeline paths."
-
-          ls -lh \
-            output/shorts_payload.json \
-            output/voice_script.txt
-
-      # ------------------
-      # 10) SET UP EDGE TTS
-      # ------------------
-      - name: Set up Python
-        if: success()
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Install Edge TTS
-        if: success()
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install edge-tts
-
-      # ------------------
-      # 11) GENERATE ODDS 2 VOICE + SUBTITLES
-      # ------------------
-      - name: Generate Shorts voice and subtitles
-        if: success()
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ ! -f output/shorts_payload.json ]; then
-            echo "output/shorts_payload.json does not exist."
-            exit 1
-          fi
-
-          STATUS=$(node -e "
-            const fs = require('fs');
-            const payload = JSON.parse(
-              fs.readFileSync('output/shorts_payload.json', 'utf8')
-            );
-            process.stdout.write(payload.status || '');
-          ")
-
-          if [ "$STATUS" = "skipped" ]; then
-            echo "Shorts generation was skipped because no suitable Odds 2 ticket was generated."
-            exit 0
-          fi
-
-          if [ "$STATUS" != "ready" ]; then
-            echo "Unexpected Shorts payload status: $STATUS"
-            exit 1
-          fi
-
-          if [ ! -s output/voice_script.txt ]; then
-            echo "output/voice_script.txt is missing or empty."
-            exit 1
-          fi
-
-          echo "Generating English Odds 2 voice and synchronized subtitles..."
-
-          edge-tts \
-            --voice "en-US-GuyNeural" \
-            --rate="+5%" \
-            --volume="+0%" \
-            --file output/voice_script.txt \
-            --write-media output/voice.mp3 \
-            --write-subtitles output/subs.srt
-
-          if [ ! -s output/voice.mp3 ]; then
-            echo "Voice generation failed: output/voice.mp3 is missing or empty."
-            exit 1
-          fi
-
-          if [ ! -s output/subs.srt ]; then
-            echo "Subtitle generation failed: output/subs.srt is missing or empty."
-            exit 1
-          fi
-
-          cp output/voice.mp3 output/bilet_cota2/voice.mp3
-          cp output/subs.srt output/bilet_cota2/subs.srt
-
-          echo "Odds 2 voice and subtitles generated successfully."
-
-          ls -lh \
-            output/shorts_payload.json \
-            output/voice_script.txt \
-            output/voice.mp3 \
-            output/subs.srt
-
-      # ------------------
-      # 12) INSTALL FFMPEG + FONTS
-      # ------------------
-      - name: Install FFmpeg and fonts
-        if: success()
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            ffmpeg \
-            fonts-dejavu-core
-
-          ffmpeg -version
-          ffprobe -version
-
-      # ------------------
-      # 13) VERIFY PRESENTER VIDEO
-      # ------------------
-      - name: Verify presenter video
-        if: success()
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ ! -f assets/presenters/presenter-01.mp4 ]; then
-            echo "Presenter video not found:"
-            echo "assets/presenters/presenter-01.mp4"
-            exit 1
-          fi
-
-          if [ ! -s assets/presenters/presenter-01.mp4 ]; then
-            echo "Presenter video exists but is empty."
-            exit 1
-          fi
-
-          echo "Presenter video found successfully."
+          echo "Presenter video details:"
 
           ffprobe \
             -v error \
@@ -426,198 +311,89 @@ jobs:
             -of default=noprint_wrappers=1 \
             assets/presenters/presenter-01.mp4
 
-      # ------------------
-      # 14) RENDER ODDS 2 YOUTUBE SHORT
-      # ------------------
-      - name: Render YouTube Short
+      # ==================================================
+      # 11) BUILD ALL AVAILABLE SHORTS
+      # ==================================================
+      - name: Build all available Shorts
         if: success()
-        env:
-          SHORTS_PAYLOAD_FILE: output/shorts_payload.json
-          SHORTS_PRESENTER_FILE: assets/presenters/presenter-01.mp4
-          SHORTS_AUDIO_FILE: output/voice.mp3
-          SHORTS_SUBTITLES_FILE: output/subs.srt
-          SHORTS_VIDEO_FILE: output/short.mp4
+        timeout-minutes: 35
         shell: bash
         run: |
           set -euo pipefail
 
-          STATUS=$(node -e "
-            const fs = require('fs');
-            const payload = JSON.parse(
-              fs.readFileSync('output/shorts_payload.json', 'utf8')
-            );
-            process.stdout.write(payload.status || '');
-          ")
+          node shorts/build_all_shorts.js
 
-          if [ "$STATUS" = "skipped" ]; then
-            echo "Video rendering skipped because no suitable Odds 2 ticket was generated."
-            exit 0
-          fi
-
-          node shorts/render_short.js
-
-          if [ ! -s output/short.mp4 ]; then
-            echo "Video rendering failed: output/short.mp4 is missing or empty."
+          if [ ! -s output/build_summary.json ]; then
+            echo "Build summary was not created."
             exit 1
           fi
 
-          cp output/short.mp4 output/bilet_cota2/short.mp4
+          echo "Shorts build summary:"
+          cat output/build_summary.json
 
-          echo "Checking generated YouTube Short..."
-
-          ffprobe \
-            -v error \
-            -show_entries stream=codec_name,width,height,r_frame_rate \
-            -show_entries format=duration,size \
-            -of default=noprint_wrappers=1 \
-            output/short.mp4
-
-      # ------------------
-      # 15) VALIDATE ODDS 2 SHORT FORMAT
-      # ------------------
-      - name: Validate YouTube Short
+      # ==================================================
+      # 12) VERIFY GENERATED VIDEOS
+      # ==================================================
+      - name: Verify generated Shorts
         if: success()
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ ! -f output/short.mp4 ]; then
-            echo "No Short was generated. Validation skipped."
-            exit 0
-          fi
+          for TICKET_TYPE in bilet_cota2 biletul_zilei; do
+            PAYLOAD="output/${TICKET_TYPE}/shorts_payload.json"
+            VIDEO="output/${TICKET_TYPE}/short.mp4"
+            MANIFEST="output/${TICKET_TYPE}/distribution_manifest.json"
 
-          WIDTH=$(ffprobe \
-            -v error \
-            -select_streams v:0 \
-            -show_entries stream=width \
-            -of csv=p=0 \
-            output/short.mp4)
+            if [ ! -s "$PAYLOAD" ]; then
+              echo "Missing payload: $PAYLOAD"
+              exit 1
+            fi
 
-          HEIGHT=$(ffprobe \
-            -v error \
-            -select_streams v:0 \
-            -show_entries stream=height \
-            -of csv=p=0 \
-            output/short.mp4)
+            STATUS=$(node -e "
+              const fs = require('fs');
+              const payload = JSON.parse(
+                fs.readFileSync(process.argv[1], 'utf8')
+              );
+              process.stdout.write(payload.status || '');
+            " "$PAYLOAD")
 
-          DURATION=$(ffprobe \
-            -v error \
-            -show_entries format=duration \
-            -of csv=p=0 \
-            output/short.mp4)
+            echo ""
+            echo "${TICKET_TYPE} status: ${STATUS}"
 
-          echo "Width: $WIDTH"
-          echo "Height: $HEIGHT"
-          echo "Duration: $DURATION seconds"
+            if [ "$STATUS" = "skipped" ]; then
+              echo "${TICKET_TYPE} was skipped because no suitable ticket exists."
+              continue
+            fi
 
-          if [ "$WIDTH" != "1080" ]; then
-            echo "Invalid width. Expected 1080."
-            exit 1
-          fi
+            if [ "$STATUS" != "ready" ]; then
+              echo "Unexpected payload status for ${TICKET_TYPE}: ${STATUS}"
+              exit 1
+            fi
 
-          if [ "$HEIGHT" != "1920" ]; then
-            echo "Invalid height. Expected 1920."
-            exit 1
-          fi
+            if [ ! -s "$VIDEO" ]; then
+              echo "Missing rendered video: $VIDEO"
+              exit 1
+            fi
 
-          awk -v duration="$DURATION" 'BEGIN {
-            if (duration > 60) {
-              print "Video is longer than 60 seconds.";
-              exit 1;
-            }
-          }'
+            if [ ! -s "$MANIFEST" ]; then
+              echo "Missing distribution manifest: $MANIFEST"
+              exit 1
+            fi
 
-          echo "YouTube Short validation passed."
+            echo "Video details for ${TICKET_TYPE}:"
 
-      # ------------------
-      # 16) GENERATE ODDS 2 DISTRIBUTION MANIFEST
-      # ------------------
-      - name: Generate distribution manifest
-        if: success()
-        env:
-          SHORTS_PAYLOAD_FILE: output/shorts_payload.json
-          SHORTS_VIDEO_FILE: output/short.mp4
-          DISTRIBUTION_MANIFEST_FILE: output/distribution_manifest.json
-          YOUTUBE_PRIVACY_STATUS: public
-        shell: bash
-        run: |
-          set -euo pipefail
+            ffprobe \
+              -v error \
+              -show_entries stream=codec_name,width,height,r_frame_rate \
+              -show_entries format=duration,size \
+              -of default=noprint_wrappers=1 \
+              "$VIDEO"
+          done
 
-          if [ ! -f output/shorts_payload.json ]; then
-            echo "Shorts payload does not exist."
-            exit 1
-          fi
-
-          STATUS=$(node -e "
-            const fs = require('fs');
-            const payload = JSON.parse(
-              fs.readFileSync('output/shorts_payload.json', 'utf8')
-            );
-            process.stdout.write(payload.status || '');
-          ")
-
-          if [ "$STATUS" = "skipped" ]; then
-            echo "Distribution manifest skipped because no suitable Odds 2 ticket was generated."
-            exit 0
-          fi
-
-          if [ "$STATUS" != "ready" ]; then
-            echo "Unexpected Shorts payload status: $STATUS"
-            exit 1
-          fi
-
-          if [ ! -s output/short.mp4 ]; then
-            echo "No rendered Short exists. Distribution manifest generation skipped."
-            exit 0
-          fi
-
-          if [ ! -f publish/generate_manifest.js ]; then
-            echo "Manifest generator not found:"
-            echo "publish/generate_manifest.js"
-            exit 1
-          fi
-
-          node publish/generate_manifest.js
-
-          if [ ! -s output/distribution_manifest.json ]; then
-            echo "Distribution manifest was not created or is empty."
-            exit 1
-          fi
-
-          cp \
-            output/distribution_manifest.json \
-            output/bilet_cota2/distribution_manifest.json
-
-          echo "Distribution manifest generated successfully."
-
-          node -e "
-            const fs = require('fs');
-            const manifest = JSON.parse(
-              fs.readFileSync(
-                'output/distribution_manifest.json',
-                'utf8'
-              )
-            );
-
-            console.log('Content ID:', manifest.content?.id);
-            console.log('Video:', manifest.media?.video);
-            console.log(
-              'YouTube enabled:',
-              manifest.platforms?.youtube?.enabled
-            );
-            console.log(
-              'YouTube privacy:',
-              manifest.platforms?.youtube?.privacyStatus
-            );
-            console.log(
-              'YouTube title:',
-              manifest.platforms?.youtube?.title
-            );
-          "
-
-      # ------------------
-      # YOUTUBE OAUTH TEST
-      # ------------------
+      # ==================================================
+      # 13) TEST YOUTUBE OAUTH
+      # ==================================================
       - name: Test YouTube OAuth credentials
         if: success()
         env:
@@ -627,6 +403,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          if [ -z "${YOUTUBE_CLIENT_ID:-}" ]; then
+            echo "Missing GitHub secret: YOUTUBE_CLIENT_ID"
+            exit 1
+          fi
+
+          if [ -z "${YOUTUBE_CLIENT_SECRET:-}" ]; then
+            echo "Missing GitHub secret: YOUTUBE_CLIENT_SECRET"
+            exit 1
+          fi
+
+          if [ -z "${YOUTUBE_REFRESH_TOKEN:-}" ]; then
+            echo "Missing GitHub secret: YOUTUBE_REFRESH_TOKEN"
+            exit 1
+          fi
 
           RESPONSE=$(curl -sS \
             -X POST \
@@ -657,151 +448,220 @@ jobs:
             );
           " "$RESPONSE"
 
-      # ------------------
-      # 17) VERIFY YOUTUBE PUBLISHER
-      # ------------------
-      - name: Verify YouTube publisher configuration
+      # ==================================================
+      # 14) PUBLISH ALL AVAILABLE SHORTS TO YOUTUBE
+      # ==================================================
+      - name: Publish all available Shorts to YouTube
         if: success()
-        shell: bash
+        timeout-minutes: 30
         env:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          if [ ! -s output/distribution_manifest.json ]; then
-            echo "No distribution manifest exists. YouTube publishing skipped."
-            exit 0
-          fi
-
-          if [ ! -f publish/platforms/youtube.js ]; then
-            echo "YouTube publisher was not found:"
-            echo "publish/platforms/youtube.js"
-            exit 1
-          fi
-
-          if [ -z "${YOUTUBE_CLIENT_ID:-}" ]; then
-            echo "Missing GitHub secret: YOUTUBE_CLIENT_ID"
-            exit 1
-          fi
-
-          if [ -z "${YOUTUBE_CLIENT_SECRET:-}" ]; then
-            echo "Missing GitHub secret: YOUTUBE_CLIENT_SECRET"
-            exit 1
-          fi
-
-          if [ -z "${YOUTUBE_REFRESH_TOKEN:-}" ]; then
-            echo "Missing GitHub secret: YOUTUBE_REFRESH_TOKEN"
-            exit 1
-          fi
-
-          echo "YouTube publisher and required credentials are configured."
-
-      # ------------------
-      # 18) PUBLISH ODDS 2 TO YOUTUBE
-      # ------------------
-      - name: Publish Short to YouTube
-        if: success()
-        timeout-minutes: 15
-        env:
-          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
-          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
-          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
-
-          DISTRIBUTION_MANIFEST_FILE: output/distribution_manifest.json
-          DISTRIBUTION_RESULTS_FILE: output/distribution_results.json
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ ! -s output/distribution_manifest.json ]; then
-            echo "Distribution manifest is missing. YouTube publishing skipped."
-            exit 0
-          fi
+          PUBLISHED_COUNT=0
+          SKIPPED_COUNT=0
 
-          if [ ! -s output/short.mp4 ]; then
-            echo "Rendered Short is missing. YouTube publishing skipped."
-            exit 0
-          fi
+          for TICKET_TYPE in bilet_cota2 biletul_zilei; do
+            PAYLOAD="output/${TICKET_TYPE}/shorts_payload.json"
+            VIDEO="output/${TICKET_TYPE}/short.mp4"
+            MANIFEST="output/${TICKET_TYPE}/distribution_manifest.json"
+            RESULTS="output/${TICKET_TYPE}/distribution_results.json"
 
-          echo "Uploading Odds 2 Short to YouTube as a public video..."
+            echo ""
+            echo "=========================================="
+            echo "Processing YouTube upload: ${TICKET_TYPE}"
+            echo "=========================================="
 
-          node publish/platforms/youtube.js
+            if [ ! -s "$PAYLOAD" ]; then
+              echo "Payload is missing for ${TICKET_TYPE}. Skipping."
+              SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+              continue
+            fi
 
-          if [ ! -s output/distribution_results.json ]; then
-            echo "YouTube upload result was not created."
-            exit 1
-          fi
+            STATUS=$(node -e "
+              const fs = require('fs');
+              const payload = JSON.parse(
+                fs.readFileSync(process.argv[1], 'utf8')
+              );
+              process.stdout.write(payload.status || '');
+            " "$PAYLOAD")
 
-          STATUS=$(node -e "
-            const fs = require('fs');
-            const result = JSON.parse(
-              fs.readFileSync(
-                'output/distribution_results.json',
-                'utf8'
-              )
-            );
-            process.stdout.write(result.status || '');
-          ")
+            if [ "$STATUS" = "skipped" ]; then
+              echo "${TICKET_TYPE} has no suitable ticket today. Upload skipped."
+              SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+              continue
+            fi
 
-          if [ "$STATUS" != "success" ]; then
-            echo "YouTube publishing did not return success."
-            cat output/distribution_results.json
-            exit 1
-          fi
+            if [ "$STATUS" != "ready" ]; then
+              echo "Unexpected payload status for ${TICKET_TYPE}: ${STATUS}"
+              exit 1
+            fi
 
-          cp \
-            output/distribution_results.json \
-            output/bilet_cota2/distribution_results.json
+            if [ ! -s "$VIDEO" ]; then
+              echo "Rendered video is missing: $VIDEO"
+              exit 1
+            fi
 
-          echo "YouTube upload completed successfully."
+            if [ ! -s "$MANIFEST" ]; then
+              echo "Distribution manifest is missing: $MANIFEST"
+              exit 1
+            fi
+
+            echo "Uploading ${TICKET_TYPE} to YouTube as PUBLIC..."
+
+            DISTRIBUTION_MANIFEST_FILE="$MANIFEST" \
+            DISTRIBUTION_RESULTS_FILE="$RESULTS" \
+            node publish/platforms/youtube.js
+
+            if [ ! -s "$RESULTS" ]; then
+              echo "YouTube results file was not created: $RESULTS"
+              exit 1
+            fi
+
+            RESULT_STATUS=$(node -e "
+              const fs = require('fs');
+              const result = JSON.parse(
+                fs.readFileSync(process.argv[1], 'utf8')
+              );
+              process.stdout.write(result.status || '');
+            " "$RESULTS")
+
+            if [ "$RESULT_STATUS" != "success" ]; then
+              echo "YouTube publishing failed for ${TICKET_TYPE}."
+              cat "$RESULTS"
+              exit 1
+            fi
+
+            node -e "
+              const fs = require('fs');
+              const result = JSON.parse(
+                fs.readFileSync(process.argv[1], 'utf8')
+              );
+
+              console.log(
+                'Video ID:',
+                result.youtube?.videoId
+              );
+
+              console.log(
+                'YouTube URL:',
+                result.youtube?.url
+              );
+
+              console.log(
+                'Privacy:',
+                result.youtube?.privacyStatus
+              );
+
+              console.log(
+                'Title:',
+                result.youtube?.title
+              );
+            " "$RESULTS"
+
+            PUBLISHED_COUNT=$((PUBLISHED_COUNT + 1))
+          done
+
+          echo ""
+          echo "=========================================="
+          echo "YOUTUBE PUBLISHING SUMMARY"
+          echo "=========================================="
+          echo "Published: ${PUBLISHED_COUNT}"
+          echo "Skipped: ${SKIPPED_COUNT}"
 
           node -e "
             const fs = require('fs');
-            const result = JSON.parse(
-              fs.readFileSync(
-                'output/distribution_results.json',
-                'utf8'
-              )
-            );
 
-            console.log(
-              'YouTube video ID:',
-              result.youtube?.videoId
-            );
+            const ticketTypes = [
+              'bilet_cota2',
+              'biletul_zilei'
+            ];
 
-            console.log(
-              'YouTube URL:',
-              result.youtube?.url
-            );
+            const results = [];
 
-            console.log(
-              'Privacy:',
-              result.youtube?.privacyStatus
-            );
-          "
+            for (const ticketType of ticketTypes) {
+              const payloadFile =
+                \`output/\${ticketType}/shorts_payload.json\`;
 
-      # ------------------
-      # 19) SHORTS + DISTRIBUTION ARTIFACT
-      # ------------------
-      - name: Upload Shorts artifact
+              const resultFile =
+                \`output/\${ticketType}/distribution_results.json\`;
+
+              let payload = null;
+              let distribution = null;
+
+              if (fs.existsSync(payloadFile)) {
+                payload = JSON.parse(
+                  fs.readFileSync(payloadFile, 'utf8')
+                );
+              }
+
+              if (fs.existsSync(resultFile)) {
+                distribution = JSON.parse(
+                  fs.readFileSync(resultFile, 'utf8')
+                );
+              }
+
+              results.push({
+                ticketType,
+                payloadStatus: payload?.status || 'missing',
+                reason: payload?.reason || null,
+                publishingStatus:
+                  distribution?.status || 'not_published',
+                youtube: distribution?.youtube || null
+              });
+            }
+
+            const summary = {
+              status: 'completed',
+              generatedAt: new Date().toISOString(),
+              publishedCount: Number(process.argv[1]),
+              skippedCount: Number(process.argv[2]),
+              results
+            };
+
+            fs.writeFileSync(
+              'output/publishing_summary.json',
+              JSON.stringify(summary, null, 2),
+              'utf8'
+            );
+          " "$PUBLISHED_COUNT" "$SKIPPED_COUNT"
+
+          cat output/publishing_summary.json
+
+      # ==================================================
+      # 15) UPLOAD FINAL ARTIFACT
+      # ==================================================
+      - name: Upload Shorts and publishing artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: shorts-output
+          name: greenbettips-shorts-output
           path: |
             published_posts.json
 
-            output/bilet_cota2/
-            output/biletul_zilei/
+            output/build_summary.json
+            output/publishing_summary.json
 
-            output/shorts_payload.json
-            output/voice_script.txt
-            output/voice.mp3
-            output/subs.srt
-            output/short.mp4
-            output/distribution_manifest.json
-            output/distribution_results.json
-            output/render_text/
+            output/bilet_cota2/shorts_payload.json
+            output/bilet_cota2/voice_script.txt
+            output/bilet_cota2/voice.mp3
+            output/bilet_cota2/subs.srt
+            output/bilet_cota2/short.mp4
+            output/bilet_cota2/distribution_manifest.json
+            output/bilet_cota2/distribution_results.json
+            output/bilet_cota2/render_text/
+
+            output/biletul_zilei/shorts_payload.json
+            output/biletul_zilei/voice_script.txt
+            output/biletul_zilei/voice.mp3
+            output/biletul_zilei/subs.srt
+            output/biletul_zilei/short.mp4
+            output/biletul_zilei/distribution_manifest.json
+            output/biletul_zilei/distribution_results.json
+            output/biletul_zilei/render_text/
           if-no-files-found: warn
+          retention-days: 7
