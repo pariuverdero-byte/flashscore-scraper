@@ -85,7 +85,7 @@ const WIN = "win";
 const LOSS = "loss";
 
 /* =========================================================
- * VALIDATE CONFIGURATION
+ * CONFIG VALIDATION
  * =========================================================
  */
 
@@ -106,15 +106,13 @@ function validateConfiguration() {
 
   if (missing.length > 0) {
     throw new Error(
-      `Missing required environment variables: ${missing.join(
-        ", "
-      )}`
+      `Missing required environment variables: ${missing.join(", ")}`
     );
   }
 }
 
 /* =========================================================
- * AUTHENTICATION
+ * AUTH
  * =========================================================
  */
 
@@ -128,7 +126,7 @@ const COMMON_HEADERS = {
   Authorization: auth,
   Accept: "application/json",
   "User-Agent":
-    "PariuVerde-WordPress-Verifier/1.0",
+    "PariuVerde-WordPress-Verifier/1.1",
   "Cache-Control": "no-cache",
   Pragma: "no-cache"
 };
@@ -163,23 +161,19 @@ function truncate(value, maxLength = 300) {
     return text;
   }
 
-  return `${text.slice(
-    0,
-    maxLength - 3
-  )}...`;
+  return `${text.slice(0, maxLength - 3)}...`;
 }
 
 function isProbablyHtml(text) {
   const value = String(text || "")
-    .trim()
+    .trimStart()
     .toLowerCase();
 
   return (
     value.startsWith("<!doctype html") ||
     value.startsWith("<html") ||
-    value.includes("<html") ||
-    value.includes("<head") ||
-    value.includes("<body")
+    value.startsWith("<head") ||
+    value.startsWith("<body")
   );
 }
 
@@ -190,14 +184,13 @@ function isCaptchaHtml(text) {
   return (
     value.includes("/.well-known/sgcaptcha/") ||
     value.includes("sgcaptcha") ||
-    value.includes("captcha") ||
-    value.includes("challenge-platform")
+    value.includes("challenge-platform") ||
+    value.includes("cf-chl-") ||
+    value.includes("captcha")
   );
 }
 
-function createAbortController(
-  timeoutMilliseconds
-) {
+function createAbortController(timeoutMilliseconds) {
   const controller =
     new AbortController();
 
@@ -214,7 +207,7 @@ function createAbortController(
 }
 
 /* =========================================================
- * WORDPRESS RESPONSE ERROR
+ * CUSTOM ERROR
  * =========================================================
  */
 
@@ -271,9 +264,7 @@ async function wordpressRequest(
     try {
       console.log(
         `[WP] ${method} ${url} ` +
-          `(attempt ${attempt + 1}/${
-            retries + 1
-          })`
+        `(attempt ${attempt + 1}/${retries + 1})`
       );
 
       const response =
@@ -302,43 +293,13 @@ async function wordpressRequest(
       const responseText =
         await response.text();
 
-      const captcha =
-        isCaptchaHtml(
-          responseText
-        );
-
-      if (
-        captcha ||
-        isProbablyHtml(
-          responseText
-        )
-      ) {
-        throw new WordPressApiError(
-          captcha
-            ? "WordPress REST API was intercepted by SG Captcha or another security layer."
-            : "WordPress REST API returned HTML instead of JSON.",
-          {
-            status:
-              response.status,
-
-            url,
-
-            captcha,
-
-            responseText
-          }
-        );
-      }
-
       if (!response.ok) {
         throw new WordPressApiError(
           `WordPress REST request failed with HTTP ${response.status}.`,
           {
             status:
               response.status,
-
             url,
-
             responseText
           }
         );
@@ -348,19 +309,56 @@ async function wordpressRequest(
         return null;
       }
 
+      /*
+       * First try parsing JSON.
+       * WordPress JSON can legitimately contain HTML strings
+       * inside content.rendered or content.raw.
+       */
       try {
         return JSON.parse(
           responseText
         );
-      } catch (error) {
+      } catch (jsonError) {
+        const captcha =
+          isCaptchaHtml(
+            responseText
+          );
+
+        if (captcha) {
+          throw new WordPressApiError(
+            "WordPress REST API was intercepted by SG Captcha or another security layer.",
+            {
+              status:
+                response.status,
+              url,
+              captcha: true,
+              responseText
+            }
+          );
+        }
+
+        if (
+          isProbablyHtml(
+            responseText
+          )
+        ) {
+          throw new WordPressApiError(
+            "WordPress REST API returned an HTML page instead of JSON.",
+            {
+              status:
+                response.status,
+              url,
+              responseText
+            }
+          );
+        }
+
         throw new WordPressApiError(
-          `WordPress returned invalid JSON: ${error.message}`,
+          `WordPress returned invalid JSON: ${jsonError.message}`,
           {
             status:
               response.status,
-
             url,
-
             responseText
           }
         );
@@ -709,7 +707,7 @@ async function fetchFlashscore(
             "text/html,application/xhtml+xml",
 
           "User-Agent":
-            "Mozilla/5.0 (compatible; PariuVerdeVerifier/1.0)"
+            "Mozilla/5.0 (compatible; PariuVerdeVerifier/1.1)"
         }
       });
 
@@ -1026,12 +1024,9 @@ async function processPost(
       postId,
       status:
         "no_changes",
-
       changed:
         false,
-
       checked,
-
       evaluated
     };
   }
@@ -1068,12 +1063,9 @@ async function processPost(
       postId,
       status:
         "update_failed",
-
       changed:
         false,
-
       checked,
-
       evaluated
     };
   }
@@ -1172,9 +1164,7 @@ async function main() {
       return {
         status:
           "wordpress_blocked",
-
         captcha,
-
         processed:
           0
       };
