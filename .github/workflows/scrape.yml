@@ -44,7 +44,6 @@ jobs:
       # CONTENT ENGINE
       # ==================================================
       SHORTS_OUTPUT_ROOT: "output"
-
       SHORTS_PRESENTER_FILE: "assets/presenters/ro_presenter_01.mp4"
 
       SHORTS_TTS_VOICE: "ro-RO-EmilNeural"
@@ -100,13 +99,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install edge-tts
-
           edge-tts --version
 
       - name: Install FFmpeg and fonts
         run: |
           sudo apt-get update
-
           sudo apt-get install -y \
             ffmpeg \
             fonts-dejavu-core
@@ -227,6 +224,46 @@ jobs:
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
         run: node publish_wp.js
+
+      # ==================================================
+      # 8B) VERIFY PREVIOUS WORDPRESS TICKETS
+      # ==================================================
+      - name: Verify tickets on pariuverde.ro
+        if: success()
+        continue-on-error: true
+        timeout-minutes: 8
+        env:
+          LANG: "ro"
+
+          WP_BASE: "https://pariuverde.ro"
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+
+          RECHECK_ONCE: "1"
+          RECHECK_LAST_N: "15"
+          MAX_ROWS_PER_POST: "10"
+
+          WP_TIMEOUT_MS: "15000"
+          WP_RETRIES: "2"
+          WP_RETRY_DELAY_MS: "3000"
+
+          FS_TIMEOUT_MS: "8000"
+
+          # If SiteGround/SG Captcha blocks /wp-json/,
+          # report the issue but continue the main workflow.
+          VERIFY_NON_BLOCKING: "true"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -s verify_and_update_wp.js ]; then
+            echo "verify_and_update_wp.js is missing or empty."
+            exit 1
+          fi
+
+          echo "Starting WordPress ticket verification..."
+          node verify_and_update_wp.js
+          echo "WordPress verification step completed."
 
       # ==================================================
       # 9A) GENERATE BILET COTA 2 PAYLOAD
@@ -641,6 +678,11 @@ jobs:
               );
 
               console.log(
+                'Canal:',
+                result.youtube?.channelTitle
+              );
+
+              console.log(
                 'Vizibilitate:',
                 result.youtube?.privacyStatus
               );
@@ -681,9 +723,7 @@ jobs:
               let payload = null;
               let distribution = null;
 
-              if (
-                fs.existsSync(payloadFile)
-              ) {
+              if (fs.existsSync(payloadFile)) {
                 payload = JSON.parse(
                   fs.readFileSync(
                     payloadFile,
@@ -692,9 +732,7 @@ jobs:
                 );
               }
 
-              if (
-                fs.existsSync(resultFile)
-              ) {
+              if (fs.existsSync(resultFile)) {
                 distribution = JSON.parse(
                   fs.readFileSync(
                     resultFile,
