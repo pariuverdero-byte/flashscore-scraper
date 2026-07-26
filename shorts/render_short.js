@@ -32,13 +32,53 @@ const INTRO_DURATION = 3;
 const OUTRO_DURATION = 3;
 const MAX_TOTAL_DURATION = 60;
 
+/*
+ * Random visual variation settings.
+ *
+ * A different combination is selected on every render:
+ * - presenter start point;
+ * - presenter horizontal position;
+ * - presenter zoom;
+ * - horizontal flip;
+ * - background.
+ */
+const BACKGROUND_OPTIONS = [
+  "0x07140D",
+  "0x07170F",
+  "0x0B1512",
+  "0x0B171A",
+  "0x111712",
+  "0x0C1218"
+];
+
+const ZOOM_OPTIONS = [
+  1.025,
+  1.04,
+  1.055,
+  1.07
+];
+
+const HORIZONTAL_POSITION_OPTIONS = [
+  -42,
+  -25,
+  -10,
+  0,
+  12,
+  28,
+  44
+];
+
 function requireFile(filePath) {
   if (!fs.existsSync(filePath)) {
-    throw new Error(`Required file does not exist: ${filePath}`);
+    throw new Error(
+      `Required file does not exist: ${filePath}`
+    );
   }
 
   if (fs.statSync(filePath).size === 0) {
-    throw new Error(`Required file is empty: ${filePath}`);
+    throw new Error(
+      `Required file is empty: ${filePath}`
+    );
   }
 }
 
@@ -56,7 +96,9 @@ function shorten(value, maxLength) {
     return text;
   }
 
-  return `${text.slice(0, maxLength - 3).trim()}...`;
+  return `${text
+    .slice(0, maxLength - 3)
+    .trim()}...`;
 }
 
 function escapeFilterPath(filePath) {
@@ -68,7 +110,8 @@ function escapeFilterPath(filePath) {
 }
 
 function writeTextFile(filename, value) {
-  const filePath = path.join(TEMP_DIR, filename);
+  const filePath =
+    path.join(TEMP_DIR, filename);
 
   fs.writeFileSync(
     filePath,
@@ -79,7 +122,7 @@ function writeTextFile(filename, value) {
   return filePath;
 }
 
-function getAudioDuration(filePath) {
+function getMediaDuration(filePath) {
   const output = execFileSync(
     "ffprobe",
     [
@@ -98,20 +141,28 @@ function getAudioDuration(filePath) {
 
   const duration = Number(output);
 
-  if (!Number.isFinite(duration) || duration <= 0) {
+  if (
+    !Number.isFinite(duration) ||
+    duration <= 0
+  ) {
     throw new Error(
-      `Could not determine audio duration: ${output}`
+      `Could not determine media duration: ${output}`
     );
   }
 
   return duration;
 }
 
-function formatDate(dateValue) {
+function formatDate(
+  dateValue,
+  language = "en"
+) {
   const value = cleanText(dateValue);
 
   if (!value) {
-    return "TODAY";
+    return language === "ro"
+      ? "ASTĂZI"
+      : "TODAY";
   }
 
   const match = value.match(
@@ -130,26 +181,130 @@ function formatDate(dateValue) {
     Number(day)
   );
 
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric"
-  })
+  return new Intl.DateTimeFormat(
+    language === "ro"
+      ? "ro-RO"
+      : "en-US",
+    {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      year: "numeric"
+    }
+  )
     .format(date)
     .toUpperCase();
 }
 
-function createSelectionText(selection) {
+function createSelectionText(
+  selection,
+  language
+) {
+  const separator =
+    language === "ro"
+      ? " - "
+      : " vs ";
+
   const teams =
     selection.home && selection.away
-      ? `${selection.home} vs ${selection.away}`
+      ? `${selection.home}${separator}${selection.away}`
       : selection.teams;
 
   return shorten(
     `${teams} | ${selection.market} | ${selection.odds}`,
-    72
+    78
   );
+}
+
+function randomItem(items) {
+  return items[
+    Math.floor(
+      Math.random() * items.length
+    )
+  ];
+}
+
+function randomBoolean(probability = 0.5) {
+  return Math.random() < probability;
+}
+
+function randomNumber(
+  minimum,
+  maximum,
+  decimals = 2
+) {
+  const value =
+    minimum +
+    Math.random() *
+      (maximum - minimum);
+
+  return Number(
+    value.toFixed(decimals)
+  );
+}
+
+function getTicketLayout(
+  ticketType,
+  selectionCount
+) {
+  /*
+   * Ticket of the Day generally has 3–4 selections,
+   * so it receives a taller card and smaller text.
+   *
+   * Odds 2 generally has 2–3 selections and receives
+   * a more compact card.
+   */
+
+  if (
+    ticketType === "biletul_zilei" ||
+    selectionCount === 4
+  ) {
+    return {
+      cardX: 35,
+      cardY: 35,
+      cardWidth: 1010,
+      cardHeight: 435,
+
+      headlineY: 63,
+      headlineFontSize: 39,
+
+      oddsY: 120,
+      oddsFontSize: 33,
+
+      selectionFontSize: 22,
+      selectionY: [
+        190,
+        245,
+        300,
+        355
+      ],
+
+      selectionMaxLength: 82
+    };
+  }
+
+  return {
+    cardX: 45,
+    cardY: 40,
+    cardWidth: 990,
+    cardHeight: 365,
+
+    headlineY: 70,
+    headlineFontSize: 42,
+
+    oddsY: 130,
+    oddsFontSize: 36,
+
+    selectionFontSize: 25,
+    selectionY: [
+      205,
+      260,
+      315,
+      370
+    ],
+
+    selectionMaxLength: 72
+  };
 }
 
 function main() {
@@ -160,13 +315,20 @@ function main() {
   requireFile(FONT_BOLD);
 
   const payload = JSON.parse(
-    fs.readFileSync(PAYLOAD_FILE, "utf8")
+    fs.readFileSync(
+      PAYLOAD_FILE,
+      "utf8"
+    )
   );
 
   if (payload.status === "skipped") {
     console.log(
-      `[SHORTS] Video rendering skipped: ${payload.reason}`
+      `[SHORTS] Video rendering skipped: ${
+        payload.reason ||
+        "No suitable ticket"
+      }`
     );
+
     return;
   }
 
@@ -176,9 +338,24 @@ function main() {
     );
   }
 
-  const selections = Array.isArray(payload.selections)
-    ? payload.selections.slice(0, 3)
-    : [];
+  const language =
+    cleanText(
+      payload.language ||
+      process.env.LANG ||
+      "en"
+    ).toLowerCase();
+
+  const ticketType =
+    cleanText(payload.ticketType);
+
+  /*
+   * Ticket of the Day can contain four events.
+   * All four are now displayed.
+   */
+  const selections =
+    Array.isArray(payload.selections)
+      ? payload.selections.slice(0, 4)
+      : [];
 
   if (selections.length === 0) {
     throw new Error(
@@ -188,28 +365,28 @@ function main() {
 
   fs.mkdirSync(
     path.dirname(OUTPUT_FILE),
-    { recursive: true }
+    {
+      recursive: true
+    }
   );
 
   fs.mkdirSync(
     TEMP_DIR,
-    { recursive: true }
+    {
+      recursive: true
+    }
   );
 
-  const audioDuration = getAudioDuration(AUDIO_FILE);
+  const audioDuration =
+    getMediaDuration(AUDIO_FILE);
+
+  const presenterDuration =
+    getMediaDuration(PRESENTER_FILE);
 
   const finalDuration =
     INTRO_DURATION +
     audioDuration +
     OUTRO_DURATION;
-
-  console.log(
-    `[SHORTS] Audio duration: ${audioDuration.toFixed(2)} seconds`
-  );
-
-  console.log(
-    `[SHORTS] Estimated final duration: ${finalDuration.toFixed(2)} seconds`
-  );
 
   if (finalDuration > MAX_TOTAL_DURATION) {
     throw new Error(
@@ -219,146 +396,386 @@ function main() {
     );
   }
 
+  /*
+   * Random presenter variation.
+   *
+   * Start offset remains inside the original presenter clip.
+   * The clip is looped afterward by FFmpeg.
+   */
+  const maximumStartOffset =
+    Math.max(
+      0,
+      Math.min(
+        presenterDuration - 0.35,
+        2.6
+      )
+    );
+
+  const presenterStartOffset =
+    randomNumber(
+      0,
+      maximumStartOffset,
+      2
+    );
+
+  const presenterZoom =
+    randomItem(ZOOM_OPTIONS);
+
+  const presenterXOffset =
+    randomItem(
+      HORIZONTAL_POSITION_OPTIONS
+    );
+
+  /*
+   * Approximately 45% of videos are mirrored.
+   */
+  const presenterFlipped =
+    randomBoolean(0.45);
+
+  const mainBackground =
+    randomItem(BACKGROUND_OPTIONS);
+
+  let introBackground =
+    randomItem(BACKGROUND_OPTIONS);
+
+  let outroBackground =
+    randomItem(BACKGROUND_OPTIONS);
+
+  /*
+   * Avoid having all three scenes use exactly
+   * the same background when alternatives exist.
+   */
+  if (
+    introBackground === mainBackground
+  ) {
+    introBackground =
+      randomItem(BACKGROUND_OPTIONS);
+  }
+
+  if (
+    outroBackground === mainBackground
+  ) {
+    outroBackground =
+      randomItem(BACKGROUND_OPTIONS);
+  }
+
+  const layout =
+    getTicketLayout(
+      ticketType,
+      selections.length
+    );
+
+  console.log(
+    `[SHORTS] Audio duration: ${audioDuration.toFixed(
+      2
+    )} seconds`
+  );
+
+  console.log(
+    `[SHORTS] Presenter duration: ${presenterDuration.toFixed(
+      2
+    )} seconds`
+  );
+
+  console.log(
+    `[SHORTS] Presenter start offset: ${presenterStartOffset.toFixed(
+      2
+    )} seconds`
+  );
+
+  console.log(
+    `[SHORTS] Presenter zoom: ${presenterZoom}`
+  );
+
+  console.log(
+    `[SHORTS] Presenter horizontal offset: ${presenterXOffset}px`
+  );
+
+  console.log(
+    `[SHORTS] Presenter mirrored: ${presenterFlipped}`
+  );
+
+  console.log(
+    `[SHORTS] Main background: ${mainBackground}`
+  );
+
+  console.log(
+    `[SHORTS] Ticket layout: ${ticketType || "default"}`
+  );
+
+  console.log(
+    `[SHORTS] Displayed selections: ${selections.length}`
+  );
+
   const ticketTitle =
     payload.ticketLabel ||
     payload.visuals?.headline ||
-    "ODDS 2 TICKET";
+    (
+      language === "ro"
+        ? "BILET COTA 2"
+        : "ODDS 2 TICKET"
+    );
 
   const totalOdds =
     payload.visuals?.totalOdds ||
     payload.totalOdds ||
     "-";
 
-  const formattedDate = formatDate(payload.date);
+  const brandDisplay =
+    payload.brand?.displayName ||
+    payload.visuals?.brand ||
+    (
+      language === "ro"
+        ? "PARIUVERDE"
+        : "GREENBETTIPS"
+    );
 
-  const introBrandFile = writeTextFile(
-    "intro_brand.txt",
-    "GREENBETTIPS"
-  );
+  const websiteDisplay =
+    payload.brand?.websiteDisplay ||
+    payload.visuals?.website ||
+    payload.visuals?.callToAction ||
+    (
+      language === "ro"
+        ? "WWW.PARIUVERDE.RO"
+        : "WWW.GREENBETTIPS.COM"
+    );
 
-  const introTitleFile = writeTextFile(
-    "intro_title.txt",
-    `TODAY'S ${ticketTitle}`
-  );
+  const combinedOddsLabel =
+    payload.visuals?.combinedOddsLabel ||
+    (
+      language === "ro"
+        ? "COTA TOTALĂ"
+        : "COMBINED ODDS"
+    );
 
-  const introDateFile = writeTextFile(
-    "intro_date.txt",
-    formattedDate
-  );
+  const outroTop =
+    payload.visuals?.outroTop ||
+    (
+      language === "ro"
+        ? "ȚI-AU PLĂCUT PONTURILE?"
+        : "ENJOYED TODAY'S PICKS?"
+    );
 
-  const introOddsLabelFile = writeTextFile(
-    "intro_odds_label.txt",
-    "COMBINED ODDS"
-  );
+  const subscribeText =
+    payload.visuals?.subscribe ||
+    (
+      language === "ro"
+        ? "ABONEAZĂ-TE"
+        : "SUBSCRIBE"
+    );
 
-  const introOddsFile = writeTextFile(
-    "intro_odds.txt",
-    totalOdds
-  );
+  const outroMessage =
+    payload.visuals?.outroMessage ||
+    (
+      language === "ro"
+        ? "PENTRU PONTURI ZILNICE"
+        : "FOR DAILY FOOTBALL PREDICTIONS"
+    );
 
-  const mainHeadlineFile = writeTextFile(
-    "main_headline.txt",
-    payload.visuals?.headline ||
-      ticketTitle ||
-      "TODAY'S FOOTBALL PICKS"
-  );
+  const introFooter =
+    language === "ro"
+      ? "PONTURI ZILNICE LA FOTBAL"
+      : "DAILY FOOTBALL PREDICTIONS";
 
-  const mainTotalOddsFile = writeTextFile(
-    "main_total_odds.txt",
-    `COMBINED ODDS: ${totalOdds}`
-  );
+  const formattedDate =
+    formatDate(
+      payload.date,
+      language
+    );
 
-  const selection1File = writeTextFile(
-    "selection_1.txt",
-    createSelectionText(selections[0])
-  );
+  const introTitle =
+    language === "ro"
+      ? ticketTitle
+      : `TODAY'S ${ticketTitle}`;
 
-  const selection2File = writeTextFile(
-    "selection_2.txt",
-    selections[1]
-      ? createSelectionText(selections[1])
-      : ""
-  );
+  const mainOddsText =
+    `${combinedOddsLabel}: ${totalOdds}`;
 
-  const selection3File = writeTextFile(
-    "selection_3.txt",
-    selections[2]
-      ? createSelectionText(selections[2])
-      : ""
-  );
+  const introBrandFile =
+    writeTextFile(
+      "intro_brand.txt",
+      brandDisplay
+    );
 
-  const mainCtaFile = writeTextFile(
-    "main_cta.txt",
-    "WWW.GREENBETTIPS.COM"
-  );
+  const introTitleFile =
+    writeTextFile(
+      "intro_title.txt",
+      introTitle
+    );
 
-  const outroTopFile = writeTextFile(
-    "outro_top.txt",
-    "ENJOYED TODAY'S PICKS?"
-  );
+  const introDateFile =
+    writeTextFile(
+      "intro_date.txt",
+      formattedDate
+    );
 
-  const outroSubscribeFile = writeTextFile(
-    "outro_subscribe.txt",
-    "SUBSCRIBE"
-  );
+  const introOddsLabelFile =
+    writeTextFile(
+      "intro_odds_label.txt",
+      combinedOddsLabel
+    );
 
-  const outroMessageFile = writeTextFile(
-    "outro_message.txt",
-    "FOR DAILY FOOTBALL PREDICTIONS"
-  );
+  const introOddsFile =
+    writeTextFile(
+      "intro_odds.txt",
+      totalOdds
+    );
 
-  const outroWebsiteFile = writeTextFile(
-    "outro_website.txt",
-    "WWW.GREENBETTIPS.COM"
-  );
+  const introFooterFile =
+    writeTextFile(
+      "intro_footer.txt",
+      introFooter
+    );
+
+  const mainHeadlineFile =
+    writeTextFile(
+      "main_headline.txt",
+      payload.visuals?.headline ||
+      ticketTitle
+    );
+
+  const mainTotalOddsFile =
+    writeTextFile(
+      "main_total_odds.txt",
+      mainOddsText
+    );
+
+  const selectionFiles = [];
+
+  for (
+    let index = 0;
+    index < 4;
+    index += 1
+  ) {
+    selectionFiles.push(
+      writeTextFile(
+        `selection_${index + 1}.txt`,
+        selections[index]
+          ? shorten(
+              createSelectionText(
+                selections[index],
+                language
+              ),
+              layout.selectionMaxLength
+            )
+          : ""
+      )
+    );
+  }
+
+  const mainCtaFile =
+    writeTextFile(
+      "main_cta.txt",
+      websiteDisplay
+    );
+
+  const outroTopFile =
+    writeTextFile(
+      "outro_top.txt",
+      outroTop
+    );
+
+  const outroSubscribeFile =
+    writeTextFile(
+      "outro_subscribe.txt",
+      subscribeText
+    );
+
+  const outroMessageFile =
+    writeTextFile(
+      "outro_message.txt",
+      outroMessage
+    );
+
+  const outroWebsiteFile =
+    writeTextFile(
+      "outro_website.txt",
+      websiteDisplay
+    );
+
+  const outroBrandFile =
+    writeTextFile(
+      "outro_brand.txt",
+      brandDisplay
+    );
 
   const boldFont =
     escapeFilterPath(FONT_BOLD);
 
   const introBrandPath =
-    escapeFilterPath(introBrandFile);
+    escapeFilterPath(
+      introBrandFile
+    );
 
   const introTitlePath =
-    escapeFilterPath(introTitleFile);
+    escapeFilterPath(
+      introTitleFile
+    );
 
   const introDatePath =
-    escapeFilterPath(introDateFile);
+    escapeFilterPath(
+      introDateFile
+    );
 
   const introOddsLabelPath =
-    escapeFilterPath(introOddsLabelFile);
+    escapeFilterPath(
+      introOddsLabelFile
+    );
 
   const introOddsPath =
-    escapeFilterPath(introOddsFile);
+    escapeFilterPath(
+      introOddsFile
+    );
+
+  const introFooterPath =
+    escapeFilterPath(
+      introFooterFile
+    );
 
   const mainHeadlinePath =
-    escapeFilterPath(mainHeadlineFile);
+    escapeFilterPath(
+      mainHeadlineFile
+    );
 
   const mainTotalOddsPath =
-    escapeFilterPath(mainTotalOddsFile);
+    escapeFilterPath(
+      mainTotalOddsFile
+    );
 
-  const selection1Path =
-    escapeFilterPath(selection1File);
-
-  const selection2Path =
-    escapeFilterPath(selection2File);
-
-  const selection3Path =
-    escapeFilterPath(selection3File);
+  const selectionPaths =
+    selectionFiles.map(
+      escapeFilterPath
+    );
 
   const mainCtaPath =
-    escapeFilterPath(mainCtaFile);
+    escapeFilterPath(
+      mainCtaFile
+    );
 
   const outroTopPath =
-    escapeFilterPath(outroTopFile);
+    escapeFilterPath(
+      outroTopFile
+    );
 
   const outroSubscribePath =
-    escapeFilterPath(outroSubscribeFile);
+    escapeFilterPath(
+      outroSubscribeFile
+    );
 
   const outroMessagePath =
-    escapeFilterPath(outroMessageFile);
+    escapeFilterPath(
+      outroMessageFile
+    );
 
   const outroWebsitePath =
-    escapeFilterPath(outroWebsiteFile);
+    escapeFilterPath(
+      outroWebsiteFile
+    );
+
+  const outroBrandPath =
+    escapeFilterPath(
+      outroBrandFile
+    );
 
   const introFadeOutStart =
     INTRO_DURATION - 0.35;
@@ -366,11 +783,42 @@ function main() {
   const outroFadeOutStart =
     OUTRO_DURATION - 0.35;
 
+  const presenterWidth =
+    Math.round(
+      1080 * presenterZoom
+    );
+
+  const presenterHeight =
+    Math.round(
+      1920 * presenterZoom
+    );
+
+  const horizontalFlipFilter =
+    presenterFlipped
+      ? ",hflip"
+      : "";
+
+  const selectionDrawFilters =
+    selectionPaths
+      .map(
+        (
+          selectionPath,
+          index
+        ) =>
+          `drawtext=fontfile='${boldFont}':` +
+          `textfile='${selectionPath}':` +
+          `fontcolor=white:` +
+          `fontsize=${layout.selectionFontSize}:` +
+          `x=(w-text_w)/2:` +
+          `y=${layout.selectionY[index]}`
+      )
+      .join(",");
+
   const filter = [
     /*
      * INTRO
      */
-    `color=c=0x07140D:s=1080x1920:r=30:d=${INTRO_DURATION}[intro_bg]`,
+    `color=c=${introBackground}:s=1080x1920:r=30:d=${INTRO_DURATION}[intro_bg]`,
 
     "[intro_bg]" +
       "drawbox=x=0:y=0:w=1080:h=18:" +
@@ -411,7 +859,7 @@ function main() {
       "x=(w-text_w)/2:y=920," +
 
       `drawtext=fontfile='${boldFont}':` +
-      "text='DAILY FOOTBALL PREDICTIONS':" +
+      `textfile='${introFooterPath}':` +
       "fontcolor=white@0.80:fontsize=32:" +
       "x=(w-text_w)/2:y=1550," +
 
@@ -422,7 +870,7 @@ function main() {
       "setpts=PTS-STARTPTS[intro_v]",
 
     /*
-     * INTRO SILENCE
+     * INTRO SILENT AUDIO
      */
     "anullsrc=r=48000:cl=stereo," +
       `atrim=duration=${INTRO_DURATION},` +
@@ -430,6 +878,12 @@ function main() {
 
     /*
      * PRESENTER
+     *
+     * The presenter is randomly:
+     * - offset in time;
+     * - zoomed;
+     * - shifted left or right;
+     * - mirrored.
      */
     "[0:v]" +
       "scale=1080:1920:" +
@@ -439,53 +893,58 @@ function main() {
       "color=0x00FF00," +
       "fps=30," +
       "chromakey=0x00FF00:0.18:0.08," +
-      "format=rgba[person]",
+      "format=rgba," +
+      `scale=${presenterWidth}:${presenterHeight}` +
+      horizontalFlipFilter +
+      "[person]",
 
     /*
-     * MAIN BACKGROUND
+     * RANDOM MAIN BACKGROUND
      */
-    `color=c=0x07140D:s=1080x1920:r=30:d=${audioDuration.toFixed(
+    `color=c=${mainBackground}:s=1080x1920:r=30:d=${audioDuration.toFixed(
       3
     )}[main_bg]`,
 
     /*
-     * MAIN VIDEO
+     * RANDOMLY POSITIONED PRESENTER
      */
     "[main_bg][person]" +
-      "overlay=(W-w)/2:(H-h)/2:" +
+      `overlay=(W-w)/2+${presenterXOffset}:` +
+      "(H-h)/2:" +
       "shortest=1[main_base]",
 
+    /*
+     * TICKET-SPECIFIC CARD LAYOUT
+     */
     "[main_base]" +
-      "drawbox=x=45:y=40:w=990:h=365:" +
+      `drawbox=x=${layout.cardX}:` +
+      `y=${layout.cardY}:` +
+      `w=${layout.cardWidth}:` +
+      `h=${layout.cardHeight}:` +
       "color=black@0.68:t=fill," +
 
-      "drawbox=x=45:y=40:w=990:h=365:" +
+      `drawbox=x=${layout.cardX}:` +
+      `y=${layout.cardY}:` +
+      `w=${layout.cardWidth}:` +
+      `h=${layout.cardHeight}:` +
       "color=0x38E878@0.65:t=3," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${mainHeadlinePath}':` +
-      "fontcolor=white:fontsize=42:" +
-      "x=(w-text_w)/2:y=70," +
+      `fontcolor=white:` +
+      `fontsize=${layout.headlineFontSize}:` +
+      `x=(w-text_w)/2:` +
+      `y=${layout.headlineY},` +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${mainTotalOddsPath}':` +
-      "fontcolor=0x38E878:fontsize=36:" +
-      "x=(w-text_w)/2:y=130," +
+      `fontcolor=0x38E878:` +
+      `fontsize=${layout.oddsFontSize}:` +
+      `x=(w-text_w)/2:` +
+      `y=${layout.oddsY},` +
 
-      `drawtext=fontfile='${boldFont}':` +
-      `textfile='${selection1Path}':` +
-      "fontcolor=white:fontsize=25:" +
-      "x=(w-text_w)/2:y=205," +
-
-      `drawtext=fontfile='${boldFont}':` +
-      `textfile='${selection2Path}':` +
-      "fontcolor=white:fontsize=25:" +
-      "x=(w-text_w)/2:y=260," +
-
-      `drawtext=fontfile='${boldFont}':` +
-      `textfile='${selection3Path}':` +
-      "fontcolor=white:fontsize=25:" +
-      "x=(w-text_w)/2:y=315," +
+      selectionDrawFilters +
+      "," +
 
       "drawbox=x=45:y=1765:w=990:h=85:" +
       "color=black@0.72:t=fill," +
@@ -495,7 +954,9 @@ function main() {
       "fontcolor=0x38E878:fontsize=30:" +
       "x=(w-text_w)/2:y=1790," +
 
-      `trim=duration=${audioDuration.toFixed(3)},` +
+      `trim=duration=${audioDuration.toFixed(
+        3
+      )},` +
       "setpts=PTS-STARTPTS," +
       "format=yuv420p," +
       "setsar=1[main_v]",
@@ -508,13 +969,15 @@ function main() {
       "aformat=sample_fmts=fltp:" +
       "sample_rates=48000:" +
       "channel_layouts=stereo," +
-      `atrim=duration=${audioDuration.toFixed(3)},` +
+      `atrim=duration=${audioDuration.toFixed(
+        3
+      )},` +
       "asetpts=PTS-STARTPTS[main_a]",
 
     /*
      * OUTRO
      */
-    `color=c=0x07140D:s=1080x1920:r=30:d=${OUTRO_DURATION}[outro_bg]`,
+    `color=c=${outroBackground}:s=1080x1920:r=30:d=${OUTRO_DURATION}[outro_bg]`,
 
     "[outro_bg]" +
       "drawbox=x=0:y=1902:w=1080:h=18:" +
@@ -550,7 +1013,7 @@ function main() {
       "x=(w-text_w)/2:y=1165," +
 
       `drawtext=fontfile='${boldFont}':` +
-      "text='GREENBETTIPS':" +
+      `textfile='${outroBrandPath}':` +
       "fontcolor=white@0.75:fontsize=34:" +
       "x=(w-text_w)/2:y=1560," +
 
@@ -561,14 +1024,14 @@ function main() {
       "setpts=PTS-STARTPTS[outro_v]",
 
     /*
-     * OUTRO SILENCE
+     * OUTRO SILENT AUDIO
      */
     "anullsrc=r=48000:cl=stereo," +
       `atrim=duration=${OUTRO_DURATION},` +
       "asetpts=PTS-STARTPTS[outro_a]",
 
     /*
-     * CONCAT
+     * CONCATENATE INTRO + MAIN + OUTRO
      */
     "[intro_v][intro_a]" +
       "[main_v][main_a]" +
@@ -579,8 +1042,16 @@ function main() {
   const ffmpegArguments = [
     "-y",
 
+    /*
+     * Begin the presenter clip from a random
+     * position before looping it.
+     */
+    "-ss",
+    presenterStartOffset.toFixed(2),
+
     "-stream_loop",
     "-1",
+
     "-i",
     PRESENTER_FILE,
 
@@ -633,7 +1104,7 @@ function main() {
   ];
 
   console.log(
-    "[SHORTS] Rendering intro, presenter and subscribe ending..."
+    "[SHORTS] Rendering randomized presenter variation..."
   );
 
   execFileSync(
