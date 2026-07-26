@@ -1,15 +1,19 @@
-name: Scrape Flashscore + Claudiu Pool + TalkFootball + PredictZ + Generate Tickets + WordPress (RO)
+name: PariuVerde Daily Tickets + WordPress + YouTube Shorts
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 11 * * *"  # 14:30 RO (GitHub = UTC)
+    - cron: "30 11 * * *" # 14:30 Romania during daylight saving time
 
 jobs:
-  scrape:
+  scrape-build-publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 75
 
     env:
+      # ==================================================
+      # GENERAL SCRAPING CONFIGURATION
+      # ==================================================
       DAY_OFFSET: "0"
       INCLUDE_LIVE: "true"
       LANG: "ro"
@@ -26,10 +30,46 @@ jobs:
       PV_TARGET_ZI: "5.00"
       PV_ZI_TOL: "0.00"
 
-    steps:
-      - uses: actions/checkout@v4
+      # ==================================================
+      # PARIUVERDE BRANDING
+      # ==================================================
+      SHORTS_BRAND_NAME: "PariuVerde"
+      SHORTS_BRAND_DISPLAY: "PARIUVERDE"
 
-      - uses: actions/setup-node@v4
+      SHORTS_WEBSITE: "pariuverde.ro"
+      SHORTS_WEBSITE_DISPLAY: "WWW.PARIUVERDE.RO"
+      SHORTS_SITE_URL: "https://pariuverde.ro"
+
+      # ==================================================
+      # CONTENT ENGINE
+      # ==================================================
+      SHORTS_OUTPUT_ROOT: "output"
+
+      SHORTS_PRESENTER_FILE: "assets/presenters/ro_presenter_01.mp4"
+
+      SHORTS_TTS_VOICE: "ro-RO-EmilNeural"
+      SHORTS_TTS_RATE: "+2%"
+
+      # ==================================================
+      # DISTRIBUTION CONFIGURATION
+      # ==================================================
+      YOUTUBE_ENABLED: "true"
+      YOUTUBE_PRIVACY_STATUS: "public"
+
+      TIKTOK_ENABLED: "false"
+      INSTAGRAM_ENABLED: "false"
+      FACEBOOK_ENABLED: "false"
+      TELEGRAM_ENABLED: "false"
+
+    steps:
+      # ==================================================
+      # SETUP
+      # ==================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
 
@@ -41,101 +81,698 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-npm-
 
-      - name: Install deps
+      - name: Install Node dependencies
         run: |
-          npm install cheerio@^1.0.0-rc.12 node-fetch@^3 \
-            --no-fund --no-audit --prefer-offline
+          npm install \
+            cheerio@^1.0.0-rc.12 \
+            node-fetch@^3 \
+            googleapis \
+            --no-fund \
+            --no-audit \
+            --prefer-offline
 
-      # 1) Flashscore fixtures
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Edge TTS
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install edge-tts
+
+          edge-tts --version
+
+      - name: Install FFmpeg and fonts
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            ffmpeg \
+            fonts-dejavu-core
+
+          ffmpeg -version
+          ffprobe -version
+
+      # ==================================================
+      # 1) FLASHSCORE
+      # ==================================================
       - name: Scrape Flashscore fixtures
         timeout-minutes: 5
         run: node scrape_mobi.js
 
-      # 2) Claudiu pool
-      - name: Build Claudiu Hood POOL
+      # ==================================================
+      # 2) CLAUDIU POOL
+      # ==================================================
+      - name: Build Claudiu Hood pool
         timeout-minutes: 5
         run: node scrape_claudiu_pool.js
 
-      # 3) TalkFootball scrape
+      # ==================================================
+      # 3) TALKFOOTBALL
+      # ==================================================
       - name: Scrape TalkFootball
         timeout-minutes: 5
         run: node scrapers/scrape_talkfootball.js
 
-      # 4) TalkFootball match to Flashscore
       - name: Match TalkFootball to Flashscore
         timeout-minutes: 5
         run: node engine/match_talkfootball_flashscore.js
 
-      # 5) Build/update MASTER pool with Claudiu + TalkFootball
-      - name: Inject TalkFootball odds into MASTER pool
+      - name: Inject TalkFootball into master pool
         timeout-minutes: 5
         run: node parsers/parse_talkfootball_as_odds.js
 
-      # 6) PredictZ scrape
+      # ==================================================
+      # 4) PREDICTZ
+      # ==================================================
       - name: Scrape PredictZ
         timeout-minutes: 5
         run: node scrapers/scrape_predictz.js
 
-      # 7) PredictZ match to Flashscore
       - name: Match PredictZ to Flashscore
         timeout-minutes: 5
         run: node engine/match_predictz_flashscore.js
 
-      # 8) Inject PredictZ into MASTER pool
-      - name: Inject PredictZ into MASTER pool
+      - name: Inject PredictZ into master pool
         timeout-minutes: 5
         run: node parsers/parse_predictz_as_odds.js
 
-      # 9) Generate tickets from MASTER pool
-      - name: Generate tickets from MASTER pool
+      # ==================================================
+      # 5) GENERATE TICKETS
+      # ==================================================
+      - name: Generate tickets from master pool
         timeout-minutes: 5
         run: node generate_tickets_from_pool.js
 
-      # 10) WordPress HTML
+      # ==================================================
+      # 6) WORDPRESS HTML
+      # ==================================================
       - name: Generate WordPress HTML
         run: node generate_wp.js
 
-      # 11) Artifacts
-      - name: Upload artifacts (raw)
+      # ==================================================
+      # 7) RAW ARTIFACTS
+      # ==================================================
+      - name: Upload raw artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: raw-output
+          name: pariuverde-raw-output
           path: |
             matches.json
             claudiu_pool.json
             master_pool.json
+
             predictz_pool.json
             predictz_matched.json
+
             claudiu_cota2.html
             claudiu_biletul_zilei.html
             claudiu_varianta_speciala.html
             claudiu_varianta_rezerva.html
             claudiu_varianta_islanda.html
+
             predictz_match_tips.html
             predictz_btts.html
             predictz_btts_and_win.html
             predictz_over_under_25.html
+
             artifacts/talkfootball_pool.json
             artifacts/talkfootball_matched.json
             artifacts/talkfootball_dropped.json
+          if-no-files-found: warn
+          retention-days: 7
 
-      - name: Upload artifacts (tickets)
+      - name: Upload ticket artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tickets
+          name: pariuverde-tickets
           path: |
             tickets.json
             tickets.md
             cota2.html
             biletul-zilei.html
+          if-no-files-found: warn
+          retention-days: 7
 
-      # 12) Publish
-      - name: Publish posts to WordPress (pariuverde.ro)
+      # ==================================================
+      # 8) WORDPRESS PUBLISHING
+      # ==================================================
+      - name: Publish posts to WordPress
         if: success()
         env:
           WP_URL: https://pariuverde.ro
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
         run: node publish_wp.js
+
+      # ==================================================
+      # 9A) GENERATE BILET COTA 2 PAYLOAD
+      # ==================================================
+      - name: Generate Bilet Cota 2 Shorts payload
+        if: success()
+        env:
+          SHORTS_TICKET_TYPE: bilet_cota2
+          SHORTS_OUTPUT_DIR: output/bilet_cota2
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p output/bilet_cota2
+
+          node shorts/generate_shorts_payload.js
+
+          if [ ! -s output/bilet_cota2/shorts_payload.json ]; then
+            echo "Payload-ul pentru Bilet Cota 2 nu a fost creat."
+            exit 1
+          fi
+
+          node -e "
+            const fs = require('fs');
+
+            const payload = JSON.parse(
+              fs.readFileSync(
+                'output/bilet_cota2/shorts_payload.json',
+                'utf8'
+              )
+            );
+
+            console.log('Status:', payload.status);
+            console.log('Limba:', payload.language);
+            console.log('Brand:', payload.brand?.name);
+            console.log('Tip bilet:', payload.ticketType);
+            console.log('Denumire:', payload.ticketLabel);
+            console.log('Selecții:', payload.selections?.length || 0);
+          "
+
+      # ==================================================
+      # 9B) GENERATE BILETUL ZILEI PAYLOAD
+      # ==================================================
+      - name: Generate Biletul Zilei Shorts payload
+        if: success()
+        env:
+          SHORTS_TICKET_TYPE: biletul_zilei
+          SHORTS_OUTPUT_DIR: output/biletul_zilei
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p output/biletul_zilei
+
+          node shorts/generate_shorts_payload.js
+
+          if [ ! -s output/biletul_zilei/shorts_payload.json ]; then
+            echo "Payload-ul pentru Biletul Zilei nu a fost creat."
+            exit 1
+          fi
+
+          node -e "
+            const fs = require('fs');
+
+            const payload = JSON.parse(
+              fs.readFileSync(
+                'output/biletul_zilei/shorts_payload.json',
+                'utf8'
+              )
+            );
+
+            console.log('Status:', payload.status);
+            console.log('Limba:', payload.language);
+            console.log('Brand:', payload.brand?.name);
+            console.log('Tip bilet:', payload.ticketType);
+            console.log('Denumire:', payload.ticketLabel);
+            console.log('Selecții:', payload.selections?.length || 0);
+          "
+
+      # ==================================================
+      # 10) VERIFY REQUIRED CONTENT FILES
+      # ==================================================
+      - name: Verify PariuVerde content engine files
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REQUIRED_FILES=(
+            "assets/presenters/ro_presenter_01.mp4"
+            "shorts/generate_shorts_payload.js"
+            "shorts/build_all_shorts.js"
+            "shorts/render_short.js"
+            "publish/generate_manifest.js"
+            "publish/platforms/youtube.js"
+          )
+
+          for FILE in "${REQUIRED_FILES[@]}"; do
+            if [ ! -s "$FILE" ]; then
+              echo "Fișier obligatoriu lipsă sau gol: $FILE"
+              exit 1
+            fi
+
+            echo "Găsit: $FILE"
+          done
+
+          echo "Detalii prezentator PariuVerde:"
+
+          ffprobe \
+            -v error \
+            -show_entries stream=codec_name,width,height,r_frame_rate \
+            -show_entries format=duration,size \
+            -of default=noprint_wrappers=1 \
+            assets/presenters/ro_presenter_01.mp4
+
+      # ==================================================
+      # 11) BUILD ALL AVAILABLE ROMANIAN SHORTS
+      # ==================================================
+      - name: Build all available PariuVerde Shorts
+        if: success()
+        timeout-minutes: 35
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node shorts/build_all_shorts.js
+
+          if [ ! -s output/build_summary.json ]; then
+            echo "Build summary nu a fost creat."
+            exit 1
+          fi
+
+          echo "Rezumat generare videoclipuri:"
+          cat output/build_summary.json
+
+      # ==================================================
+      # 12) VERIFY GENERATED SHORTS
+      # ==================================================
+      - name: Verify generated PariuVerde Shorts
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for TICKET_TYPE in bilet_cota2 biletul_zilei; do
+            PAYLOAD="output/${TICKET_TYPE}/shorts_payload.json"
+            VIDEO="output/${TICKET_TYPE}/short.mp4"
+            MANIFEST="output/${TICKET_TYPE}/distribution_manifest.json"
+
+            if [ ! -s "$PAYLOAD" ]; then
+              echo "Payload lipsă: $PAYLOAD"
+              exit 1
+            fi
+
+            STATUS=$(node -e "
+              const fs = require('fs');
+
+              const payload = JSON.parse(
+                fs.readFileSync(
+                  process.argv[1],
+                  'utf8'
+                )
+              );
+
+              process.stdout.write(
+                payload.status || ''
+              );
+            " "$PAYLOAD")
+
+            echo ""
+            echo "${TICKET_TYPE}: ${STATUS}"
+
+            if [ "$STATUS" = "skipped" ]; then
+              echo "${TICKET_TYPE} nu a fost generat. Videoclipul este omis."
+              continue
+            fi
+
+            if [ "$STATUS" != "ready" ]; then
+              echo "Status neașteptat pentru ${TICKET_TYPE}: ${STATUS}"
+              exit 1
+            fi
+
+            if [ ! -s "$VIDEO" ]; then
+              echo "Videoclip lipsă: $VIDEO"
+              exit 1
+            fi
+
+            if [ ! -s "$MANIFEST" ]; then
+              echo "Manifest lipsă: $MANIFEST"
+              exit 1
+            fi
+
+            echo "Detalii video pentru ${TICKET_TYPE}:"
+
+            ffprobe \
+              -v error \
+              -show_entries stream=codec_name,width,height,r_frame_rate \
+              -show_entries format=duration,size \
+              -of default=noprint_wrappers=1 \
+              "$VIDEO"
+
+            node -e "
+              const fs = require('fs');
+
+              const manifest = JSON.parse(
+                fs.readFileSync(
+                  process.argv[1],
+                  'utf8'
+                )
+              );
+
+              console.log(
+                'Brand:',
+                manifest.brand?.name
+              );
+
+              console.log(
+                'Titlu YouTube:',
+                manifest.platforms?.youtube?.title
+              );
+
+              console.log(
+                'Confidențialitate:',
+                manifest.platforms?.youtube?.privacyStatus
+              );
+            " "$MANIFEST"
+          done
+
+      # ==================================================
+      # 13) TEST YOUTUBE PARIUVERDE OAUTH
+      # ==================================================
+      - name: Test PariuVerde YouTube OAuth credentials
+        if: success()
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_PV_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_PV_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_PV_REFRESH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${YOUTUBE_CLIENT_ID:-}" ]; then
+            echo "Lipsește secretul YOUTUBE_PV_CLIENT_ID."
+            exit 1
+          fi
+
+          if [ -z "${YOUTUBE_CLIENT_SECRET:-}" ]; then
+            echo "Lipsește secretul YOUTUBE_PV_CLIENT_SECRET."
+            exit 1
+          fi
+
+          if [ -z "${YOUTUBE_REFRESH_TOKEN:-}" ]; then
+            echo "Lipsește secretul YOUTUBE_PV_REFRESH_TOKEN."
+            exit 1
+          fi
+
+          RESPONSE=$(curl -sS \
+            -X POST \
+            https://oauth2.googleapis.com/token \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "client_id=${YOUTUBE_CLIENT_ID}" \
+            --data-urlencode "client_secret=${YOUTUBE_CLIENT_SECRET}" \
+            --data-urlencode "refresh_token=${YOUTUBE_REFRESH_TOKEN}" \
+            --data-urlencode "grant_type=refresh_token")
+
+          node -e "
+            const response = JSON.parse(
+              process.argv[1]
+            );
+
+            if (!response.access_token) {
+              console.error(
+                'Test OAuth eșuat:',
+                response.error,
+                response.error_description || ''
+              );
+
+              process.exit(1);
+            }
+
+            console.log(
+              'Credențialele YouTube PariuVerde sunt valide.'
+            );
+
+            console.log(
+              'Token valabil:',
+              response.expires_in,
+              'secunde'
+            );
+          " "$RESPONSE"
+
+      # ==================================================
+      # 14) PUBLISH ALL AVAILABLE SHORTS TO YOUTUBE
+      # ==================================================
+      - name: Publish all available PariuVerde Shorts to YouTube
+        if: success()
+        timeout-minutes: 30
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_PV_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_PV_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_PV_REFRESH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PUBLISHED_COUNT=0
+          SKIPPED_COUNT=0
+
+          for TICKET_TYPE in bilet_cota2 biletul_zilei; do
+            PAYLOAD="output/${TICKET_TYPE}/shorts_payload.json"
+            VIDEO="output/${TICKET_TYPE}/short.mp4"
+            MANIFEST="output/${TICKET_TYPE}/distribution_manifest.json"
+            RESULTS="output/${TICKET_TYPE}/distribution_results.json"
+
+            echo ""
+            echo "=========================================="
+            echo "Publicare YouTube: ${TICKET_TYPE}"
+            echo "=========================================="
+
+            if [ ! -s "$PAYLOAD" ]; then
+              echo "Payload lipsă. Publicarea este omisă."
+              SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+              continue
+            fi
+
+            STATUS=$(node -e "
+              const fs = require('fs');
+
+              const payload = JSON.parse(
+                fs.readFileSync(
+                  process.argv[1],
+                  'utf8'
+                )
+              );
+
+              process.stdout.write(
+                payload.status || ''
+              );
+            " "$PAYLOAD")
+
+            if [ "$STATUS" = "skipped" ]; then
+              echo "${TICKET_TYPE} nu este disponibil astăzi."
+              SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+              continue
+            fi
+
+            if [ "$STATUS" != "ready" ]; then
+              echo "Status neașteptat pentru ${TICKET_TYPE}: ${STATUS}"
+              exit 1
+            fi
+
+            if [ ! -s "$VIDEO" ]; then
+              echo "Videoclip lipsă: $VIDEO"
+              exit 1
+            fi
+
+            if [ ! -s "$MANIFEST" ]; then
+              echo "Manifest lipsă: $MANIFEST"
+              exit 1
+            fi
+
+            echo "Se publică ${TICKET_TYPE} ca videoclip PUBLIC..."
+
+            DISTRIBUTION_MANIFEST_FILE="$MANIFEST" \
+            DISTRIBUTION_RESULTS_FILE="$RESULTS" \
+            node publish/platforms/youtube.js
+
+            if [ ! -s "$RESULTS" ]; then
+              echo "Fișierul cu rezultatul publicării nu a fost creat."
+              exit 1
+            fi
+
+            RESULT_STATUS=$(node -e "
+              const fs = require('fs');
+
+              const result = JSON.parse(
+                fs.readFileSync(
+                  process.argv[1],
+                  'utf8'
+                )
+              );
+
+              process.stdout.write(
+                result.status || ''
+              );
+            " "$RESULTS")
+
+            if [ "$RESULT_STATUS" != "success" ]; then
+              echo "Publicarea YouTube a eșuat pentru ${TICKET_TYPE}."
+              cat "$RESULTS"
+              exit 1
+            fi
+
+            node -e "
+              const fs = require('fs');
+
+              const result = JSON.parse(
+                fs.readFileSync(
+                  process.argv[1],
+                  'utf8'
+                )
+              );
+
+              console.log(
+                'Video ID:',
+                result.youtube?.videoId
+              );
+
+              console.log(
+                'URL:',
+                result.youtube?.url
+              );
+
+              console.log(
+                'Vizibilitate:',
+                result.youtube?.privacyStatus
+              );
+
+              console.log(
+                'Titlu:',
+                result.youtube?.title
+              );
+            " "$RESULTS"
+
+            PUBLISHED_COUNT=$((PUBLISHED_COUNT + 1))
+          done
+
+          echo ""
+          echo "=========================================="
+          echo "REZUMAT PUBLICARE YOUTUBE PARIUVERDE"
+          echo "=========================================="
+          echo "Publicate: ${PUBLISHED_COUNT}"
+          echo "Omise: ${SKIPPED_COUNT}"
+
+          node -e "
+            const fs = require('fs');
+
+            const ticketTypes = [
+              'bilet_cota2',
+              'biletul_zilei'
+            ];
+
+            const results = [];
+
+            for (const ticketType of ticketTypes) {
+              const payloadFile =
+                \`output/\${ticketType}/shorts_payload.json\`;
+
+              const resultFile =
+                \`output/\${ticketType}/distribution_results.json\`;
+
+              let payload = null;
+              let distribution = null;
+
+              if (
+                fs.existsSync(payloadFile)
+              ) {
+                payload = JSON.parse(
+                  fs.readFileSync(
+                    payloadFile,
+                    'utf8'
+                  )
+                );
+              }
+
+              if (
+                fs.existsSync(resultFile)
+              ) {
+                distribution = JSON.parse(
+                  fs.readFileSync(
+                    resultFile,
+                    'utf8'
+                  )
+                );
+              }
+
+              results.push({
+                ticketType,
+                payloadStatus:
+                  payload?.status || 'missing',
+                reason:
+                  payload?.reason || null,
+                publishingStatus:
+                  distribution?.status ||
+                  'not_published',
+                youtube:
+                  distribution?.youtube || null
+              });
+            }
+
+            const summary = {
+              status: 'completed',
+              brand: 'PariuVerde',
+              language: 'ro',
+              generatedAt:
+                new Date().toISOString(),
+              publishedCount:
+                Number(process.argv[1]),
+              skippedCount:
+                Number(process.argv[2]),
+              results
+            };
+
+            fs.writeFileSync(
+              'output/publishing_summary.json',
+              JSON.stringify(
+                summary,
+                null,
+                2
+              ),
+              'utf8'
+            );
+          " "$PUBLISHED_COUNT" "$SKIPPED_COUNT"
+
+          cat output/publishing_summary.json
+
+      # ==================================================
+      # 15) UPLOAD FINAL ARTIFACT
+      # ==================================================
+      - name: Upload PariuVerde Shorts output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pariuverde-shorts-output
+          path: |
+            published_posts.json
+
+            output/build_summary.json
+            output/publishing_summary.json
+
+            output/bilet_cota2/shorts_payload.json
+            output/bilet_cota2/voice_script.txt
+            output/bilet_cota2/voice.mp3
+            output/bilet_cota2/subs.srt
+            output/bilet_cota2/short.mp4
+            output/bilet_cota2/distribution_manifest.json
+            output/bilet_cota2/distribution_results.json
+            output/bilet_cota2/render_text/
+
+            output/biletul_zilei/shorts_payload.json
+            output/biletul_zilei/voice_script.txt
+            output/biletul_zilei/voice.mp3
+            output/biletul_zilei/subs.srt
+            output/biletul_zilei/short.mp4
+            output/biletul_zilei/distribution_manifest.json
+            output/biletul_zilei/distribution_results.json
+            output/biletul_zilei/render_text/
+          if-no-files-found: warn
+          retention-days: 7
