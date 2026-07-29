@@ -37,8 +37,11 @@ function requireEnv(name) {
 }
 
 function writeResults(data) {
+  const resultsDirectory =
+    path.dirname(RESULTS_FILE);
+
   fs.mkdirSync(
-    path.dirname(RESULTS_FILE),
+    resultsDirectory,
     {
       recursive: true
     }
@@ -51,15 +54,79 @@ function writeResults(data) {
   );
 }
 
-async function main() {
-  requireFile(MANIFEST_FILE);
+function readJsonFile(filePath) {
+  requireFile(filePath);
 
-  const manifest = JSON.parse(
-    fs.readFileSync(
-      MANIFEST_FILE,
-      "utf8"
+  try {
+    return JSON.parse(
+      fs.readFileSync(
+        filePath,
+        "utf8"
+      )
+    );
+  } catch (error) {
+    throw new Error(
+      `Invalid JSON file ${filePath}: ${error.message}`
+    );
+  }
+}
+
+function normalizeTitle(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 100);
+}
+
+function normalizeDescription(value) {
+  return String(value || "")
+    .trim()
+    .slice(0, 5000);
+}
+
+function normalizeTags(tags) {
+  if (!Array.isArray(tags)) {
+    return [];
+  }
+
+  return tags
+    .map((tag) =>
+      String(tag || "").trim()
     )
-  );
+    .filter(Boolean)
+    .slice(0, 30);
+}
+
+function normalizePrivacyStatus(value) {
+  const allowedStatuses = [
+    "public",
+    "private",
+    "unlisted"
+  ];
+
+  const normalized =
+    String(value || "private")
+      .trim()
+      .toLowerCase();
+
+  if (
+    !allowedStatuses.includes(
+      normalized
+    )
+  ) {
+    throw new Error(
+      `Invalid YouTube privacy status: ${normalized}`
+    );
+  }
+
+  return normalized;
+}
+
+async function main() {
+  const manifest =
+    readJsonFile(
+      MANIFEST_FILE
+    );
 
   if (manifest.status !== "ready") {
     throw new Error(
@@ -75,6 +142,13 @@ async function main() {
       status: "skipped",
       generatedAt:
         new Date().toISOString(),
+
+      brand:
+        manifest.brand || null,
+
+      content:
+        manifest.content || null,
+
       youtube: {
         reason:
           "YouTube publishing is disabled in the manifest."
@@ -102,13 +176,19 @@ async function main() {
   requireFile(videoFile);
 
   const clientId =
-    requireEnv("YOUTUBE_CLIENT_ID");
+    requireEnv(
+      "YOUTUBE_CLIENT_ID"
+    );
 
   const clientSecret =
-    requireEnv("YOUTUBE_CLIENT_SECRET");
+    requireEnv(
+      "YOUTUBE_CLIENT_SECRET"
+    );
 
   const refreshToken =
-    requireEnv("YOUTUBE_REFRESH_TOKEN");
+    requireEnv(
+      "YOUTUBE_REFRESH_TOKEN"
+    );
 
   const oauth2Client =
     new google.auth.OAuth2(
@@ -117,87 +197,90 @@ async function main() {
     );
 
   oauth2Client.setCredentials({
-    refresh_token: refreshToken
+    refresh_token:
+      refreshToken
   });
 
   /*
-   * Force token refresh now so OAuth errors
-   * happen before the video upload starts.
+   * Force access-token refresh before upload.
+   *
+   * This validates that the client ID,
+   * client secret and refresh token are valid.
+   *
+   * We intentionally do not call channels.list(),
+   * because the current refresh token may only have
+   * the youtube.upload scope.
    */
-  await oauth2Client.getAccessToken();
+  const accessTokenResponse =
+    await oauth2Client.getAccessToken();
 
-  const youtube = google.youtube({
-    version: "v3",
-    auth: oauth2Client
-  });
+  const accessToken =
+    typeof accessTokenResponse === "string"
+      ? accessTokenResponse
+      : accessTokenResponse?.token;
 
-  /*
-   * Identify the channel authorized by
-   * the refresh token.
-   */
-  const channelResponse =
-    await youtube.channels.list({
-      part: ["snippet"],
-      mine: true
-    });
-
-  const channels =
-    channelResponse.data.items || [];
-
-  if (channels.length === 0) {
+  if (!accessToken) {
     throw new Error(
-      "The OAuth credentials do not return an authorized YouTube channel."
+      "Google OAuth did not return an access token."
     );
   }
 
-  const authorizedChannel =
-    channels[0];
-
-  const channelId =
-    authorizedChannel.id || null;
-
-  const channelTitle =
-    authorizedChannel.snippet?.title ||
-    "Unknown channel";
-
   console.log(
-    `[YOUTUBE] Authorized channel: ${channelTitle}`
+    "[YOUTUBE] OAuth access token refreshed successfully."
   );
 
-  console.log(
-    `[YOUTUBE] Authorized channel ID: ${channelId}`
-  );
+  const youtube =
+    google.youtube({
+      version: "v3",
+      auth: oauth2Client
+    });
 
   const privacyStatus =
-    youtubeConfig.privacyStatus ||
-    "private";
+    normalizePrivacyStatus(
+      youtubeConfig.privacyStatus ||
+      process.env
+        .YOUTUBE_PRIVACY_STATUS ||
+      "private"
+    );
 
   const title =
-    String(
+    normalizeTitle(
       youtubeConfig.title ||
       manifest.metadata?.title ||
       "Football Predictions"
-    )
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 100);
+    );
+
+  if (!title) {
+    throw new Error(
+      "YouTube video title is empty."
+    );
+  }
 
   const description =
-    String(
+    normalizeDescription(
       youtubeConfig.description ||
       manifest.metadata?.description ||
       ""
-    ).trim();
+    );
 
   const tags =
-    Array.isArray(youtubeConfig.tags)
-      ? youtubeConfig.tags
-          .map((tag) =>
-            String(tag).trim()
-          )
-          .filter(Boolean)
-          .slice(0, 30)
-      : [];
+    normalizeTags(
+      youtubeConfig.tags ||
+      manifest.metadata?.tags ||
+      []
+    );
+
+  const categoryId =
+    String(
+      youtubeConfig.categoryId ||
+      "17"
+    ).trim();
+
+  const mimeType =
+    String(
+      manifest.media?.mimeType ||
+      "video/mp4"
+    ).trim();
 
   console.log(
     `[YOUTUBE] Uploading: ${videoFile}`
@@ -212,7 +295,11 @@ async function main() {
   );
 
   console.log(
-    `[YOUTUBE] Target channel: ${channelTitle}`
+    `[YOUTUBE] Category ID: ${categoryId}`
+  );
+
+  console.log(
+    `[YOUTUBE] Tags: ${tags.length}`
   );
 
   const response =
@@ -227,21 +314,18 @@ async function main() {
           title,
           description,
           tags,
-          categoryId:
-            youtubeConfig.categoryId ||
-            "17"
+          categoryId
         },
 
         status: {
           privacyStatus,
-          selfDeclaredMadeForKids: false
+          selfDeclaredMadeForKids:
+            false
         }
       },
 
       media: {
-        mimeType:
-          manifest.media?.mimeType ||
-          "video/mp4",
+        mimeType,
 
         body:
           fs.createReadStream(
@@ -251,7 +335,7 @@ async function main() {
     });
 
   const videoId =
-    response.data.id;
+    response.data?.id;
 
   if (!videoId) {
     throw new Error(
@@ -264,6 +348,7 @@ async function main() {
 
   const result = {
     status: "success",
+
     publishedAt:
       new Date().toISOString(),
 
@@ -274,12 +359,11 @@ async function main() {
       manifest.content || null,
 
     youtube: {
-      channelId,
-      channelTitle,
       videoId,
       url: videoUrl,
       title,
-      privacyStatus
+      privacyStatus,
+      categoryId
     }
   };
 
@@ -296,6 +380,10 @@ async function main() {
   console.log(
     `[YOUTUBE] Video URL: ${videoUrl}`
   );
+
+  console.log(
+    `[YOUTUBE] Privacy: ${privacyStatus}`
+  );
 }
 
 main().catch((error) => {
@@ -309,10 +397,12 @@ main().catch((error) => {
 
   const details =
     apiError?.errors ||
+    error?.response?.data ||
     null;
 
   writeResults({
     status: "failed",
+
     publishedAt:
       new Date().toISOString(),
 
