@@ -16,37 +16,61 @@ const LANGUAGE =
   String(
     process.env.LANG ||
     "en"
-  ).toLowerCase();
+  )
+    .trim()
+    .toLowerCase();
 
 const DEFAULT_CONFIG =
   LANGUAGE === "ro"
     ? {
-        brandName: "PariuVerde",
-        brandDisplay: "PARIUVERDE",
-        website: "pariuverde.ro",
-        websiteDisplay: "WWW.PARIUVERDE.RO",
-        siteUrl: "https://pariuverde.ro",
+        brandName:
+          "PariuVerde",
+
+        brandDisplay:
+          "PARIUVERDE",
+
+        website:
+          "pariuverde.ro",
+
+        websiteDisplay:
+          "WWW.PARIUVERDE.RO",
+
+        siteUrl:
+          "https://pariuverde.ro",
+
         presenterFile:
           "assets/presenters/ro_presenter_01.mp4",
+
         ttsVoice:
-          "ro-RO-EmilNeural",
+          "ro-RO-AlinaNeural",
+
         ttsRate:
-          "+2%"
+          "-5%"
       }
     : {
-        brandName: "GreenBetTips",
-        brandDisplay: "GREENBETTIPS",
-        website: "greenbettips.com",
+        brandName:
+          "GreenBetTips",
+
+        brandDisplay:
+          "GREENBETTIPS",
+
+        website:
+          "greenbettips.com",
+
         websiteDisplay:
           "WWW.GREENBETTIPS.COM",
+
         siteUrl:
           "https://greenbettips.com",
+
         presenterFile:
           "assets/presenters/presenter-01.mp4",
+
         ttsVoice:
-          "en-US-GuyNeural",
+          "en-US-AndrewNeural",
+
         ttsRate:
-          "+5%"
+          "-3%"
       };
 
 const BRAND_NAME =
@@ -76,12 +100,16 @@ const PRESENTER_FILE =
   DEFAULT_CONFIG.presenterFile;
 
 const TTS_VOICE =
-  process.env.SHORTS_TTS_VOICE ||
-  DEFAULT_CONFIG.ttsVoice;
+  String(
+    process.env.SHORTS_TTS_VOICE ||
+    DEFAULT_CONFIG.ttsVoice
+  ).trim();
 
 const TTS_RATE =
-  process.env.SHORTS_TTS_RATE ||
-  DEFAULT_CONFIG.ttsRate;
+  normalizeTtsRate(
+    process.env.SHORTS_TTS_RATE ||
+    DEFAULT_CONFIG.ttsRate
+  );
 
 const YOUTUBE_PRIVACY_STATUS =
   process.env.YOUTUBE_PRIVACY_STATUS ||
@@ -109,6 +137,69 @@ const TELEGRAM_ENABLED =
 
 /*
  * =========================================================
+ * TTS HELPERS
+ * =========================================================
+ */
+
+function normalizeTtsRate(
+  value
+) {
+  const rate =
+    String(
+      value ?? ""
+    ).trim();
+
+  if (!rate) {
+    return "+0%";
+  }
+
+  /*
+   * Accepted examples:
+   *
+   * -5%
+   * +2%
+   * 0%
+   * 5
+   * -3
+   */
+
+  if (
+    /^[+-]?\d+%$/.test(rate)
+  ) {
+    if (
+      rate.startsWith("+") ||
+      rate.startsWith("-")
+    ) {
+      return rate;
+    }
+
+    return `+${rate}`;
+  }
+
+  if (
+    /^[+-]?\d+$/.test(rate)
+  ) {
+    const numericRate =
+      Number(rate);
+
+    if (
+      numericRate >= 0
+    ) {
+      return `+${numericRate}%`;
+    }
+
+    return `${numericRate}%`;
+  }
+
+  console.warn(
+    `[BUILD] Invalid TTS rate "${rate}". Using +0%.`
+  );
+
+  return "+0%";
+}
+
+/*
+ * =========================================================
  * TICKET CONFIGURATION
  * =========================================================
  */
@@ -117,22 +208,36 @@ const TICKET_TYPES =
   LANGUAGE === "ro"
     ? [
         {
-          type: "bilet_cota2",
-          label: "Bilet Cota 2"
+          type:
+            "bilet_cota2",
+
+          label:
+            "Bilet Cota 2"
         },
+
         {
-          type: "biletul_zilei",
-          label: "Biletul Zilei"
+          type:
+            "biletul_zilei",
+
+          label:
+            "Biletul Zilei"
         }
       ]
     : [
         {
-          type: "bilet_cota2",
-          label: "Odds 2 Ticket"
+          type:
+            "bilet_cota2",
+
+          label:
+            "Odds 2 Ticket"
         },
+
         {
-          type: "biletul_zilei",
-          label: "Ticket of the Day"
+          type:
+            "biletul_zilei",
+
+          label:
+            "Ticket of the Day"
         }
       ];
 
@@ -142,15 +247,23 @@ const TICKET_TYPES =
  * =========================================================
  */
 
-function requireFile(filePath) {
-  if (!fs.existsSync(filePath)) {
+function requireFile(
+  filePath
+) {
+  if (
+    !fs.existsSync(
+      filePath
+    )
+  ) {
     throw new Error(
       `Required file does not exist: ${filePath}`
     );
   }
 
   if (
-    fs.statSync(filePath).size === 0
+    fs.statSync(
+      filePath
+    ).size === 0
   ) {
     throw new Error(
       `Required file is empty: ${filePath}`
@@ -158,8 +271,12 @@ function requireFile(filePath) {
   }
 }
 
-function readJson(filePath) {
-  requireFile(filePath);
+function readJson(
+  filePath
+) {
+  requireFile(
+    filePath
+  );
 
   return JSON.parse(
     fs.readFileSync(
@@ -175,14 +292,43 @@ function readJson(filePath) {
  * =========================================================
  */
 
+function formatCommandForLog(
+  command,
+  args
+) {
+  const formattedArgs =
+    args.map(
+      (arg) => {
+        const value =
+          String(arg);
+
+        if (
+          /\s/.test(value)
+        ) {
+          return JSON.stringify(
+            value
+          );
+        }
+
+        return value;
+      }
+    );
+
+  return [
+    command,
+    ...formattedArgs
+  ].join(" ");
+}
+
 function runCommand(
   command,
   args,
   options = {}
 ) {
   console.log(
-    `[BUILD] Running: ${command} ${args.join(
-      " "
+    `[BUILD] Running: ${formatCommandForLog(
+      command,
+      args
     )}`
   );
 
@@ -191,8 +337,12 @@ function runCommand(
       command,
       args,
       {
-        stdio: "inherit",
-        shell: false,
+        stdio:
+          "inherit",
+
+        shell:
+          false,
+
         env: {
           ...process.env,
           ...(options.env || {})
@@ -200,11 +350,15 @@ function runCommand(
       }
     );
 
-  if (result.error) {
+  if (
+    result.error
+  ) {
     throw result.error;
   }
 
-  if (result.status !== 0) {
+  if (
+    result.status !== 0
+  ) {
     throw new Error(
       `Command failed with exit code ${result.status}: ${command}`
     );
@@ -242,15 +396,20 @@ function getVideoDetails(
         videoFile
       ],
       {
-        encoding: "utf8"
+        encoding:
+          "utf8"
       }
     );
 
-  if (result.error) {
+  if (
+    result.error
+  ) {
     throw result.error;
   }
 
-  if (result.status !== 0) {
+  if (
+    result.status !== 0
+  ) {
     throw new Error(
       `ffprobe failed for ${videoFile}`
     );
@@ -264,7 +423,9 @@ function getVideoDetails(
 function validateVideo(
   videoFile
 ) {
-  requireFile(videoFile);
+  requireFile(
+    videoFile
+  );
 
   const details =
     getVideoDetails(
@@ -275,31 +436,44 @@ function validateVideo(
     details.streams?.[0];
 
   const format =
-    details.format || {};
+    details.format ||
+    {};
 
   const width =
-    Number(stream?.width);
+    Number(
+      stream?.width
+    );
 
   const height =
-    Number(stream?.height);
+    Number(
+      stream?.height
+    );
 
   const duration =
-    Number(format.duration);
+    Number(
+      format.duration
+    );
 
-  if (width !== 1080) {
+  if (
+    width !== 1080
+  ) {
     throw new Error(
       `${videoFile} has invalid width ${width}. Expected 1080.`
     );
   }
 
-  if (height !== 1920) {
+  if (
+    height !== 1920
+  ) {
     throw new Error(
       `${videoFile} has invalid height ${height}. Expected 1920.`
     );
   }
 
   if (
-    !Number.isFinite(duration) ||
+    !Number.isFinite(
+      duration
+    ) ||
     duration <= 0
   ) {
     throw new Error(
@@ -307,7 +481,9 @@ function validateVideo(
     );
   }
 
-  if (duration > 60) {
+  if (
+    duration > 60
+  ) {
     throw new Error(
       `${videoFile} is ${duration.toFixed(
         2
@@ -325,9 +501,11 @@ function validateVideo(
     width,
     height,
     duration,
+
     size:
       Number(
-        format.size || 0
+        format.size ||
+        0
       )
   };
 }
@@ -343,12 +521,27 @@ function generateVoice({
   voiceFile,
   subtitlesFile
 }) {
-  requireFile(scriptFile);
+  requireFile(
+    scriptFile
+  );
 
   fs.mkdirSync(
-    path.dirname(voiceFile),
+    path.dirname(
+      voiceFile
+    ),
     {
-      recursive: true
+      recursive:
+        true
+    }
+  );
+
+  fs.mkdirSync(
+    path.dirname(
+      subtitlesFile
+    ),
+    {
+      recursive:
+        true
     }
   );
 
@@ -364,17 +557,29 @@ function generateVoice({
     `[BUILD] TTS rate: ${TTS_RATE}`
   );
 
+  /*
+   * Important:
+   *
+   * Negative values such as -5% must be passed
+   * using --rate=-5%.
+   *
+   * Passing:
+   *
+   * --rate
+   * -5%
+   *
+   * makes argparse interpret -5% as a new option.
+   */
+
   runCommand(
     "edge-tts",
     [
       "--voice",
       TTS_VOICE,
 
-      "--rate",
-      TTS_RATE,
+      `--rate=${TTS_RATE}`,
 
-      "--volume",
-      "+0%",
+      "--volume=+0%",
 
       "--file",
       scriptFile,
@@ -387,11 +592,20 @@ function generateVoice({
     ]
   );
 
-  requireFile(voiceFile);
-  requireFile(subtitlesFile);
+  requireFile(
+    voiceFile
+  );
+
+  requireFile(
+    subtitlesFile
+  );
 
   console.log(
     `[BUILD] Voice generated: ${voiceFile}`
+  );
+
+  console.log(
+    `[BUILD] Subtitles generated: ${subtitlesFile}`
   );
 }
 
@@ -449,12 +663,24 @@ function renderVideo({
           videoFile,
 
         SHORTS_RENDER_TEXT_DIR:
-          renderTextDir
+          renderTextDir,
+
+        SHORTS_BACKGROUND_CHANGE_MIN_SECONDS:
+          process.env
+            .SHORTS_BACKGROUND_CHANGE_MIN_SECONDS ||
+          "4",
+
+        SHORTS_BACKGROUND_CHANGE_MAX_SECONDS:
+          process.env
+            .SHORTS_BACKGROUND_CHANGE_MAX_SECONDS ||
+          "7"
       }
     }
   );
 
-  requireFile(videoFile);
+  requireFile(
+    videoFile
+  );
 
   console.log(
     `[BUILD] Video rendered: ${videoFile}`
@@ -521,7 +747,9 @@ function generateManifest({
     }
   );
 
-  requireFile(manifestFile);
+  requireFile(
+    manifestFile
+  );
 
   console.log(
     `[BUILD] Manifest generated: ${manifestFile}`
@@ -534,7 +762,9 @@ function generateManifest({
  * =========================================================
  */
 
-function buildTicket(ticket) {
+function buildTicket(
+  ticket
+) {
   const ticketDir =
     path.join(
       OUTPUT_ROOT,
@@ -586,24 +816,29 @@ function buildTicket(ticket) {
   fs.mkdirSync(
     ticketDir,
     {
-      recursive: true
+      recursive:
+        true
     }
   );
 
   fs.mkdirSync(
     renderTextDir,
     {
-      recursive: true
+      recursive:
+        true
     }
   );
 
   console.log("");
+
   console.log(
     `========== ${ticket.label} ==========`
   );
 
   if (
-    !fs.existsSync(payloadFile)
+    !fs.existsSync(
+      payloadFile
+    )
   ) {
     console.log(
       `[BUILD] Payload missing: ${payloadFile}`
@@ -625,10 +860,13 @@ function buildTicket(ticket) {
   }
 
   const payload =
-    readJson(payloadFile);
+    readJson(
+      payloadFile
+    );
 
   if (
-    payload.status === "skipped"
+    payload.status ===
+    "skipped"
   ) {
     const reason =
       payload.reason ||
@@ -657,7 +895,8 @@ function buildTicket(ticket) {
   }
 
   if (
-    payload.status !== "ready"
+    payload.status !==
+    "ready"
   ) {
     throw new Error(
       `${ticket.label} has unexpected payload status: ${payload.status}`
@@ -667,21 +906,27 @@ function buildTicket(ticket) {
   /*
    * Validate payload consistency.
    */
+
   const payloadLanguage =
     String(
       payload.language ||
       LANGUAGE
-    ).toLowerCase();
+    )
+      .trim()
+      .toLowerCase();
 
   if (
-    payloadLanguage !== LANGUAGE
+    payloadLanguage !==
+    LANGUAGE
   ) {
     console.warn(
       `[BUILD] Payload language ${payloadLanguage} differs from configured language ${LANGUAGE}.`
     );
   }
 
-  requireFile(scriptFile);
+  requireFile(
+    scriptFile
+  );
 
   generateVoice({
     scriptFile,
@@ -728,7 +973,8 @@ function buildTicket(ticket) {
       payloadLanguage,
 
     brand:
-      manifest.brand || {
+      manifest.brand ||
+      {
         name:
           BRAND_NAME,
 
@@ -815,9 +1061,11 @@ function main() {
   );
 
   const startedAt =
-    new Date().toISOString();
+    new Date()
+      .toISOString();
 
-  const results = [];
+  const results =
+    [];
 
   console.log(
     `[BUILD] Starting multi-ticket content engine at ${startedAt}`
@@ -856,19 +1104,28 @@ function main() {
   );
 
   for (
-    const ticket of TICKET_TYPES
+    const ticket of
+    TICKET_TYPES
   ) {
     try {
       const result =
-        buildTicket(ticket);
+        buildTicket(
+          ticket
+        );
 
-      results.push(result);
-    } catch (error) {
+      results.push(
+        result
+      );
+    } catch (
+      error
+    ) {
       console.error(
         `[BUILD] ${ticket.label} failed:`
       );
 
-      console.error(error);
+      console.error(
+        error
+      );
 
       results.push({
         ticketType:
@@ -890,31 +1147,36 @@ function main() {
   const hasFailures =
     results.some(
       (item) =>
-        item.status === "failed"
+        item.status ===
+        "failed"
     );
 
   const readyCount =
     results.filter(
       (item) =>
-        item.status === "ready"
+        item.status ===
+        "ready"
     ).length;
 
   const skippedCount =
     results.filter(
       (item) =>
-        item.status === "skipped"
+        item.status ===
+        "skipped"
     ).length;
 
   const missingCount =
     results.filter(
       (item) =>
-        item.status === "missing"
+        item.status ===
+        "missing"
     ).length;
 
   const failedCount =
     results.filter(
       (item) =>
-        item.status === "failed"
+        item.status ===
+        "failed"
     ).length;
 
   const summary = {
@@ -926,7 +1188,8 @@ function main() {
     startedAt,
 
     completedAt:
-      new Date().toISOString(),
+      new Date()
+        .toISOString(),
 
     configuration: {
       language:
@@ -963,6 +1226,18 @@ function main() {
 
       youtubePrivacyStatus:
         YOUTUBE_PRIVACY_STATUS,
+
+      backgrounds: {
+        minimumChangeSeconds:
+          process.env
+            .SHORTS_BACKGROUND_CHANGE_MIN_SECONDS ||
+          "4",
+
+        maximumChangeSeconds:
+          process.env
+            .SHORTS_BACKGROUND_CHANGE_MAX_SECONDS ||
+          "7"
+      },
 
       platforms: {
         youtube:
@@ -1011,7 +1286,8 @@ function main() {
   fs.mkdirSync(
     OUTPUT_ROOT,
     {
-      recursive: true
+      recursive:
+        true
     }
   );
 
@@ -1026,6 +1302,7 @@ function main() {
   );
 
   console.log("");
+
   console.log(
     "========== BUILD SUMMARY =========="
   );
@@ -1047,31 +1324,41 @@ function main() {
   );
 
   for (
-    const result of results
+    const result of
+    results
   ) {
     console.log(
       `${result.ticketType}: ${result.status}`
     );
 
-    if (result.reason) {
+    if (
+      result.reason
+    ) {
       console.log(
         `  Reason: ${result.reason}`
       );
     }
 
-    if (result.error) {
+    if (
+      result.error
+    ) {
       console.log(
         `  Error: ${result.error}`
       );
     }
 
-    if (result.videoFile) {
+    if (
+      result.videoFile
+    ) {
       console.log(
         `  Video: ${result.videoFile}`
       );
     }
 
-    if (result.youtube?.title) {
+    if (
+      result.youtube
+        ?.title
+    ) {
       console.log(
         `  YouTube: ${result.youtube.title}`
       );
@@ -1090,14 +1377,24 @@ function main() {
   }
 }
 
+/*
+ * =========================================================
+ * START
+ * =========================================================
+ */
+
 try {
   main();
-} catch (error) {
+} catch (
+  error
+) {
   console.error(
     "[BUILD] Content engine failed:"
   );
 
-  console.error(error);
+  console.error(
+    error
+  );
 
   process.exit(1);
 }
