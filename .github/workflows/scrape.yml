@@ -1,5 +1,9 @@
 name: PariuVerde Daily Tickets + WordPress + YouTube Shorts
 
+concurrency:
+  group: pariuverde-daily-pipeline
+  cancel-in-progress: false
+
 on:
   workflow_dispatch:
   schedule:
@@ -116,45 +120,72 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-
-      - name: Cache npm
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-pariuverde
-          restore-keys: |
-            ${{ runner.os }}-npm-
+          cache: "npm"
 
       - name: Install Node dependencies
+        shell: bash
         run: |
-          npm install \
-            cheerio@^1.0.0-rc.12 \
-            node-fetch@^3 \
-            googleapis \
-            --no-fund \
-            --no-audit \
-            --prefer-offline
+          set -euo pipefail
+
+          if [ -f package-lock.json ]; then
+            echo "package-lock.json found. Running npm ci..."
+            npm ci --no-fund --no-audit --prefer-offline
+          else
+            echo "No package-lock.json found. Installing required packages..."
+            npm install \
+              cheerio@^1.0.0-rc.12 \
+              node-fetch@^3 \
+              googleapis \
+              --no-fund \
+              --no-audit \
+              --prefer-offline
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: "pip"
 
       - name: Install Edge TTS
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install edge-tts
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet edge-tts
           edge-tts --version
 
-      - name: Install FFmpeg and fonts
+      - name: Verify FFmpeg and fonts
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            ffmpeg \
-            fonts-dejavu-core
+          set -euo pipefail
 
-          ffmpeg -version
-          ffprobe -version
+          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+            echo "FFmpeg and ffprobe are already available on the GitHub runner."
+          else
+            echo "FFmpeg is missing. Installing minimum required packages..."
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              --no-install-recommends \
+              ffmpeg \
+              fonts-dejavu-core
+          fi
+
+          if ! fc-match DejaVuSans >/dev/null 2>&1; then
+            echo "DejaVu fonts are missing. Installing fonts-dejavu-core..."
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              --no-install-recommends \
+              fonts-dejavu-core
+          fi
+
+          echo "FFmpeg:"
+          ffmpeg -version | head -n 3
+
+          echo "FFprobe:"
+          ffprobe -version | head -n 3
+
+          echo "Font:"
+          fc-match DejaVuSans | head -n 1
 
       # ==================================================
       # 1) FLASHSCORE
