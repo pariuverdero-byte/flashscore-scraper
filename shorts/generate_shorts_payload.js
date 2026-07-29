@@ -20,7 +20,12 @@ const TICKET_TYPE =
   "bilet_cota2";
 
 const LANG =
-  (process.env.LANG || "en").toLowerCase();
+  String(
+    process.env.LANG ||
+    "en"
+  )
+    .trim()
+    .toLowerCase();
 
 /*
  * =========================================================
@@ -53,10 +58,11 @@ const BRAND_DISPLAY =
   process.env.SHORTS_BRAND_DISPLAY ||
   DEFAULT_BRAND.displayName;
 
-const SITE_URL = (
-  process.env.SHORTS_SITE_URL ||
-  DEFAULT_BRAND.url
-).replace(/\/$/, "");
+const SITE_URL =
+  (
+    process.env.SHORTS_SITE_URL ||
+    DEFAULT_BRAND.url
+  ).replace(/\/$/, "");
 
 const WEBSITE =
   process.env.SHORTS_WEBSITE ||
@@ -65,6 +71,64 @@ const WEBSITE =
 const WEBSITE_DISPLAY =
   process.env.SHORTS_WEBSITE_DISPLAY ||
   DEFAULT_BRAND.websiteDisplay;
+
+/*
+ * =========================================================
+ * BACKGROUND CONFIGURATION
+ * =========================================================
+ *
+ * Fișierele trebuie să existe în repository.
+ *
+ * Poți suprascrie lista din workflow:
+ *
+ * SHORTS_BACKGROUND_FILES:
+ * assets/backgrounds/bg01.mp4,assets/backgrounds/bg02.mp4
+ *
+ * Schimbarea efectivă trebuie implementată și în render_short.js.
+ */
+
+const DEFAULT_BACKGROUND_FILES =
+  LANG === "ro"
+    ? [
+        "assets/backgrounds/ro/background_01.mp4",
+        "assets/backgrounds/ro/background_02.mp4",
+        "assets/backgrounds/ro/background_03.mp4",
+        "assets/backgrounds/ro/background_04.mp4",
+        "assets/backgrounds/ro/background_05.mp4"
+      ]
+    : [
+        "assets/backgrounds/en/background_01.mp4",
+        "assets/backgrounds/en/background_02.mp4",
+        "assets/backgrounds/en/background_03.mp4",
+        "assets/backgrounds/en/background_04.mp4",
+        "assets/backgrounds/en/background_05.mp4"
+      ];
+
+const BACKGROUND_FILES =
+  String(
+    process.env.SHORTS_BACKGROUND_FILES ||
+    ""
+  )
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const AVAILABLE_BACKGROUNDS =
+  BACKGROUND_FILES.length > 0
+    ? BACKGROUND_FILES
+    : DEFAULT_BACKGROUND_FILES;
+
+const BACKGROUND_CHANGE_MIN_SECONDS =
+  readNumberEnv(
+    "SHORTS_BACKGROUND_CHANGE_MIN_SECONDS",
+    4
+  );
+
+const BACKGROUND_CHANGE_MAX_SECONDS =
+  readNumberEnv(
+    "SHORTS_BACKGROUND_CHANGE_MAX_SECONDS",
+    7
+  );
 
 /*
  * =========================================================
@@ -84,34 +148,23 @@ const LABELS = {
       biletul_zilei: "BET OF THE DAY"
     },
 
-    intro: {
-      bilet_cota2:
-        `Here is today's Odds 2 football ticket from ${BRAND_NAME}.`,
-      biletul_zilei:
-        `Here is today's Bet of the Day from ${BRAND_NAME}.`
-    },
+    visualCombinedOdds:
+      "COMBINED ODDS",
 
-    pickNumber: "Pick",
-    versus: "versus",
-    selection: "The pick is",
-    odds: "at odds of",
-    combinedOdds: "The combined odds are",
+    visualWebsite:
+      WEBSITE_DISPLAY,
 
-    outro:
-      `Visit ${BRAND_NAME} for the full ticket and follow for daily football predictions.`,
+    visualOutroTop:
+      "ENJOYED TODAY'S PICKS?",
 
-    visualCombinedOdds: "COMBINED ODDS",
-    visualWebsite: WEBSITE_DISPLAY,
-    visualOutroTop: "ENJOYED TODAY'S PICKS?",
-    visualSubscribe: "SUBSCRIBE",
+    visualSubscribe:
+      "SUBSCRIBE",
+
     visualOutroMessage:
       "FOR DAILY FOOTBALL PREDICTIONS",
 
     noTicket:
       "No suitable ticket is available for a Short today.",
-
-    youtubeDescription:
-      "Daily football predictions",
 
     hashtags: [
       "football",
@@ -133,34 +186,23 @@ const LABELS = {
       biletul_zilei: "BILETUL ZILEI"
     },
 
-    intro: {
-      bilet_cota2:
-        `Acesta este Biletul Cota 2 de astăzi de la ${BRAND_NAME}.`,
-      biletul_zilei:
-        `Acesta este Biletul Zilei de la ${BRAND_NAME}.`
-    },
+    visualCombinedOdds:
+      "COTA TOTALĂ",
 
-    pickNumber: "Selecția",
-    versus: "contra",
-    selection: "Pronosticul este",
-    odds: "la cota",
-    combinedOdds: "Cota totală este",
+    visualWebsite:
+      WEBSITE_DISPLAY,
 
-    outro:
-      `Vezi biletul complet pe ${BRAND_NAME} și abonează-te pentru ponturi zilnice.`,
+    visualOutroTop:
+      "ȚI-AU PLĂCUT PONTURILE?",
 
-    visualCombinedOdds: "COTA TOTALĂ",
-    visualWebsite: WEBSITE_DISPLAY,
-    visualOutroTop: "ȚI-AU PLĂCUT PONTURILE?",
-    visualSubscribe: "ABONEAZĂ-TE",
+    visualSubscribe:
+      "ABONEAZĂ-TE",
+
     visualOutroMessage:
       "PENTRU PONTURI ZILNICE",
 
     noTicket:
       "Astăzi nu există un bilet potrivit pentru videoclip.",
-
-    youtubeDescription:
-      "Ponturi și pronosticuri zilnice la fotbal",
 
     hashtags: [
       "pariuri",
@@ -179,12 +221,181 @@ const T =
 
 /*
  * =========================================================
- * TEXT HELPERS
+ * RANDOMIZATION
  * =========================================================
  */
 
+function hashString(value) {
+  let hash = 2166136261;
+
+  for (
+    let index = 0;
+    index < value.length;
+    index += 1
+  ) {
+    hash ^= value.charCodeAt(index);
+
+    hash = Math.imul(
+      hash,
+      16777619
+    );
+  }
+
+  return hash >>> 0;
+}
+
+function createSeededRandom(seedValue) {
+  let state =
+    hashString(
+      String(seedValue)
+    ) || 1;
+
+  return function random() {
+    state += 0x6d2b79f5;
+
+    let result = state;
+
+    result = Math.imul(
+      result ^ (result >>> 15),
+      result | 1
+    );
+
+    result ^=
+      result +
+      Math.imul(
+        result ^ (result >>> 7),
+        result | 61
+      );
+
+    return (
+      (
+        result ^
+        (result >>> 14)
+      ) >>> 0
+    ) / 4294967296;
+  };
+}
+
+function randomInteger(
+  random,
+  min,
+  max
+) {
+  const safeMin =
+    Math.ceil(
+      Math.min(min, max)
+    );
+
+  const safeMax =
+    Math.floor(
+      Math.max(min, max)
+    );
+
+  return (
+    Math.floor(
+      random() *
+      (
+        safeMax -
+        safeMin +
+        1
+      )
+    ) +
+    safeMin
+  );
+}
+
+function randomDecimal(
+  random,
+  min,
+  max,
+  decimals = 2
+) {
+  const value =
+    min +
+    random() *
+    (max - min);
+
+  return Number(
+    value.toFixed(decimals)
+  );
+}
+
+function pickRandom(
+  array,
+  random
+) {
+  if (
+    !Array.isArray(array) ||
+    array.length === 0
+  ) {
+    return "";
+  }
+
+  return array[
+    randomInteger(
+      random,
+      0,
+      array.length - 1
+    )
+  ];
+}
+
+function shuffle(
+  array,
+  random
+) {
+  const result =
+    [...array];
+
+  for (
+    let index =
+      result.length - 1;
+    index > 0;
+    index -= 1
+  ) {
+    const target =
+      randomInteger(
+        random,
+        0,
+        index
+      );
+
+    [
+      result[index],
+      result[target]
+    ] = [
+      result[target],
+      result[index]
+    ];
+  }
+
+  return result;
+}
+
+/*
+ * =========================================================
+ * GENERAL HELPERS
+ * =========================================================
+ */
+
+function readNumberEnv(
+  name,
+  fallback
+) {
+  const value =
+    Number(
+      process.env[name]
+    );
+
+  return Number.isFinite(value)
+    ? value
+    : fallback;
+}
+
 function clean(value) {
-  return String(value ?? "")
+  return String(
+    value ?? ""
+  )
     .replace(/[–—]/g, "-")
     .replace(/\s+/g, " ")
     .trim();
@@ -202,29 +413,338 @@ function normalizeRomanianText(value) {
     .replace(/ţ/g, "t");
 }
 
+function capitalizeFirst(value) {
+  const text =
+    clean(value);
+
+  if (!text) {
+    return "";
+  }
+
+  return (
+    text.charAt(0).toUpperCase() +
+    text.slice(1)
+  );
+}
+
 function displayOdd(value) {
-  const number = Number(value);
+  const number =
+    Number(value);
 
   return Number.isFinite(number)
     ? number.toFixed(2)
     : clean(value);
 }
 
-function spokenOdd(value) {
-  const number = Number(value);
+/*
+ * =========================================================
+ * NUMBER PRONUNCIATION
+ * =========================================================
+ */
 
-  if (!Number.isFinite(number)) {
+const EN_UNITS = [
+  "zero",
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "eleven",
+  "twelve",
+  "thirteen",
+  "fourteen",
+  "fifteen",
+  "sixteen",
+  "seventeen",
+  "eighteen",
+  "nineteen"
+];
+
+const EN_TENS = [
+  "",
+  "",
+  "twenty",
+  "thirty",
+  "forty",
+  "fifty",
+  "sixty",
+  "seventy",
+  "eighty",
+  "ninety"
+];
+
+const RO_UNITS = [
+  "zero",
+  "unu",
+  "doi",
+  "trei",
+  "patru",
+  "cinci",
+  "șase",
+  "șapte",
+  "opt",
+  "nouă",
+  "zece",
+  "unsprezece",
+  "douăsprezece",
+  "treisprezece",
+  "paisprezece",
+  "cincisprezece",
+  "șaisprezece",
+  "șaptesprezece",
+  "optsprezece",
+  "nouăsprezece"
+];
+
+const RO_TENS = [
+  "",
+  "",
+  "douăzeci",
+  "treizeci",
+  "patruzeci",
+  "cincizeci",
+  "șaizeci",
+  "șaptezeci",
+  "optzeci",
+  "nouăzeci"
+];
+
+function integerToEnglish(
+  value
+) {
+  const number =
+    Math.trunc(
+      Number(value)
+    );
+
+  if (
+    !Number.isFinite(number)
+  ) {
+    return clean(value);
+  }
+
+  if (number < 0) {
+    return `minus ${integerToEnglish(
+      Math.abs(number)
+    )}`;
+  }
+
+  if (number < 20) {
+    return EN_UNITS[number];
+  }
+
+  if (number < 100) {
+    const tens =
+      Math.floor(
+        number / 10
+      );
+
+    const unit =
+      number % 10;
+
+    return unit === 0
+      ? EN_TENS[tens]
+      : `${EN_TENS[tens]} ${EN_UNITS[unit]}`;
+  }
+
+  if (number < 1000) {
+    const hundreds =
+      Math.floor(
+        number / 100
+      );
+
+    const remainder =
+      number % 100;
+
+    return remainder === 0
+      ? `${EN_UNITS[hundreds]} hundred`
+      : `${EN_UNITS[hundreds]} hundred and ${integerToEnglish(
+          remainder
+        )}`;
+  }
+
+  return String(number)
+    .split("")
+    .map(
+      (digit) =>
+        EN_UNITS[
+          Number(digit)
+        ]
+    )
+    .join(" ");
+}
+
+function integerToRomanian(
+  value
+) {
+  const number =
+    Math.trunc(
+      Number(value)
+    );
+
+  if (
+    !Number.isFinite(number)
+  ) {
+    return clean(value);
+  }
+
+  if (number < 0) {
+    return `minus ${integerToRomanian(
+      Math.abs(number)
+    )}`;
+  }
+
+  if (number < 20) {
+    return RO_UNITS[number];
+  }
+
+  if (number < 100) {
+    const tens =
+      Math.floor(
+        number / 10
+      );
+
+    const unit =
+      number % 10;
+
+    return unit === 0
+      ? RO_TENS[tens]
+      : `${RO_TENS[tens]} și ${RO_UNITS[unit]}`;
+  }
+
+  if (number < 200) {
+    const remainder =
+      number - 100;
+
+    return remainder === 0
+      ? "o sută"
+      : `o sută ${integerToRomanian(
+          remainder
+        )}`;
+  }
+
+  if (number < 1000) {
+    const hundreds =
+      Math.floor(
+        number / 100
+      );
+
+    const remainder =
+      number % 100;
+
+    const prefix =
+      `${RO_UNITS[hundreds]} sute`;
+
+    return remainder === 0
+      ? prefix
+      : `${prefix} ${integerToRomanian(
+          remainder
+        )}`;
+  }
+
+  return String(number)
+    .split("")
+    .map(
+      (digit) =>
+        RO_UNITS[
+          Number(digit)
+        ]
+    )
+    .join(" ");
+}
+
+function spokenOdd(value) {
+  const number =
+    Number(value);
+
+  if (
+    !Number.isFinite(number)
+  ) {
     return clean(value);
   }
 
   const fixed =
     number.toFixed(2);
 
+  const [
+    integerPart,
+    decimalPart
+  ] = fixed.split(".");
+
   if (LANG === "ro") {
-    return fixed.replace(".", " virgulă ");
+    return (
+      `${integerToRomanian(
+        Number(integerPart)
+      )} virgulă ` +
+      decimalPart
+        .split("")
+        .map(
+          (digit) =>
+            RO_UNITS[
+              Number(digit)
+            ]
+        )
+        .join(" ")
+    );
   }
 
-  return fixed.replace(".", " point ");
+  return (
+    `${integerToEnglish(
+      Number(integerPart)
+    )} point ` +
+    decimalPart
+      .split("")
+      .map(
+        (digit) =>
+          EN_UNITS[
+            Number(digit)
+          ]
+      )
+      .join(" ")
+  );
+}
+
+function spokenPickNumber(
+  index
+) {
+  if (LANG === "ro") {
+    const labels = {
+      1: "Prima selecție",
+      2: "A doua selecție",
+      3: "A treia selecție",
+      4: "A patra selecție",
+      5: "A cincea selecție",
+      6: "A șasea selecție"
+    };
+
+    return (
+      labels[index] ||
+      `Selecția numărul ${integerToRomanian(
+        index
+      )}`
+    );
+  }
+
+  const labels = {
+    1: "First pick",
+    2: "Second pick",
+    3: "Third pick",
+    4: "Fourth pick",
+    5: "Fifth pick",
+    6: "Sixth pick"
+  };
+
+  return (
+    labels[index] ||
+    `Pick number ${integerToEnglish(
+      index
+    )}`
+  );
 }
 
 /*
@@ -234,37 +754,72 @@ function spokenOdd(value) {
  */
 
 function translateMarketToEnglish(value) {
-  const original = clean(value);
+  const original =
+    clean(value);
 
   if (!original) {
     return "";
   }
 
   const normalized =
-    normalizeRomanianText(original);
+    normalizeRomanianText(
+      original
+    );
 
   const exactTranslations = {
-    "victorie gazde": "Home Win",
-    "victorie oaspeti": "Away Win",
-    "egal": "Draw",
+    "victorie gazde":
+      "Home Win",
 
-    "1x": "Home Win or Draw",
-    "x2": "Away Win or Draw",
-    "12": "Either Team to Win",
+    "victorie oaspeti":
+      "Away Win",
 
-    "peste 0.5 goluri": "Over 0.5 Goals",
-    "peste 1.5 goluri": "Over 1.5 Goals",
-    "peste 2.5 goluri": "Over 2.5 Goals",
-    "peste 3.5 goluri": "Over 3.5 Goals",
-    "peste 4.5 goluri": "Over 4.5 Goals",
-    "peste 5.5 goluri": "Over 5.5 Goals",
+    "egal":
+      "Draw",
 
-    "sub 0.5 goluri": "Under 0.5 Goals",
-    "sub 1.5 goluri": "Under 1.5 Goals",
-    "sub 2.5 goluri": "Under 2.5 Goals",
-    "sub 3.5 goluri": "Under 3.5 Goals",
-    "sub 4.5 goluri": "Under 4.5 Goals",
-    "sub 5.5 goluri": "Under 5.5 Goals",
+    "1x":
+      "Home Win or Draw",
+
+    "x2":
+      "Away Win or Draw",
+
+    "12":
+      "Either Team to Win",
+
+    "peste 0.5 goluri":
+      "Over 0.5 Goals",
+
+    "peste 1.5 goluri":
+      "Over 1.5 Goals",
+
+    "peste 2.5 goluri":
+      "Over 2.5 Goals",
+
+    "peste 3.5 goluri":
+      "Over 3.5 Goals",
+
+    "peste 4.5 goluri":
+      "Over 4.5 Goals",
+
+    "peste 5.5 goluri":
+      "Over 5.5 Goals",
+
+    "sub 0.5 goluri":
+      "Under 0.5 Goals",
+
+    "sub 1.5 goluri":
+      "Under 1.5 Goals",
+
+    "sub 2.5 goluri":
+      "Under 2.5 Goals",
+
+    "sub 3.5 goluri":
+      "Under 3.5 Goals",
+
+    "sub 4.5 goluri":
+      "Under 4.5 Goals",
+
+    "sub 5.5 goluri":
+      "Under 5.5 Goals",
 
     "ambele echipe marcheaza":
       "Both Teams to Score",
@@ -330,55 +885,77 @@ function translateMarketToEnglish(value) {
       "Under 1.5 First-Half Goals"
   };
 
-  if (exactTranslations[normalized]) {
-    return exactTranslations[normalized];
+  if (
+    exactTranslations[normalized]
+  ) {
+    return exactTranslations[
+      normalized
+    ];
   }
 
   const dynamicPatterns = [
     {
       regex:
         /^peste (\d+(?:\.\d+)?) goluri$/,
+
       format:
-        (number) => `Over ${number} Goals`
+        (number) =>
+          `Over ${number} Goals`
     },
     {
       regex:
         /^sub (\d+(?:\.\d+)?) goluri$/,
+
       format:
-        (number) => `Under ${number} Goals`
+        (number) =>
+          `Under ${number} Goals`
     },
     {
       regex:
         /^peste (\d+(?:\.\d+)?) cornere$/,
+
       format:
-        (number) => `Over ${number} Corners`
+        (number) =>
+          `Over ${number} Corners`
     },
     {
       regex:
         /^sub (\d+(?:\.\d+)?) cornere$/,
+
       format:
-        (number) => `Under ${number} Corners`
+        (number) =>
+          `Under ${number} Corners`
     },
     {
       regex:
         /^peste (\d+(?:\.\d+)?) cartonase$/,
+
       format:
-        (number) => `Over ${number} Cards`
+        (number) =>
+          `Over ${number} Cards`
     },
     {
       regex:
         /^sub (\d+(?:\.\d+)?) cartonase$/,
+
       format:
-        (number) => `Under ${number} Cards`
+        (number) =>
+          `Under ${number} Cards`
     }
   ];
 
-  for (const pattern of dynamicPatterns) {
+  for (
+    const pattern of dynamicPatterns
+  ) {
     const match =
-      normalized.match(pattern.regex);
+      normalized.match(
+        pattern.regex
+      );
 
     if (match) {
-      return pattern.format(match[1]);
+      return pattern.format(
+        match[1]
+      );
     }
   }
 
@@ -390,13 +967,197 @@ function translateMarketToEnglish(value) {
 }
 
 function localizeMarket(value) {
-  const original = clean(value);
+  const original =
+    clean(value);
 
-  if (LANG === "en") {
-    return translateMarketToEnglish(original);
+  return LANG === "en"
+    ? translateMarketToEnglish(
+        original
+      )
+    : original;
+}
+
+/*
+ * =========================================================
+ * SPOKEN MARKET
+ * =========================================================
+ */
+
+function replaceNumbersForSpeech(
+  value
+) {
+  let result =
+    clean(value);
+
+  result =
+    result.replace(
+      /\b(\d+)\.(\d+)\b/g,
+      (
+        full,
+        integerPart,
+        decimalPart
+      ) => {
+        if (LANG === "ro") {
+          if (
+            decimalPart === "5"
+          ) {
+            return (
+              `${integerToRomanian(
+                Number(integerPart)
+              )} și jumătate`
+            );
+          }
+
+          return (
+            `${integerToRomanian(
+              Number(integerPart)
+            )} virgulă ` +
+            decimalPart
+              .split("")
+              .map(
+                (digit) =>
+                  RO_UNITS[
+                    Number(digit)
+                  ]
+              )
+              .join(" ")
+          );
+        }
+
+        return (
+          `${integerToEnglish(
+            Number(integerPart)
+          )} point ` +
+          decimalPart
+            .split("")
+            .map(
+              (digit) =>
+                EN_UNITS[
+                  Number(digit)
+                ]
+            )
+            .join(" ")
+        );
+      }
+    );
+
+  result =
+    result.replace(
+      /\b\d+\b/g,
+      (numberText) =>
+        LANG === "ro"
+          ? integerToRomanian(
+              Number(numberText)
+            )
+          : integerToEnglish(
+              Number(numberText)
+            )
+    );
+
+  return result;
+}
+
+function naturalRomanianMarket(
+  value
+) {
+  const normalized =
+    normalizeRomanianText(
+      value
+    );
+
+  const exact = {
+    "peste 0.5 goluri":
+      "cel puțin un gol",
+
+    "peste 1.5 goluri":
+      "peste un gol și jumătate",
+
+    "peste 2.5 goluri":
+      "peste două goluri și jumătate",
+
+    "peste 3.5 goluri":
+      "peste trei goluri și jumătate",
+
+    "peste 4.5 goluri":
+      "peste patru goluri și jumătate",
+
+    "sub 1.5 goluri":
+      "sub un gol și jumătate",
+
+    "sub 2.5 goluri":
+      "sub două goluri și jumătate",
+
+    "sub 3.5 goluri":
+      "sub trei goluri și jumătate",
+
+    "ambele echipe marcheaza":
+      "ambele echipe marchează",
+
+    "ambele echipe marcheaza - da":
+      "ambele echipe marchează",
+
+    "ambele echipe marcheaza da":
+      "ambele echipe marchează",
+
+    "ambele echipe inscriu":
+      "ambele echipe marchează",
+
+    "gg":
+      "ambele echipe marchează",
+
+    "ambele echipe marcheaza - nu":
+      "nu marchează ambele echipe",
+
+    "ambele echipe marcheaza nu":
+      "nu marchează ambele echipe",
+
+    "ng":
+      "nu marchează ambele echipe",
+
+    "victorie gazde":
+      "victoria echipei gazdă",
+
+    "victorie oaspeti":
+      "victoria echipei oaspete",
+
+    "egal":
+      "rezultat de egalitate",
+
+    "1x":
+      "unu X, gazdele nu pierd",
+
+    "x2":
+      "X doi, oaspeții nu pierd",
+
+    "12":
+      "fără rezultat de egalitate"
+  };
+
+  if (exact[normalized]) {
+    return exact[normalized];
   }
 
-  return original;
+  return replaceNumbersForSpeech(
+    value
+  );
+}
+
+function naturalEnglishMarket(
+  value
+) {
+  return replaceNumbersForSpeech(
+    value
+  );
+}
+
+function spokenMarket(value) {
+  return LANG === "ro"
+    ? naturalRomanianMarket(
+        value
+      )
+    : naturalEnglishMarket(
+        value
+      );
 }
 
 /*
@@ -416,12 +1177,14 @@ function splitTeams(selection) {
     return {
       home,
       away,
-      teams: clean(
-        selection.teams ||
+
+      teams:
+        clean(
+          selection.teams ||
           [home, away]
             .filter(Boolean)
             .join(" - ")
-      )
+        )
     };
   }
 
@@ -429,7 +1192,9 @@ function splitTeams(selection) {
     clean(selection.teams);
 
   const parts =
-    teams.split(/\s+-\s+/);
+    teams.split(
+      /\s+-\s+/
+    );
 
   return {
     home:
@@ -462,7 +1227,9 @@ function selectionToPayload(
     );
 
   const market =
-    localizeMarket(marketOriginal);
+    localizeMarket(
+      marketOriginal
+    );
 
   return {
     index:
@@ -484,10 +1251,14 @@ function selectionToPayload(
       teamData.away,
 
     competition:
-      clean(selection.competition),
+      clean(
+        selection.competition
+      ),
 
     country:
-      clean(selection.country),
+      clean(
+        selection.country
+      ),
 
     kickoff:
       clean(
@@ -499,14 +1270,27 @@ function selectionToPayload(
 
     market,
 
+    spokenMarket:
+      spokenMarket(
+        market
+      ),
+
     odds:
       displayOdd(
         selection.odd ??
         selection.odds
       ),
 
+    spokenOdds:
+      spokenOdd(
+        selection.odd ??
+        selection.odds
+      ),
+
     source:
-      clean(selection.source),
+      clean(
+        selection.source
+      ),
 
     url:
       clean(
@@ -537,52 +1321,487 @@ function visualHeadline(type) {
   );
 }
 
-function ticketIntro(type) {
-  return (
-    T.intro[type] ||
-    `Today's football ticket from ${BRAND_NAME}.`
+/*
+ * =========================================================
+ * NATURAL VOICE SCRIPT
+ * =========================================================
+ */
+
+function getVoicePhrases(
+  random
+) {
+  if (LANG === "ro") {
+    return {
+      intros: {
+        bilet_cota2: [
+          "Salut! Iată biletul cota doi de astăzi.",
+          "Hai să vedem selecțiile pentru biletul cota doi.",
+          "Biletul cota doi de astăzi este pregătit.",
+          "Avem pregătit biletul cota doi pentru astăzi.",
+          "Acestea sunt selecțiile noastre pentru biletul cota doi."
+        ],
+
+        biletul_zilei: [
+          "Salut! Iată biletul zilei.",
+          "Hai să vedem selecțiile de astăzi.",
+          "Biletul zilei este pregătit.",
+          "Am pregătit pronosticurile zilei.",
+          "Acestea sunt selecțiile noastre pentru astăzi."
+        ]
+      },
+
+      transitions: [
+        "Mergem mai departe.",
+        "Următorul meci.",
+        "Continuăm.",
+        "Mai departe.",
+        "Următoarea selecție."
+      ],
+
+      selectionLeadIns: [
+        "Pronosticul nostru este",
+        "Alegerea noastră este",
+        "Mergem pe",
+        "Selecția recomandată este",
+        "Pentru acest meci alegem"
+      ],
+
+      oddsLeadIns: [
+        "Cota este",
+        "Avem cota",
+        "La cota",
+        "Selecția are cota"
+      ],
+
+      totalOdds: [
+        "Cota totală a biletului este",
+        "În total, biletul are cota",
+        "Cota finală este",
+        "Biletul ajunge la cota"
+      ],
+
+      outros: [
+        `Găsești biletul complet pe ${WEBSITE}. Succes!`,
+        `Vezi toate detaliile pe ${WEBSITE}. Mult succes!`,
+        `Biletul complet este pe ${WEBSITE}. Joacă responsabil!`,
+        `Intră pe ${WEBSITE} pentru toate detaliile. Succes!`,
+        `Urmărește-ne pentru ponturile următoare. Mult succes!`
+      ],
+
+      brandMentions: [
+        `de la ${BRAND_NAME}`,
+        `pregătit de ${BRAND_NAME}`,
+        `din partea ${BRAND_NAME}`
+      ]
+    };
+  }
+
+  return {
+    intros: {
+      bilet_cota2: [
+        "Here are today's Odds Two football picks.",
+        "Let's check today's Odds Two ticket.",
+        "Today's Odds Two ticket is ready.",
+        "Here are our selections for today's Odds Two ticket.",
+        "Let's get into today's football picks."
+      ],
+
+      biletul_zilei: [
+        "Here is today's Bet of the Day.",
+        "Let's check today's football selections.",
+        "Today's football ticket is ready.",
+        "Here are our picks for today.",
+        "Let's get into today's football predictions."
+      ]
+    },
+
+    transitions: [
+      "Moving on.",
+      "Next match.",
+      "Up next.",
+      "Let's continue.",
+      "The next pick."
+    ],
+
+    selectionLeadIns: [
+      "Our pick is",
+      "We're going with",
+      "The selection is",
+      "Our prediction is",
+      "For this match, we like"
+    ],
+
+    oddsLeadIns: [
+      "The odds are",
+      "At odds of",
+      "This pick is priced at",
+      "The selection comes at"
+    ],
+
+    totalOdds: [
+      "The combined odds are",
+      "The full ticket comes to",
+      "The total odds are",
+      "Together, the selections give us"
+    ],
+
+    outros: [
+      `Find the full ticket on ${WEBSITE}. Good luck!`,
+      `Visit ${WEBSITE} for all the details. Good luck!`,
+      `The complete ticket is available on ${WEBSITE}.`,
+      `Follow for more daily football picks. Good luck!`,
+      `Check ${WEBSITE} for the full ticket. Bet responsibly.`
+    ],
+
+    brandMentions: [
+      `from ${BRAND_NAME}`,
+      `prepared by ${BRAND_NAME}`,
+      `brought to you by ${BRAND_NAME}`
+    ]
+  };
+}
+
+function buildTeamsVoiceLine(
+  match
+) {
+  if (
+    match.home &&
+    match.away
+  ) {
+    return LANG === "ro"
+      ? `${match.home}, contra ${match.away}.`
+      : `${match.home}, against ${match.away}.`;
+  }
+
+  return `${match.teams}.`;
+}
+
+function buildVoiceScript(
+  matches,
+  totalOdds,
+  random
+) {
+  const phrases =
+    getVoicePhrases(random);
+
+  const introOptions =
+    phrases.intros[
+      TICKET_TYPE
+    ] ||
+    phrases.intros.biletul_zilei;
+
+  const lines = [];
+
+  const intro =
+    pickRandom(
+      introOptions,
+      random
+    );
+
+  const mentionBrand =
+    random() >= 0.45;
+
+  lines.push(
+    capitalizeFirst(
+      intro
+    )
   );
+
+  if (mentionBrand) {
+    lines.push(
+      `${capitalizeFirst(
+        pickRandom(
+          phrases.brandMentions,
+          random
+        )
+      )}.`
+    );
+  }
+
+  lines.push("");
+
+  matches.forEach(
+    (
+      match,
+      matchIndex
+    ) => {
+      if (matchIndex > 0) {
+        lines.push(
+          pickRandom(
+            phrases.transitions,
+            random
+          )
+        );
+
+        lines.push("");
+      }
+
+      lines.push(
+        `${spokenPickNumber(
+          match.index
+        )}.`
+      );
+
+      lines.push(
+        buildTeamsVoiceLine(
+          match
+        )
+      );
+
+      lines.push("");
+
+      lines.push(
+        `${pickRandom(
+          phrases.selectionLeadIns,
+          random
+        )} ${match.spokenMarket}.`
+      );
+
+      /*
+       * Nu citim obligatoriu cota fiecărei selecții.
+       * Uneori vocea sună mai natural fără repetarea
+       * mecanică a tuturor cotelor.
+       */
+      const shouldReadOdd =
+        matches.length <= 3 ||
+        random() >= 0.35;
+
+      if (shouldReadOdd) {
+        lines.push(
+          `${pickRandom(
+            phrases.oddsLeadIns,
+            random
+          )} ${match.spokenOdds}.`
+        );
+      }
+
+      lines.push("");
+    }
+  );
+
+  lines.push(
+    `${pickRandom(
+      phrases.totalOdds,
+      random
+    )} ${spokenOdd(
+      totalOdds
+    )}.`
+  );
+
+  lines.push("");
+
+  lines.push(
+    pickRandom(
+      phrases.outros,
+      random
+    )
+  );
+
+  return lines
+    .join("\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /*
  * =========================================================
- * VOICE SCRIPT
+ * BACKGROUND RANDOMIZATION
  * =========================================================
  */
 
-function buildVoiceScript(
-  matches,
-  totalOdds
+function buildBackgroundPlan(
+  random,
+  estimatedDurationSeconds = 30
 ) {
-  const sentences = [
-    ticketIntro(TICKET_TYPE)
-  ];
-
-  for (const match of matches) {
-    const teamsText =
-      match.home && match.away
-        ? LANG === "ro"
-          ? `${match.home} contra ${match.away}.`
-          : `${match.home} versus ${match.away}.`
-        : `${match.teams}.`;
-
-    sentences.push(
-      `${T.pickNumber} ${match.index}. ` +
-      `${teamsText} ` +
-      `${T.selection} ${match.market}, ` +
-      `${T.odds} ${spokenOdd(match.odds)}.`
+  const shuffledFiles =
+    shuffle(
+      AVAILABLE_BACKGROUNDS,
+      random
     );
+
+  const segments = [];
+
+  let currentTime = 0;
+  let fileIndex = 0;
+
+  while (
+    currentTime <
+    estimatedDurationSeconds
+  ) {
+    const duration =
+      randomInteger(
+        random,
+        BACKGROUND_CHANGE_MIN_SECONDS,
+        BACKGROUND_CHANGE_MAX_SECONDS
+      );
+
+    const remaining =
+      estimatedDurationSeconds -
+      currentTime;
+
+    const segmentDuration =
+      Math.min(
+        duration,
+        remaining
+      );
+
+    const file =
+      shuffledFiles[
+        fileIndex %
+        shuffledFiles.length
+      ];
+
+    segments.push({
+      index:
+        segments.length,
+
+      file,
+
+      startSeconds:
+        currentTime,
+
+      durationSeconds:
+        segmentDuration,
+
+      zoom:
+        randomDecimal(
+          random,
+          1.02,
+          1.12,
+          3
+        ),
+
+      xOffset:
+        randomInteger(
+          random,
+          -35,
+          35
+        ),
+
+      yOffset:
+        randomInteger(
+          random,
+          -25,
+          25
+        ),
+
+      mirror:
+        random() >= 0.78,
+
+      playbackRate:
+        randomDecimal(
+          random,
+          0.92,
+          1.08,
+          3
+        ),
+
+      startOffsetSeconds:
+        randomDecimal(
+          random,
+          0,
+          5,
+          2
+        ),
+
+      transition:
+        pickRandom(
+          [
+            "fade",
+            "crossfade",
+            "cut"
+          ],
+          random
+        ),
+
+      transitionDurationSeconds:
+        randomDecimal(
+          random,
+          0.2,
+          0.6,
+          2
+        )
+    });
+
+    currentTime +=
+      segmentDuration;
+
+    fileIndex += 1;
   }
 
-  sentences.push(
-    `${T.combinedOdds} ${spokenOdd(totalOdds)}.`
-  );
+  return {
+    enabled:
+      shuffledFiles.length > 0,
 
-  sentences.push(
-    T.outro
-  );
+    mode:
+      "periodic_random",
 
-  return sentences.join(" ");
+    files:
+      shuffledFiles,
+
+    changeIntervalSeconds: {
+      min:
+        BACKGROUND_CHANGE_MIN_SECONDS,
+
+      max:
+        BACKGROUND_CHANGE_MAX_SECONDS
+    },
+
+    avoidImmediateRepeat:
+      true,
+
+    segments
+  };
+}
+
+function buildPresenterVariation(
+  random
+) {
+  return {
+    horizontalPosition:
+      pickRandom(
+        [
+          "left",
+          "center",
+          "right"
+        ],
+        random
+      ),
+
+    xOffset:
+      randomInteger(
+        random,
+        -35,
+        35
+      ),
+
+    yOffset:
+      randomInteger(
+        random,
+        -15,
+        20
+      ),
+
+    scale:
+      randomDecimal(
+        random,
+        0.97,
+        1.06,
+        3
+      ),
+
+    mirror:
+      random() >= 0.82,
+
+    startOffsetSeconds:
+      randomDecimal(
+        random,
+        0,
+        2.8,
+        2
+      )
+  };
 }
 
 /*
@@ -591,9 +1810,16 @@ function buildVoiceScript(
  * =========================================================
  */
 
-function createMatchTitle(match) {
-  if (match.home && match.away) {
-    return `${match.home} vs ${match.away}`;
+function createMatchTitle(
+  match
+) {
+  if (
+    match.home &&
+    match.away
+  ) {
+    return (
+      `${match.home} vs ${match.away}`
+    );
   }
 
   return match.teams;
@@ -607,7 +1833,9 @@ function buildYouTubeTitle(
   const matchText =
     matches
       .slice(0, 2)
-      .map(createMatchTitle)
+      .map(
+        createMatchTitle
+      )
       .join(" + ");
 
   let title;
@@ -620,7 +1848,9 @@ function buildYouTubeTitle(
       `${label}: ${matchText} | ${totalOdds} #shorts`;
   }
 
-  if (title.length <= 100) {
+  if (
+    title.length <= 100
+  ) {
     return title;
   }
 
@@ -639,11 +1869,12 @@ function buildYouTubeDescription(
       ...T.hashtags,
       BRAND_NAME.toLowerCase()
     ]
-      .map((tag) =>
-        `#${tag.replace(
-          /[^a-zA-Z0-9ăâîșțĂÂÎȘȚ_]/g,
-          ""
-        )}`
+      .map(
+        (tag) =>
+          `#${tag.replace(
+            /[^a-zA-Z0-9ăâîșțĂÂÎȘȚ_]/g,
+            ""
+          )}`
       )
       .join(" ");
 
@@ -675,19 +1906,38 @@ async function writeSkippedPayload(
   date
 ) {
   const skipped = {
-    status: "skipped",
-    version: 3,
+    status:
+      "skipped",
+
+    version:
+      4,
+
     reason,
-    date: date || null,
-    language: LANG,
-    ticketType: TICKET_TYPE,
+
+    date:
+      date || null,
+
+    language:
+      LANG,
+
+    ticketType:
+      TICKET_TYPE,
 
     brand: {
-      name: BRAND_NAME,
-      displayName: BRAND_DISPLAY,
-      website: WEBSITE,
-      websiteDisplay: WEBSITE_DISPLAY,
-      url: SITE_URL
+      name:
+        BRAND_NAME,
+
+      displayName:
+        BRAND_DISPLAY,
+
+      website:
+        WEBSITE,
+
+      websiteDisplay:
+        WEBSITE_DISPLAY,
+
+      url:
+        SITE_URL
     }
   };
 
@@ -739,7 +1989,10 @@ async function main() {
     }
   );
 
-  if (tickets.status === "no_picks") {
+  if (
+    tickets.status ===
+    "no_picks"
+  ) {
     await writeSkippedPayload(
       tickets.reason ||
       T.noTicket,
@@ -754,11 +2007,22 @@ async function main() {
 
   if (
     !ticket ||
-    !Array.isArray(ticket.selections) ||
+    !Array.isArray(
+      ticket.selections
+    ) ||
     ticket.selections.length === 0
   ) {
+    const reason =
+      LANG === "ro"
+        ? `${ticketLabel(
+            TICKET_TYPE
+          )} nu a fost generat.`
+        : `${ticketLabel(
+            TICKET_TYPE
+          )} was not generated.`;
+
     await writeSkippedPayload(
-      `${ticketLabel(TICKET_TYPE)} nu a fost generat`,
+      reason,
       tickets.date
     );
 
@@ -778,21 +2042,68 @@ async function main() {
     );
 
   const label =
-    ticketLabel(TICKET_TYPE);
+    ticketLabel(
+      TICKET_TYPE
+    );
 
   const date =
-    clean(tickets.date);
+    clean(
+      tickets.date
+    );
+
+  /*
+   * Seed stabil pentru combinația:
+   * dată + limbă + tip bilet + echipe.
+   */
+  const randomSeed = [
+    date,
+    LANG,
+    TICKET_TYPE,
+    ...matches.map(
+      (match) =>
+        match.matchId ||
+        match.teams
+    )
+  ].join("|");
+
+  const random =
+    createSeededRandom(
+      randomSeed
+    );
 
   const voiceScript =
     buildVoiceScript(
       matches,
-      totalOdds
+      totalOdds,
+      random
+    );
+
+  const targetDurationSeconds =
+    Math.min(
+      52,
+      Math.max(
+        25,
+        14 +
+        matches.length * 7
+      )
+    );
+
+  const backgroundPlan =
+    buildBackgroundPlan(
+      random,
+      targetDurationSeconds
+    );
+
+  const presenterVariation =
+    buildPresenterVariation(
+      random
     );
 
   const youtubeTags = [
     ...new Set([
       ...T.hashtags,
       BRAND_NAME.toLowerCase(),
+
       LANG === "ro"
         ? "pariuri sportive"
         : "sports betting"
@@ -800,10 +2111,16 @@ async function main() {
   ];
 
   const payload = {
-    status: "ready",
-    version: 3,
+    status:
+      "ready",
+
+    version:
+      4,
+
     generatedAt:
       new Date().toISOString(),
+
+    randomSeed,
 
     language:
       LANG,
@@ -852,8 +2169,9 @@ async function main() {
         "17",
 
       privacyStatus:
-        process.env.YOUTUBE_PRIVACY_STATUS ||
-        "private",
+        process.env
+          .YOUTUBE_PRIVACY_STATUS ||
+        "public",
 
       tags:
         youtubeTags
@@ -872,7 +2190,9 @@ async function main() {
         BRAND_DISPLAY,
 
       headline:
-        visualHeadline(TICKET_TYPE),
+        visualHeadline(
+          TICKET_TYPE
+        ),
 
       totalOdds,
 
@@ -895,12 +2215,18 @@ async function main() {
         T.visualOutroMessage,
 
       presenterAsset:
-        process.env.SHORTS_PRESENTER_FILE ||
+        process.env
+          .SHORTS_PRESENTER_FILE ||
         (
           LANG === "ro"
             ? "assets/presenters/ro_presenter_01.mp4"
             : "assets/presenters/presenter-01.mp4"
         ),
+
+      presenterVariation,
+
+      background:
+        backgroundPlan,
 
       outputVideo:
         path.join(
@@ -913,8 +2239,17 @@ async function main() {
       script:
         voiceScript,
 
-      targetDurationSeconds:
-        30,
+      targetDurationSeconds,
+
+      recommendedVoice:
+        LANG === "ro"
+          ? "ro-RO-AlinaNeural"
+          : "en-US-AndrewNeural",
+
+      recommendedRate:
+        LANG === "ro"
+          ? "-5%"
+          : "-3%",
 
       outputFile:
         path.join(
@@ -960,7 +2295,7 @@ async function main() {
   ]);
 
   console.log(
-    `[SHORTS] Payload ready`
+    "[SHORTS] Payload ready"
   );
 
   console.log(
@@ -984,16 +2319,28 @@ async function main() {
   );
 
   console.log(
+    `[SHORTS] Voice target: ${targetDurationSeconds} seconds`
+  );
+
+  console.log(
+    `[SHORTS] Background segments: ${backgroundPlan.segments.length}`
+  );
+
+  console.log(
     `[SHORTS] Output: ${OUTPUT_DIR}`
   );
 }
 
-main().catch((error) => {
-  console.error(
-    "[SHORTS] Payload generation failed:"
-  );
+main().catch(
+  (error) => {
+    console.error(
+      "[SHORTS] Payload generation failed:"
+    );
 
-  console.error(error);
+    console.error(
+      error
+    );
 
-  process.exit(1);
-});
+    process.exit(1);
+  }
+);
