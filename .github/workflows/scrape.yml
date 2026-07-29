@@ -92,7 +92,7 @@ jobs:
       SHORTS_OUTPUT_ROOT: "output"
       SHORTS_PRESENTER_FILE: "assets/presenters/ro_presenter_01.mp4"
 
-      SHORTS_TTS_VOICE: "ro-RO-AlinaNeural"
+      SHORTS_TTS_VOICE: "ro-RO-EmilNeural"
       SHORTS_TTS_RATE: "-5%"
 
       SHORTS_BACKGROUND_CHANGE_MIN_SECONDS: "4"
