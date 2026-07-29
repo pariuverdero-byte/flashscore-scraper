@@ -3,10 +3,52 @@ name: PariuVerde Daily Tickets + WordPress + YouTube Shorts
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 11 * * *" # 14:30 Romania during daylight saving time
+    # GitHub Actions cron uses UTC.
+    # Romania is UTC+3 in summer and UTC+2 in winter.
+    # Both possible UTC times are scheduled; the gate below allows
+    # the main job to continue only during the 15:00 hour in Bucharest.
+    - cron: "30 12 * * *"
+    - cron: "30 13 * * *"
 
 jobs:
+  schedule-gate:
+    runs-on: ubuntu-latest
+
+    outputs:
+      should_run: ${{ steps.check-time.outputs.should_run }}
+
+    steps:
+      - name: Check Bucharest local time
+        id: check-time
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual run detected. Workflow will continue."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          LOCAL_DATE=$(TZ=Europe/Bucharest date '+%Y-%m-%d')
+          LOCAL_TIME=$(TZ=Europe/Bucharest date '+%H:%M')
+          LOCAL_HOUR=$(TZ=Europe/Bucharest date '+%H')
+
+          echo "Bucharest date: ${LOCAL_DATE}"
+          echo "Bucharest time: ${LOCAL_TIME}"
+
+          if [ "${LOCAL_HOUR}" = "15" ]; then
+            echo "It is the 15:00 hour in Romania. Workflow will continue."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "This is the secondary DST-safe trigger. Main workflow will be skipped."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   scrape-build-publish:
+    needs: schedule-gate
+    if: needs.schedule-gate.outputs.should_run == 'true'
+
     runs-on: ubuntu-latest
     timeout-minutes: 75
 
@@ -46,8 +88,11 @@ jobs:
       SHORTS_OUTPUT_ROOT: "output"
       SHORTS_PRESENTER_FILE: "assets/presenters/ro_presenter_01.mp4"
 
-      SHORTS_TTS_VOICE: "ro-RO-EmilNeural"
-      SHORTS_TTS_RATE: "+2%"
+      SHORTS_TTS_VOICE: "ro-RO-AlinaNeural"
+      SHORTS_TTS_RATE: "-5%"
+
+      SHORTS_BACKGROUND_CHANGE_MIN_SECONDS: "4"
+      SHORTS_BACKGROUND_CHANGE_MAX_SECONDS: "7"
 
       # ==================================================
       # DISTRIBUTION CONFIGURATION
