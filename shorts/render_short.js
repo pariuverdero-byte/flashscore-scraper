@@ -78,6 +78,92 @@ const BACKGROUND_CHANGE_MAX_SECONDS =
     7
   );
 
+
+/*
+ * =========================================================
+ * BUILD_ALL_SHORTS VARIATION INPUTS
+ * =========================================================
+ *
+ * Aceste valori sunt trimise de ultima versiune
+ * build_all_shorts.js. Render-ul nu mai alege aleatoriu
+ * poziția, scala, oglindirea sau varianta de fundal.
+ */
+
+const VARIATION_SEED =
+  String(
+    process.env.SHORTS_VARIATION_SEED ||
+    "default"
+  );
+
+const BACKGROUND_VARIANT =
+  Math.max(
+    1,
+    Number(
+      process.env.SHORTS_BACKGROUND_VARIANT ||
+      1
+    ) || 1
+  );
+
+function readFiniteEnvironmentNumber(
+  name
+) {
+  const rawValue =
+    process.env[name];
+
+  if (
+    rawValue === undefined ||
+    rawValue === null ||
+    String(rawValue).trim() === ""
+  ) {
+    return null;
+  }
+
+  const value =
+    Number(rawValue);
+
+  return Number.isFinite(value)
+    ? value
+    : null;
+}
+
+function readEnvironmentBoolean(
+  name
+) {
+  const rawValue =
+    process.env[name];
+
+  if (
+    rawValue === undefined ||
+    rawValue === null ||
+    String(rawValue).trim() === ""
+  ) {
+    return null;
+  }
+
+  const normalized =
+    String(rawValue)
+      .trim()
+      .toLowerCase();
+
+  if (
+    normalized === "true" ||
+    normalized === "1" ||
+    normalized === "yes"
+  ) {
+    return true;
+  }
+
+  if (
+    normalized === "false" ||
+    normalized === "0" ||
+    normalized === "no"
+  ) {
+    return false;
+  }
+
+  return null;
+}
+
 /*
  * Culori de fundal.
  *
@@ -339,11 +425,91 @@ function createSelectionText(
 
 /*
  * =========================================================
- * RANDOM HELPERS
+ * DETERMINISTIC VARIATION HELPERS
  * =========================================================
+ *
+ * Aceeași combinație seed + etichetă produce aceeași valoare.
+ * Astfel, rerularea workflow-ului în aceeași zi generează
+ * aceleași variații vizuale.
  */
 
-function randomItem(items) {
+function hashString(
+  value
+) {
+  let hash =
+    2166136261;
+
+  const input =
+    String(value);
+
+  for (
+    let index = 0;
+    index < input.length;
+    index += 1
+  ) {
+    hash ^=
+      input.charCodeAt(
+        index
+      );
+
+    hash =
+      Math.imul(
+        hash,
+        16777619
+      );
+  }
+
+  return hash >>> 0;
+}
+
+function seededNumber(
+  label
+) {
+  let state =
+    hashString(
+      `${VARIATION_SEED}|${BACKGROUND_VARIANT}|${label}`
+    );
+
+  state +=
+    0x6D2B79F5;
+
+  let value =
+    state;
+
+  value =
+    Math.imul(
+      value ^
+      (
+        value >>> 15
+      ),
+      value | 1
+    );
+
+  value ^=
+    value +
+    Math.imul(
+      value ^
+      (
+        value >>> 7
+      ),
+      value | 61
+    );
+
+  return (
+    (
+      value ^
+      (
+        value >>> 14
+      )
+    ) >>> 0
+  ) /
+  4294967296;
+}
+
+function seededItem(
+  items,
+  label
+) {
   if (
     !Array.isArray(items) ||
     items.length === 0
@@ -351,31 +517,45 @@ function randomItem(items) {
     return null;
   }
 
-  return items[
+  const index =
     Math.floor(
-      Math.random() *
+      seededNumber(
+        label
+      ) *
       items.length
+    );
+
+  return items[
+    Math.min(
+      items.length - 1,
+      index
     )
   ];
 }
 
-function randomBoolean(
+function seededBoolean(
+  label,
   probability = 0.5
 ) {
   return (
-    Math.random() <
+    seededNumber(
+      label
+    ) <
     probability
   );
 }
 
-function randomNumber(
+function seededRange(
+  label,
   minimum,
   maximum,
   decimals = 2
 ) {
   const value =
     minimum +
-    Math.random() *
+    seededNumber(
+      label
+    ) *
     (
       maximum -
       minimum
@@ -434,7 +614,8 @@ function buildPeriodicBackground(
       currentTime;
 
     const requestedDuration =
-      randomNumber(
+      seededRange(
+        `background-duration-${segments.length}`,
         safeMin,
         safeMax,
         2
@@ -447,8 +628,9 @@ function buildPeriodicBackground(
       );
 
     let color =
-      randomItem(
-        BACKGROUND_OPTIONS
+      seededItem(
+        BACKGROUND_OPTIONS,
+        `background-color-${segments.length}`
       );
 
     /*
@@ -467,8 +649,9 @@ function buildPeriodicBackground(
         );
 
       color =
-        randomItem(
-          alternatives
+        seededItem(
+          alternatives,
+          `background-alternative-${segments.length}`
         );
     }
 
@@ -506,8 +689,9 @@ function buildPeriodicBackground(
       duration,
 
       color:
-        randomItem(
-          BACKGROUND_OPTIONS
+        seededItem(
+          BACKGROUND_OPTIONS,
+          "background-fallback"
         )
     });
   }
@@ -866,13 +1050,20 @@ function main() {
             maximumStartOffset
           )
         )
-      : randomNumber(
+      : seededRange(
+          "presenter-start-offset",
           0,
           maximumStartOffset,
           2
         );
 
+  const environmentZoom =
+    readFiniteEnvironmentNumber(
+      "SHORTS_PRESENTER_SCALE"
+    );
+
   const configuredZoom =
+    environmentZoom ??
     Number(
       payloadPresenterVariation
         .scale
@@ -883,11 +1074,18 @@ function main() {
       configuredZoom
     )
       ? configuredZoom
-      : randomItem(
-          ZOOM_OPTIONS
+      : seededItem(
+          ZOOM_OPTIONS,
+          "presenter-scale-fallback"
         );
 
+  const environmentXOffset =
+    readFiniteEnvironmentNumber(
+      "SHORTS_PRESENTER_OFFSET_X"
+    );
+
   const configuredXOffset =
+    environmentXOffset ??
     Number(
       payloadPresenterVariation
         .xOffset
@@ -898,11 +1096,18 @@ function main() {
       configuredXOffset
     )
       ? configuredXOffset
-      : randomItem(
-          HORIZONTAL_POSITION_OPTIONS
+      : seededItem(
+          HORIZONTAL_POSITION_OPTIONS,
+          "presenter-x-fallback"
         );
 
+  const environmentYOffset =
+    readFiniteEnvironmentNumber(
+      "SHORTS_PRESENTER_OFFSET_Y"
+    );
+
   const configuredYOffset =
+    environmentYOffset ??
     Number(
       payloadPresenterVariation
         .yOffset
@@ -913,20 +1118,29 @@ function main() {
       configuredYOffset
     )
       ? configuredYOffset
-      : randomNumber(
-          -15,
-          20,
+      : seededRange(
+          "presenter-y-fallback",
+          28,
+          58,
           0
         );
 
+  const environmentMirror =
+    readEnvironmentBoolean(
+      "SHORTS_PRESENTER_MIRROR"
+    );
+
   const presenterFlipped =
-    typeof payloadPresenterVariation
-      .mirror === "boolean"
-      ? payloadPresenterVariation
-          .mirror
-      : randomBoolean(
-          0.35
-        );
+    environmentMirror !== null
+      ? environmentMirror
+      : typeof payloadPresenterVariation
+          .mirror === "boolean"
+        ? payloadPresenterVariation
+            .mirror
+        : seededBoolean(
+            "presenter-mirror-fallback",
+            0.20
+          );
 
   /*
    * =========================================================
@@ -940,20 +1154,23 @@ function main() {
     );
 
   const introBackground =
-    randomItem(
-      BACKGROUND_OPTIONS
+    seededItem(
+      BACKGROUND_OPTIONS,
+      "intro-background"
     );
 
   const outroBackground =
-    randomItem(
+    seededItem(
       BACKGROUND_OPTIONS.filter(
         (item) =>
           item !==
           introBackground
-      )
+      ),
+      "outro-background"
     ) ||
-    randomItem(
-      BACKGROUND_OPTIONS
+    seededItem(
+      BACKGROUND_OPTIONS,
+      "outro-background-fallback"
     );
 
   /*
@@ -978,6 +1195,19 @@ function main() {
     `[SHORTS] Presenter duration: ${presenterDuration.toFixed(
       2
     )} seconds`
+  );
+
+
+  console.log(
+    `[SHORTS] Variation seed: ${VARIATION_SEED}`
+  );
+
+  console.log(
+    `[SHORTS] Background variant: ${BACKGROUND_VARIANT}`
+  );
+
+  console.log(
+    `[SHORTS] Presenter file: ${PRESENTER_FILE}`
   );
 
   console.log(
