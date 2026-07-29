@@ -38,11 +38,14 @@ const DEFAULT_CONFIG =
         siteUrl:
           "https://pariuverde.ro",
 
-        presenterFile:
+        presenterFiles: [
           "assets/presenters/ro_presenter_01.mp4",
+          "assets/presenters/ro_presenter_02.mp4",
+          "assets/presenters/ro_presenter_03.mp4"
+        ],
 
         ttsVoice:
-          "ro-RO-AlinaNeural",
+          "ro-RO-EmilNeural",
 
         ttsRate:
           "-5%"
@@ -63,8 +66,11 @@ const DEFAULT_CONFIG =
         siteUrl:
           "https://greenbettips.com",
 
-        presenterFile:
-          "assets/presenters/presenter-01.mp4",
+        presenterFiles: [
+          "assets/presenters/en_presenter_01.mp4",
+          "assets/presenters/en_presenter_02.mp4",
+          "assets/presenters/en_presenter_03.mp4"
+        ],
 
         ttsVoice:
           "en-US-AndrewNeural",
@@ -95,9 +101,296 @@ const SITE_URL =
     DEFAULT_CONFIG.siteUrl
   ).replace(/\/$/, "");
 
-const PRESENTER_FILE =
-  process.env.SHORTS_PRESENTER_FILE ||
-  DEFAULT_CONFIG.presenterFile;
+/*
+ * =========================================================
+ * PRESENTER AND VISUAL VARIATION
+ * =========================================================
+ */
+
+const PRESENTER_FILES =
+  String(
+    process.env.SHORTS_PRESENTER_FILES ||
+    ""
+  )
+    .split(",")
+    .map(
+      (item) =>
+        item.trim()
+    )
+    .filter(
+      Boolean
+    );
+
+const AVAILABLE_PRESENTERS =
+  PRESENTER_FILES.length > 0
+    ? PRESENTER_FILES
+    : DEFAULT_CONFIG.presenterFiles;
+
+function hashString(
+  value
+) {
+  let hash =
+    2166136261;
+
+  const input =
+    String(
+      value
+    );
+
+  for (
+    let index = 0;
+    index < input.length;
+    index += 1
+  ) {
+    hash ^=
+      input.charCodeAt(
+        index
+      );
+
+    hash =
+      Math.imul(
+        hash,
+        16777619
+      );
+  }
+
+  return hash >>> 0;
+}
+
+function seededNumber(
+  seed,
+  salt = ""
+) {
+  return (
+    hashString(
+      `${seed}|${salt}`
+    ) /
+    4294967295
+  );
+}
+
+function seededInteger(
+  seed,
+  salt,
+  minimum,
+  maximum
+) {
+  const min =
+    Math.ceil(
+      minimum
+    );
+
+  const max =
+    Math.floor(
+      maximum
+    );
+
+  return (
+    min +
+    Math.floor(
+      seededNumber(
+        seed,
+        salt
+      ) *
+      (
+        max -
+        min +
+        1
+      )
+    )
+  );
+}
+
+function seededFloat(
+  seed,
+  salt,
+  minimum,
+  maximum,
+  decimals = 3
+) {
+  const value =
+    minimum +
+    seededNumber(
+      seed,
+      salt
+    ) *
+    (
+      maximum -
+      minimum
+    );
+
+  return Number(
+    value.toFixed(
+      decimals
+    )
+  );
+}
+
+function buildDailySeed(
+  ticketType
+) {
+  const date =
+    String(
+      process.env.SHORTS_VARIATION_DATE ||
+      new Date()
+        .toISOString()
+        .slice(
+          0,
+          10
+        )
+    );
+
+  return [
+    LANGUAGE,
+    BRAND_NAME,
+    date,
+    ticketType
+  ].join("|");
+}
+
+function buildVisualVariation(
+  ticketType
+) {
+  const seed =
+    buildDailySeed(
+      ticketType
+    );
+
+  const presenterOverride =
+    String(
+      process.env.SHORTS_PRESENTER_FILE ||
+      ""
+    ).trim();
+
+  const presenterIndex =
+    seededInteger(
+      seed,
+      "presenter",
+      0,
+      AVAILABLE_PRESENTERS.length - 1
+    );
+
+  const presenterFile =
+    presenterOverride ||
+    AVAILABLE_PRESENTERS[
+      presenterIndex
+    ];
+
+  const scale =
+    seededFloat(
+      seed,
+      "scale",
+      Number(
+        process.env.SHORTS_PRESENTER_SCALE_MIN ||
+        "0.92"
+      ),
+      Number(
+        process.env.SHORTS_PRESENTER_SCALE_MAX ||
+        "0.99"
+      ),
+      3
+    );
+
+  const offsetX =
+    seededInteger(
+      seed,
+      "offset-x",
+      Number(
+        process.env.SHORTS_PRESENTER_OFFSET_X_MIN ||
+        "-24"
+      ),
+      Number(
+        process.env.SHORTS_PRESENTER_OFFSET_X_MAX ||
+        "24"
+      )
+    );
+
+  const offsetY =
+    seededInteger(
+      seed,
+      "offset-y",
+      Number(
+        process.env.SHORTS_PRESENTER_OFFSET_Y_MIN ||
+        "28"
+      ),
+      Number(
+        process.env.SHORTS_PRESENTER_OFFSET_Y_MAX ||
+        "58"
+      )
+    );
+
+  const mirrorChance =
+    Number(
+      process.env.SHORTS_PRESENTER_MIRROR_CHANCE ||
+      "0.20"
+    );
+
+  const mirror =
+    seededNumber(
+      seed,
+      "mirror"
+    ) <
+    mirrorChance;
+
+  const backgroundVariant =
+    seededInteger(
+      seed,
+      "background",
+      1,
+      Number(
+        process.env.SHORTS_BACKGROUND_VARIANT_COUNT ||
+        "12"
+      )
+    );
+
+  const backgroundChangeMinSeconds =
+    seededInteger(
+      seed,
+      "background-min",
+      Number(
+        process.env.SHORTS_BACKGROUND_CHANGE_MIN_SECONDS ||
+        "4"
+      ),
+      Number(
+        process.env.SHORTS_BACKGROUND_CHANGE_MIN_SECONDS_MAX ||
+        "5"
+      )
+    );
+
+  const backgroundChangeMaxSeconds =
+    seededInteger(
+      seed,
+      "background-max",
+      Math.max(
+        backgroundChangeMinSeconds + 1,
+        Number(
+          process.env.SHORTS_BACKGROUND_CHANGE_MAX_SECONDS_MIN ||
+          "6"
+        )
+      ),
+      Number(
+        process.env.SHORTS_BACKGROUND_CHANGE_MAX_SECONDS ||
+        "7"
+      )
+    );
+
+  return {
+    seed,
+    presenterFile,
+    presenterIndex:
+      presenterOverride
+        ? null
+        : presenterIndex,
+
+    scale,
+    offsetX,
+    offsetY,
+    mirror,
+    backgroundVariant,
+    backgroundChangeMinSeconds,
+    backgroundChangeMaxSeconds
+  };
+}
 
 const TTS_VOICE =
   String(
@@ -620,7 +913,8 @@ function renderVideo({
   voiceFile,
   subtitlesFile,
   videoFile,
-  renderTextDir
+  renderTextDir,
+  variation
 }) {
   runCommand(
     "node",
@@ -651,7 +945,35 @@ function renderVideo({
           payloadFile,
 
         SHORTS_PRESENTER_FILE:
-          PRESENTER_FILE,
+          variation.presenterFile,
+
+        SHORTS_VARIATION_SEED:
+          variation.seed,
+
+        SHORTS_PRESENTER_SCALE:
+          String(
+            variation.scale
+          ),
+
+        SHORTS_PRESENTER_OFFSET_X:
+          String(
+            variation.offsetX
+          ),
+
+        SHORTS_PRESENTER_OFFSET_Y:
+          String(
+            variation.offsetY
+          ),
+
+        SHORTS_PRESENTER_MIRROR:
+          variation.mirror
+            ? "true"
+            : "false",
+
+        SHORTS_BACKGROUND_VARIANT:
+          String(
+            variation.backgroundVariant
+          ),
 
         SHORTS_AUDIO_FILE:
           voiceFile,
@@ -666,14 +988,14 @@ function renderVideo({
           renderTextDir,
 
         SHORTS_BACKGROUND_CHANGE_MIN_SECONDS:
-          process.env
-            .SHORTS_BACKGROUND_CHANGE_MIN_SECONDS ||
-          "4",
+          String(
+            variation.backgroundChangeMinSeconds
+          ),
 
         SHORTS_BACKGROUND_CHANGE_MAX_SECONDS:
-          process.env
-            .SHORTS_BACKGROUND_CHANGE_MAX_SECONDS ||
-          "7"
+          String(
+            variation.backgroundChangeMaxSeconds
+          )
       }
     }
   );
@@ -928,6 +1250,43 @@ function buildTicket(
     scriptFile
   );
 
+  const variation =
+    buildVisualVariation(
+      ticket.type
+    );
+
+  requireFile(
+    variation.presenterFile
+  );
+
+  console.log(
+    `[BUILD] Variation seed: ${variation.seed}`
+  );
+
+  console.log(
+    `[BUILD] Presenter: ${variation.presenterFile}`
+  );
+
+  console.log(
+    `[BUILD] Presenter scale: ${variation.scale}`
+  );
+
+  console.log(
+    `[BUILD] Presenter offset: X=${variation.offsetX}, Y=${variation.offsetY}`
+  );
+
+  console.log(
+    `[BUILD] Presenter mirror: ${variation.mirror}`
+  );
+
+  console.log(
+    `[BUILD] Background variant: ${variation.backgroundVariant}`
+  );
+
+  console.log(
+    `[BUILD] Background timing: ${variation.backgroundChangeMinSeconds}-${variation.backgroundChangeMaxSeconds}s`
+  );
+
   generateVoice({
     scriptFile,
     voiceFile,
@@ -939,7 +1298,8 @@ function buildTicket(
     voiceFile,
     subtitlesFile,
     videoFile,
-    renderTextDir
+    renderTextDir,
+    variation
   });
 
   const videoDetails =
@@ -997,6 +1357,38 @@ function buildTicket(
     subtitlesFile,
     videoFile,
     manifestFile,
+
+    variation: {
+      seed:
+        variation.seed,
+
+      presenterFile:
+        variation.presenterFile,
+
+      presenterIndex:
+        variation.presenterIndex,
+
+      scale:
+        variation.scale,
+
+      offsetX:
+        variation.offsetX,
+
+      offsetY:
+        variation.offsetY,
+
+      mirror:
+        variation.mirror,
+
+      backgroundVariant:
+        variation.backgroundVariant,
+
+      backgroundChangeMinSeconds:
+        variation.backgroundChangeMinSeconds,
+
+      backgroundChangeMaxSeconds:
+        variation.backgroundChangeMaxSeconds
+    },
 
     youtube: {
       enabled:
@@ -1056,9 +1448,22 @@ function buildTicket(
  */
 
 function main() {
-  requireFile(
-    PRESENTER_FILE
-  );
+  if (
+    AVAILABLE_PRESENTERS.length === 0
+  ) {
+    throw new Error(
+      "No presenter files are configured."
+    );
+  }
+
+  for (
+    const presenterFile of
+    AVAILABLE_PRESENTERS
+  ) {
+    requireFile(
+      presenterFile
+    );
+  }
 
   const startedAt =
     new Date()
@@ -1088,7 +1493,9 @@ function main() {
   );
 
   console.log(
-    `[BUILD] Presenter: ${PRESENTER_FILE}`
+    `[BUILD] Available presenters: ${AVAILABLE_PRESENTERS.join(
+      ", "
+    )}`
   );
 
   console.log(
@@ -1215,8 +1622,8 @@ function main() {
       outputRoot:
         OUTPUT_ROOT,
 
-      presenterFile:
-        PRESENTER_FILE,
+      presenterFiles:
+        AVAILABLE_PRESENTERS,
 
       ttsVoice:
         TTS_VOICE,
@@ -1227,16 +1634,56 @@ function main() {
       youtubePrivacyStatus:
         YOUTUBE_PRIVACY_STATUS,
 
-      backgrounds: {
-        minimumChangeSeconds:
-          process.env
-            .SHORTS_BACKGROUND_CHANGE_MIN_SECONDS ||
-          "4",
+      visualVariation: {
+        deterministic:
+          true,
 
-        maximumChangeSeconds:
-          process.env
-            .SHORTS_BACKGROUND_CHANGE_MAX_SECONDS ||
-          "7"
+        date:
+          process.env.SHORTS_VARIATION_DATE ||
+          new Date()
+            .toISOString()
+            .slice(
+              0,
+              10
+            ),
+
+        presenterScaleRange: {
+          minimum:
+            process.env.SHORTS_PRESENTER_SCALE_MIN ||
+            "0.92",
+
+          maximum:
+            process.env.SHORTS_PRESENTER_SCALE_MAX ||
+            "0.99"
+        },
+
+        presenterOffsetXRange: {
+          minimum:
+            process.env.SHORTS_PRESENTER_OFFSET_X_MIN ||
+            "-24",
+
+          maximum:
+            process.env.SHORTS_PRESENTER_OFFSET_X_MAX ||
+            "24"
+        },
+
+        presenterOffsetYRange: {
+          minimum:
+            process.env.SHORTS_PRESENTER_OFFSET_Y_MIN ||
+            "28",
+
+          maximum:
+            process.env.SHORTS_PRESENTER_OFFSET_Y_MAX ||
+            "58"
+        },
+
+        presenterMirrorChance:
+          process.env.SHORTS_PRESENTER_MIRROR_CHANCE ||
+          "0.20",
+
+        backgroundVariantCount:
+          process.env.SHORTS_BACKGROUND_VARIANT_COUNT ||
+          "12"
       },
 
       platforms: {
