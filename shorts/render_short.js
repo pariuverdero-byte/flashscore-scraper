@@ -2,6 +2,12 @@ import fs from "fs";
 import path from "path";
 import { execFileSync } from "child_process";
 
+/*
+ * =========================================================
+ * INPUT / OUTPUT
+ * =========================================================
+ */
+
 const PAYLOAD_FILE =
   process.env.SHORTS_PAYLOAD_FILE ||
   "output/shorts_payload.json";
@@ -22,34 +28,83 @@ const TEMP_DIR =
   process.env.SHORTS_RENDER_TEXT_DIR ||
   "output/render_text";
 
+/*
+ * =========================================================
+ * FONTS
+ * =========================================================
+ */
+
 const FONT_REGULAR =
   "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
 
 const FONT_BOLD =
   "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
 
+/*
+ * =========================================================
+ * VIDEO DURATIONS
+ * =========================================================
+ */
+
 const INTRO_DURATION = 3;
 const OUTRO_DURATION = 3;
 const MAX_TOTAL_DURATION = 60;
 
 /*
- * Random visual variation settings.
+ * =========================================================
+ * PERIODIC BACKGROUND SETTINGS
+ * =========================================================
  *
- * A different combination is selected on every render:
- * - presenter start point;
- * - presenter horizontal position;
- * - presenter zoom;
- * - horizontal flip;
- * - background.
+ * Fundalul principal se schimbă aleatoriu
+ * la fiecare 4–7 secunde.
+ *
+ * Valorile pot fi suprascrise din workflow:
+ *
+ * SHORTS_BACKGROUND_CHANGE_MIN_SECONDS: 4
+ * SHORTS_BACKGROUND_CHANGE_MAX_SECONDS: 7
  */
+
+const BACKGROUND_CHANGE_MIN_SECONDS =
+  Number(
+    process.env
+      .SHORTS_BACKGROUND_CHANGE_MIN_SECONDS ||
+    4
+  );
+
+const BACKGROUND_CHANGE_MAX_SECONDS =
+  Number(
+    process.env
+      .SHORTS_BACKGROUND_CHANGE_MAX_SECONDS ||
+    7
+  );
+
+/*
+ * Culori de fundal.
+ *
+ * Sunt suficient de închise pentru ca:
+ * - textul alb să rămână lizibil;
+ * - verdele brandului să fie vizibil;
+ * - prezentatorul să iasă în evidență.
+ */
+
 const BACKGROUND_OPTIONS = [
   "0x07140D",
   "0x07170F",
   "0x0B1512",
   "0x0B171A",
   "0x111712",
-  "0x0C1218"
+  "0x0C1218",
+  "0x101827",
+  "0x151023",
+  "0x18120C",
+  "0x12121A"
 ];
+
+/*
+ * =========================================================
+ * PRESENTER VARIATIONS
+ * =========================================================
+ */
 
 const ZOOM_OPTIONS = [
   1.025,
@@ -68,6 +123,12 @@ const HORIZONTAL_POSITION_OPTIONS = [
   44
 ];
 
+/*
+ * =========================================================
+ * FILE HELPERS
+ * =========================================================
+ */
+
 function requireFile(filePath) {
   if (!fs.existsSync(filePath)) {
     throw new Error(
@@ -75,7 +136,9 @@ function requireFile(filePath) {
     );
   }
 
-  if (fs.statSync(filePath).size === 0) {
+  if (
+    fs.statSync(filePath).size === 0
+  ) {
     throw new Error(
       `Required file is empty: ${filePath}`
     );
@@ -89,19 +152,30 @@ function cleanText(value) {
     .trim();
 }
 
-function shorten(value, maxLength) {
-  const text = cleanText(value);
+function shorten(
+  value,
+  maxLength
+) {
+  const text =
+    cleanText(value);
 
-  if (text.length <= maxLength) {
+  if (
+    text.length <= maxLength
+  ) {
     return text;
   }
 
   return `${text
-    .slice(0, maxLength - 3)
+    .slice(
+      0,
+      maxLength - 3
+    )
     .trim()}...`;
 }
 
-function escapeFilterPath(filePath) {
+function escapeFilterPath(
+  filePath
+) {
   return path
     .resolve(filePath)
     .replace(/\\/g, "/")
@@ -109,9 +183,15 @@ function escapeFilterPath(filePath) {
     .replace(/'/g, "\\'");
 }
 
-function writeTextFile(filename, value) {
+function writeTextFile(
+  filename,
+  value
+) {
   const filePath =
-    path.join(TEMP_DIR, filename);
+    path.join(
+      TEMP_DIR,
+      filename
+    );
 
   fs.writeFileSync(
     filePath,
@@ -122,24 +202,37 @@ function writeTextFile(filename, value) {
   return filePath;
 }
 
-function getMediaDuration(filePath) {
-  const output = execFileSync(
-    "ffprobe",
-    [
-      "-v",
-      "error",
-      "-show_entries",
-      "format=duration",
-      "-of",
-      "default=noprint_wrappers=1:nokey=1",
-      filePath
-    ],
-    {
-      encoding: "utf8"
-    }
-  ).trim();
+/*
+ * =========================================================
+ * MEDIA HELPERS
+ * =========================================================
+ */
 
-  const duration = Number(output);
+function getMediaDuration(
+  filePath
+) {
+  const output =
+    execFileSync(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+
+        "-show_entries",
+        "format=duration",
+
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+
+        filePath
+      ],
+      {
+        encoding: "utf8"
+      }
+    ).trim();
+
+  const duration =
+    Number(output);
 
   if (
     !Number.isFinite(duration) ||
@@ -153,11 +246,18 @@ function getMediaDuration(filePath) {
   return duration;
 }
 
+/*
+ * =========================================================
+ * DATE FORMATTING
+ * =========================================================
+ */
+
 function formatDate(
   dateValue,
   language = "en"
 ) {
-  const value = cleanText(dateValue);
+  const value =
+    cleanText(dateValue);
 
   if (!value) {
     return language === "ro"
@@ -165,36 +265,56 @@ function formatDate(
       : "TODAY";
   }
 
-  const match = value.match(
-    /^(\d{4})-(\d{2})-(\d{2})$/
-  );
+  const match =
+    value.match(
+      /^(\d{4})-(\d{2})-(\d{2})$/
+    );
 
   if (!match) {
     return value.toUpperCase();
   }
 
-  const [, year, month, day] = match;
+  const [
+    ,
+    year,
+    month,
+    day
+  ] = match;
 
-  const date = new Date(
-    Number(year),
-    Number(month) - 1,
-    Number(day)
-  );
+  const date =
+    new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day)
+    );
 
   return new Intl.DateTimeFormat(
     language === "ro"
       ? "ro-RO"
       : "en-US",
     {
-      weekday: "long",
-      month: "long",
-      day: "numeric",
-      year: "numeric"
+      weekday:
+        "long",
+
+      month:
+        "long",
+
+      day:
+        "numeric",
+
+      year:
+        "numeric"
     }
   )
     .format(date)
     .toUpperCase();
 }
+
+/*
+ * =========================================================
+ * SELECTION TEXT
+ * =========================================================
+ */
 
 function createSelectionText(
   selection,
@@ -206,7 +326,8 @@ function createSelectionText(
       : " vs ";
 
   const teams =
-    selection.home && selection.away
+    selection.home &&
+    selection.away
       ? `${selection.home}${separator}${selection.away}`
       : selection.teams;
 
@@ -216,16 +337,35 @@ function createSelectionText(
   );
 }
 
+/*
+ * =========================================================
+ * RANDOM HELPERS
+ * =========================================================
+ */
+
 function randomItem(items) {
+  if (
+    !Array.isArray(items) ||
+    items.length === 0
+  ) {
+    return null;
+  }
+
   return items[
     Math.floor(
-      Math.random() * items.length
+      Math.random() *
+      items.length
     )
   ];
 }
 
-function randomBoolean(probability = 0.5) {
-  return Math.random() < probability;
+function randomBoolean(
+  probability = 0.5
+) {
+  return (
+    Math.random() <
+    probability
+  );
 }
 
 function randomNumber(
@@ -236,42 +376,260 @@ function randomNumber(
   const value =
     minimum +
     Math.random() *
-      (maximum - minimum);
+    (
+      maximum -
+      minimum
+    );
 
   return Number(
-    value.toFixed(decimals)
+    value.toFixed(
+      decimals
+    )
   );
 }
+
+/*
+ * =========================================================
+ * PERIODIC BACKGROUND GENERATOR
+ * =========================================================
+ *
+ * Creează un fundal de bază și aplică succesiv
+ * culori diferite pe intervale de timp.
+ */
+
+function buildPeriodicBackground(
+  duration
+) {
+  const safeMin =
+    Number.isFinite(
+      BACKGROUND_CHANGE_MIN_SECONDS
+    )
+      ? Math.max(
+          1,
+          BACKGROUND_CHANGE_MIN_SECONDS
+        )
+      : 4;
+
+  const safeMax =
+    Number.isFinite(
+      BACKGROUND_CHANGE_MAX_SECONDS
+    )
+      ? Math.max(
+          safeMin,
+          BACKGROUND_CHANGE_MAX_SECONDS
+        )
+      : 7;
+
+  const segments = [];
+
+  let currentTime = 0;
+  let previousColor = null;
+
+  while (
+    currentTime <
+    duration - 0.01
+  ) {
+    const remaining =
+      duration -
+      currentTime;
+
+    const requestedDuration =
+      randomNumber(
+        safeMin,
+        safeMax,
+        2
+      );
+
+    const segmentDuration =
+      Math.min(
+        requestedDuration,
+        remaining
+      );
+
+    let color =
+      randomItem(
+        BACKGROUND_OPTIONS
+      );
+
+    /*
+     * Evităm repetarea imediată
+     * a aceleiași culori.
+     */
+    if (
+      color === previousColor &&
+      BACKGROUND_OPTIONS.length > 1
+    ) {
+      const alternatives =
+        BACKGROUND_OPTIONS.filter(
+          (item) =>
+            item !==
+            previousColor
+        );
+
+      color =
+        randomItem(
+          alternatives
+        );
+    }
+
+    segments.push({
+      start:
+        currentTime,
+
+      end:
+        currentTime +
+        segmentDuration,
+
+      duration:
+        segmentDuration,
+
+      color
+    });
+
+    previousColor =
+      color;
+
+    currentTime +=
+      segmentDuration;
+  }
+
+  if (
+    segments.length === 0
+  ) {
+    segments.push({
+      start:
+        0,
+
+      end:
+        duration,
+
+      duration,
+
+      color:
+        randomItem(
+          BACKGROUND_OPTIONS
+        )
+    });
+  }
+
+  /*
+   * Fundalul de bază.
+   */
+  const baseColor =
+    segments[0].color;
+
+  const filters = [
+    `color=c=${baseColor}:` +
+    "s=1080x1920:" +
+    "r=30:" +
+    `d=${duration.toFixed(
+      3
+    )}` +
+    "[periodic_bg_0]"
+  ];
+
+  /*
+   * Fiecare segment colorează tot cadrul
+   * doar în intervalul său.
+   */
+  segments.forEach(
+    (
+      segment,
+      index
+    ) => {
+      const inputLabel =
+        index === 0
+          ? "periodic_bg_0"
+          : `periodic_bg_${index}`;
+
+      const outputLabel =
+        index ===
+        segments.length - 1
+          ? "main_bg"
+          : `periodic_bg_${index + 1}`;
+
+      const start =
+        segment.start.toFixed(
+          3
+        );
+
+      const end =
+        segment.end.toFixed(
+          3
+        );
+
+      filters.push(
+        `[${inputLabel}]` +
+
+        "drawbox=" +
+        "x=0:" +
+        "y=0:" +
+        "w=iw:" +
+        "h=ih:" +
+        `color=${segment.color}:` +
+        "t=fill:" +
+
+        `enable='between(t\\,${start}\\,${end})'` +
+
+        `[${outputLabel}]`
+      );
+    }
+  );
+
+  return {
+    segments,
+    filters
+  };
+}
+
+/*
+ * =========================================================
+ * TICKET LAYOUT
+ * =========================================================
+ */
 
 function getTicketLayout(
   ticketType,
   selectionCount
 ) {
   /*
-   * Ticket of the Day generally has 3–4 selections,
-   * so it receives a taller card and smaller text.
-   *
-   * Odds 2 generally has 2–3 selections and receives
-   * a more compact card.
+   * Biletul zilei poate avea
+   * până la patru selecții.
    */
 
   if (
-    ticketType === "biletul_zilei" ||
+    ticketType ===
+      "biletul_zilei" ||
     selectionCount === 4
   ) {
     return {
-      cardX: 35,
-      cardY: 35,
-      cardWidth: 1010,
-      cardHeight: 435,
+      cardX:
+        35,
 
-      headlineY: 63,
-      headlineFontSize: 39,
+      cardY:
+        35,
 
-      oddsY: 120,
-      oddsFontSize: 33,
+      cardWidth:
+        1010,
 
-      selectionFontSize: 22,
+      cardHeight:
+        435,
+
+      headlineY:
+        63,
+
+      headlineFontSize:
+        39,
+
+      oddsY:
+        120,
+
+      oddsFontSize:
+        33,
+
+      selectionFontSize:
+        22,
+
       selectionY: [
         190,
         245,
@@ -279,23 +637,44 @@ function getTicketLayout(
         355
       ],
 
-      selectionMaxLength: 82
+      selectionMaxLength:
+        82
     };
   }
 
+  /*
+   * Bilet Cota 2 are, în mod normal,
+   * două sau trei selecții.
+   */
+
   return {
-    cardX: 45,
-    cardY: 40,
-    cardWidth: 990,
-    cardHeight: 365,
+    cardX:
+      45,
 
-    headlineY: 70,
-    headlineFontSize: 42,
+    cardY:
+      40,
 
-    oddsY: 130,
-    oddsFontSize: 36,
+    cardWidth:
+      990,
 
-    selectionFontSize: 25,
+    cardHeight:
+      365,
+
+    headlineY:
+      70,
+
+    headlineFontSize:
+      42,
+
+    oddsY:
+      130,
+
+    oddsFontSize:
+      36,
+
+    selectionFontSize:
+      25,
+
     selectionY: [
       205,
       260,
@@ -303,25 +682,53 @@ function getTicketLayout(
       370
     ],
 
-    selectionMaxLength: 72
+    selectionMaxLength:
+      72
   };
 }
 
-function main() {
-  requireFile(PAYLOAD_FILE);
-  requireFile(PRESENTER_FILE);
-  requireFile(AUDIO_FILE);
-  requireFile(FONT_REGULAR);
-  requireFile(FONT_BOLD);
+/*
+ * =========================================================
+ * MAIN
+ * =========================================================
+ */
 
-  const payload = JSON.parse(
-    fs.readFileSync(
-      PAYLOAD_FILE,
-      "utf8"
-    )
+function main() {
+  requireFile(
+    PAYLOAD_FILE
   );
 
-  if (payload.status === "skipped") {
+  requireFile(
+    PRESENTER_FILE
+  );
+
+  requireFile(
+    AUDIO_FILE
+  );
+
+  requireFile(
+    FONT_REGULAR
+  );
+
+  requireFile(
+    FONT_BOLD
+  );
+
+  /*
+   * Read payload.
+   */
+  const payload =
+    JSON.parse(
+      fs.readFileSync(
+        PAYLOAD_FILE,
+        "utf8"
+      )
+    );
+
+  if (
+    payload.status ===
+    "skipped"
+  ) {
     console.log(
       `[SHORTS] Video rendering skipped: ${
         payload.reason ||
@@ -332,7 +739,10 @@ function main() {
     return;
   }
 
-  if (payload.status !== "ready") {
+  if (
+    payload.status !==
+    "ready"
+  ) {
     throw new Error(
       `Unexpected Shorts payload status: ${payload.status}`
     );
@@ -346,49 +756,71 @@ function main() {
     ).toLowerCase();
 
   const ticketType =
-    cleanText(payload.ticketType);
+    cleanText(
+      payload.ticketType
+    );
 
   /*
-   * Ticket of the Day can contain four events.
-   * All four are now displayed.
+   * Afișăm maximum patru selecții.
    */
   const selections =
-    Array.isArray(payload.selections)
-      ? payload.selections.slice(0, 4)
+    Array.isArray(
+      payload.selections
+    )
+      ? payload.selections.slice(
+          0,
+          4
+        )
       : [];
 
-  if (selections.length === 0) {
+  if (
+    selections.length === 0
+  ) {
     throw new Error(
       "No selections were found in the Shorts payload."
     );
   }
 
   fs.mkdirSync(
-    path.dirname(OUTPUT_FILE),
+    path.dirname(
+      OUTPUT_FILE
+    ),
     {
-      recursive: true
+      recursive:
+        true
     }
   );
 
   fs.mkdirSync(
     TEMP_DIR,
     {
-      recursive: true
+      recursive:
+        true
     }
   );
 
+  /*
+   * Media durations.
+   */
   const audioDuration =
-    getMediaDuration(AUDIO_FILE);
+    getMediaDuration(
+      AUDIO_FILE
+    );
 
   const presenterDuration =
-    getMediaDuration(PRESENTER_FILE);
+    getMediaDuration(
+      PRESENTER_FILE
+    );
 
   const finalDuration =
     INTRO_DURATION +
     audioDuration +
     OUTRO_DURATION;
 
-  if (finalDuration > MAX_TOTAL_DURATION) {
+  if (
+    finalDuration >
+    MAX_TOTAL_DURATION
+  ) {
     throw new Error(
       `Final video would be ${finalDuration.toFixed(
         2
@@ -397,74 +829,145 @@ function main() {
   }
 
   /*
-   * Random presenter variation.
-   *
-   * Start offset remains inside the original presenter clip.
-   * The clip is looped afterward by FFmpeg.
+   * =========================================================
+   * PRESENTER VARIATION
+   * =========================================================
    */
+
+  const payloadPresenterVariation =
+    payload.visuals
+      ?.presenterVariation ||
+    {};
+
   const maximumStartOffset =
     Math.max(
       0,
       Math.min(
-        presenterDuration - 0.35,
+        presenterDuration -
+          0.35,
         2.6
       )
     );
 
+  const configuredStartOffset =
+    Number(
+      payloadPresenterVariation
+        .startOffsetSeconds
+    );
+
   const presenterStartOffset =
-    randomNumber(
-      0,
-      maximumStartOffset,
-      2
+    Number.isFinite(
+      configuredStartOffset
+    )
+      ? Math.max(
+          0,
+          Math.min(
+            configuredStartOffset,
+            maximumStartOffset
+          )
+        )
+      : randomNumber(
+          0,
+          maximumStartOffset,
+          2
+        );
+
+  const configuredZoom =
+    Number(
+      payloadPresenterVariation
+        .scale
     );
 
   const presenterZoom =
-    randomItem(ZOOM_OPTIONS);
+    Number.isFinite(
+      configuredZoom
+    )
+      ? configuredZoom
+      : randomItem(
+          ZOOM_OPTIONS
+        );
+
+  const configuredXOffset =
+    Number(
+      payloadPresenterVariation
+        .xOffset
+    );
 
   const presenterXOffset =
+    Number.isFinite(
+      configuredXOffset
+    )
+      ? configuredXOffset
+      : randomItem(
+          HORIZONTAL_POSITION_OPTIONS
+        );
+
+  const configuredYOffset =
+    Number(
+      payloadPresenterVariation
+        .yOffset
+    );
+
+  const presenterYOffset =
+    Number.isFinite(
+      configuredYOffset
+    )
+      ? configuredYOffset
+      : randomNumber(
+          -15,
+          20,
+          0
+        );
+
+  const presenterFlipped =
+    typeof payloadPresenterVariation
+      .mirror === "boolean"
+      ? payloadPresenterVariation
+          .mirror
+      : randomBoolean(
+          0.35
+        );
+
+  /*
+   * =========================================================
+   * BACKGROUND VARIATION
+   * =========================================================
+   */
+
+  const periodicBackground =
+    buildPeriodicBackground(
+      audioDuration
+    );
+
+  const introBackground =
     randomItem(
-      HORIZONTAL_POSITION_OPTIONS
+      BACKGROUND_OPTIONS
+    );
+
+  const outroBackground =
+    randomItem(
+      BACKGROUND_OPTIONS.filter(
+        (item) =>
+          item !==
+          introBackground
+      )
+    ) ||
+    randomItem(
+      BACKGROUND_OPTIONS
     );
 
   /*
-   * Approximately 45% of videos are mirrored.
+   * Layout.
    */
-  const presenterFlipped =
-    randomBoolean(0.45);
-
-  const mainBackground =
-    randomItem(BACKGROUND_OPTIONS);
-
-  let introBackground =
-    randomItem(BACKGROUND_OPTIONS);
-
-  let outroBackground =
-    randomItem(BACKGROUND_OPTIONS);
-
-  /*
-   * Avoid having all three scenes use exactly
-   * the same background when alternatives exist.
-   */
-  if (
-    introBackground === mainBackground
-  ) {
-    introBackground =
-      randomItem(BACKGROUND_OPTIONS);
-  }
-
-  if (
-    outroBackground === mainBackground
-  ) {
-    outroBackground =
-      randomItem(BACKGROUND_OPTIONS);
-  }
-
   const layout =
     getTicketLayout(
       ticketType,
       selections.length
     );
 
+  /*
+   * Logs.
+   */
   console.log(
     `[SHORTS] Audio duration: ${audioDuration.toFixed(
       2
@@ -492,11 +995,40 @@ function main() {
   );
 
   console.log(
+    `[SHORTS] Presenter vertical offset: ${presenterYOffset}px`
+  );
+
+  console.log(
     `[SHORTS] Presenter mirrored: ${presenterFlipped}`
   );
 
   console.log(
-    `[SHORTS] Main background: ${mainBackground}`
+    `[SHORTS] Periodic background segments: ${periodicBackground.segments.length}`
+  );
+
+  periodicBackground
+    .segments
+    .forEach(
+      (
+        segment,
+        index
+      ) => {
+        console.log(
+          `[SHORTS] Background ${index + 1}: ` +
+          `${segment.color}, ` +
+          `${segment.duration.toFixed(
+            2
+          )} seconds`
+        );
+      }
+    );
+
+  console.log(
+    `[SHORTS] Intro background: ${introBackground}`
+  );
+
+  console.log(
+    `[SHORTS] Outro background: ${outroBackground}`
   );
 
   console.log(
@@ -507,9 +1039,16 @@ function main() {
     `[SHORTS] Displayed selections: ${selections.length}`
   );
 
+  /*
+   * =========================================================
+   * PAYLOAD TEXTS
+   * =========================================================
+   */
+
   const ticketTitle =
     payload.ticketLabel ||
-    payload.visuals?.headline ||
+    payload.visuals
+      ?.headline ||
     (
       language === "ro"
         ? "BILET COTA 2"
@@ -517,13 +1056,16 @@ function main() {
     );
 
   const totalOdds =
-    payload.visuals?.totalOdds ||
+    payload.visuals
+      ?.totalOdds ||
     payload.totalOdds ||
     "-";
 
   const brandDisplay =
-    payload.brand?.displayName ||
-    payload.visuals?.brand ||
+    payload.brand
+      ?.displayName ||
+    payload.visuals
+      ?.brand ||
     (
       language === "ro"
         ? "PARIUVERDE"
@@ -531,9 +1073,12 @@ function main() {
     );
 
   const websiteDisplay =
-    payload.brand?.websiteDisplay ||
-    payload.visuals?.website ||
-    payload.visuals?.callToAction ||
+    payload.brand
+      ?.websiteDisplay ||
+    payload.visuals
+      ?.website ||
+    payload.visuals
+      ?.callToAction ||
     (
       language === "ro"
         ? "WWW.PARIUVERDE.RO"
@@ -541,7 +1086,8 @@ function main() {
     );
 
   const combinedOddsLabel =
-    payload.visuals?.combinedOddsLabel ||
+    payload.visuals
+      ?.combinedOddsLabel ||
     (
       language === "ro"
         ? "COTA TOTALĂ"
@@ -549,7 +1095,8 @@ function main() {
     );
 
   const outroTop =
-    payload.visuals?.outroTop ||
+    payload.visuals
+      ?.outroTop ||
     (
       language === "ro"
         ? "ȚI-AU PLĂCUT PONTURILE?"
@@ -557,7 +1104,8 @@ function main() {
     );
 
   const subscribeText =
-    payload.visuals?.subscribe ||
+    payload.visuals
+      ?.subscribe ||
     (
       language === "ro"
         ? "ABONEAZĂ-TE"
@@ -565,7 +1113,8 @@ function main() {
     );
 
   const outroMessage =
-    payload.visuals?.outroMessage ||
+    payload.visuals
+      ?.outroMessage ||
     (
       language === "ro"
         ? "PENTRU PONTURI ZILNICE"
@@ -590,6 +1139,12 @@ function main() {
 
   const mainOddsText =
     `${combinedOddsLabel}: ${totalOdds}`;
+
+  /*
+   * =========================================================
+   * WRITE TEXT FILES
+   * =========================================================
+   */
 
   const introBrandFile =
     writeTextFile(
@@ -630,7 +1185,8 @@ function main() {
   const mainHeadlineFile =
     writeTextFile(
       "main_headline.txt",
-      payload.visuals?.headline ||
+      payload.visuals
+        ?.headline ||
       ticketTitle
     );
 
@@ -650,6 +1206,7 @@ function main() {
     selectionFiles.push(
       writeTextFile(
         `selection_${index + 1}.txt`,
+
         selections[index]
           ? shorten(
               createSelectionText(
@@ -699,8 +1256,16 @@ function main() {
       brandDisplay
     );
 
+  /*
+   * =========================================================
+   * ESCAPE PATHS FOR FFMPEG
+   * =========================================================
+   */
+
   const boldFont =
-    escapeFilterPath(FONT_BOLD);
+    escapeFilterPath(
+      FONT_BOLD
+    );
 
   const introBrandPath =
     escapeFilterPath(
@@ -777,26 +1342,42 @@ function main() {
       outroBrandFile
     );
 
+  /*
+   * =========================================================
+   * VISUAL VALUES
+   * =========================================================
+   */
+
   const introFadeOutStart =
-    INTRO_DURATION - 0.35;
+    INTRO_DURATION -
+    0.35;
 
   const outroFadeOutStart =
-    OUTRO_DURATION - 0.35;
+    OUTRO_DURATION -
+    0.35;
 
   const presenterWidth =
     Math.round(
-      1080 * presenterZoom
+      1080 *
+      presenterZoom
     );
 
   const presenterHeight =
     Math.round(
-      1920 * presenterZoom
+      1920 *
+      presenterZoom
     );
 
   const horizontalFlipFilter =
     presenterFlipped
       ? ",hflip"
       : "";
+
+  /*
+   * =========================================================
+   * SELECTION DRAW FILTERS
+   * =========================================================
+   */
 
   const selectionDrawFilters =
     selectionPaths
@@ -807,248 +1388,429 @@ function main() {
         ) =>
           `drawtext=fontfile='${boldFont}':` +
           `textfile='${selectionPath}':` +
-          `fontcolor=white:` +
+          "fontcolor=white:" +
           `fontsize=${layout.selectionFontSize}:` +
-          `x=(w-text_w)/2:` +
+          "x=(w-text_w)/2:" +
           `y=${layout.selectionY[index]}`
       )
       .join(",");
 
+  /*
+   * =========================================================
+   * FFMPEG FILTER GRAPH
+   * =========================================================
+   */
+
   const filter = [
     /*
+     * =====================================================
      * INTRO
+     * =====================================================
      */
-    `color=c=${introBackground}:s=1080x1920:r=30:d=${INTRO_DURATION}[intro_bg]`,
+
+    `color=c=${introBackground}:` +
+      "s=1080x1920:" +
+      "r=30:" +
+      `d=${INTRO_DURATION}` +
+      "[intro_bg]",
 
     "[intro_bg]" +
-      "drawbox=x=0:y=0:w=1080:h=18:" +
-      "color=0x38E878:t=fill," +
 
-      "drawbox=x=90:y=235:w=900:h=2:" +
-      "color=0x38E878@0.65:t=fill," +
+      "drawbox=" +
+      "x=0:" +
+      "y=0:" +
+      "w=1080:" +
+      "h=18:" +
+      "color=0x38E878:" +
+      "t=fill," +
+
+      "drawbox=" +
+      "x=90:" +
+      "y=235:" +
+      "w=900:" +
+      "h=2:" +
+      "color=0x38E878@0.65:" +
+      "t=fill," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${introBrandPath}':` +
-      "fontcolor=0x38E878:fontsize=50:" +
-      "x=(w-text_w)/2:y=125," +
+      "fontcolor=0x38E878:" +
+      "fontsize=50:" +
+      "x=(w-text_w)/2:" +
+      "y=125," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${introTitlePath}':` +
-      "fontcolor=white:fontsize=66:" +
-      "x=(w-text_w)/2:y=365," +
+      "fontcolor=white:" +
+      "fontsize=66:" +
+      "x=(w-text_w)/2:" +
+      "y=365," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${introDatePath}':` +
-      "fontcolor=0xD8E2DC:fontsize=38:" +
-      "x=(w-text_w)/2:y=510," +
+      "fontcolor=0xD8E2DC:" +
+      "fontsize=38:" +
+      "x=(w-text_w)/2:" +
+      "y=510," +
 
-      "drawbox=x=180:y=735:w=720:h=440:" +
-      "color=black@0.40:t=fill," +
+      "drawbox=" +
+      "x=180:" +
+      "y=735:" +
+      "w=720:" +
+      "h=440:" +
+      "color=black@0.40:" +
+      "t=fill," +
 
-      "drawbox=x=180:y=735:w=720:h=440:" +
-      "color=0x38E878@0.80:t=4," +
+      "drawbox=" +
+      "x=180:" +
+      "y=735:" +
+      "w=720:" +
+      "h=440:" +
+      "color=0x38E878@0.80:" +
+      "t=4," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${introOddsLabelPath}':` +
-      "fontcolor=white:fontsize=42:" +
-      "x=(w-text_w)/2:y=820," +
+      "fontcolor=white:" +
+      "fontsize=42:" +
+      "x=(w-text_w)/2:" +
+      "y=820," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${introOddsPath}':` +
-      "fontcolor=0x38E878:fontsize=145:" +
-      "x=(w-text_w)/2:y=920," +
+      "fontcolor=0x38E878:" +
+      "fontsize=145:" +
+      "x=(w-text_w)/2:" +
+      "y=920," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${introFooterPath}':` +
-      "fontcolor=white@0.80:fontsize=32:" +
-      "x=(w-text_w)/2:y=1550," +
+      "fontcolor=white@0.80:" +
+      "fontsize=32:" +
+      "x=(w-text_w)/2:" +
+      "y=1550," +
 
-      "fade=t=in:st=0:d=0.35," +
-      `fade=t=out:st=${introFadeOutStart}:d=0.35,` +
+      "fade=" +
+      "t=in:" +
+      "st=0:" +
+      "d=0.35," +
+
+      "fade=" +
+      "t=out:" +
+      `st=${introFadeOutStart}:` +
+      "d=0.35," +
+
       "format=yuv420p," +
       "setsar=1," +
-      "setpts=PTS-STARTPTS[intro_v]",
+      "setpts=PTS-STARTPTS" +
+
+      "[intro_v]",
 
     /*
-     * INTRO SILENT AUDIO
+     * Intro silent audio.
      */
-    "anullsrc=r=48000:cl=stereo," +
+
+    "anullsrc=" +
+      "r=48000:" +
+      "cl=stereo," +
+
       `atrim=duration=${INTRO_DURATION},` +
-      "asetpts=PTS-STARTPTS[intro_a]",
+
+      "asetpts=PTS-STARTPTS" +
+
+      "[intro_a]",
 
     /*
+     * =====================================================
      * PRESENTER
-     *
-     * The presenter is randomly:
-     * - offset in time;
-     * - zoomed;
-     * - shifted left or right;
-     * - mirrored.
+     * =====================================================
      */
+
     "[0:v]" +
+
       "scale=1080:1920:" +
       "force_original_aspect_ratio=decrease," +
+
       "pad=1080:1920:" +
-      "(ow-iw)/2:(oh-ih)/2:" +
+      "(ow-iw)/2:" +
+      "(oh-ih)/2:" +
       "color=0x00FF00," +
+
       "fps=30," +
-      "chromakey=0x00FF00:0.18:0.08," +
+
+      "chromakey=" +
+      "0x00FF00:" +
+      "0.18:" +
+      "0.08," +
+
       "format=rgba," +
+
       `scale=${presenterWidth}:${presenterHeight}` +
+
       horizontalFlipFilter +
+
       "[person]",
 
     /*
-     * RANDOM MAIN BACKGROUND
+     * =====================================================
+     * PERIODIC RANDOM BACKGROUND
+     * =====================================================
      */
-    `color=c=${mainBackground}:s=1080x1920:r=30:d=${audioDuration.toFixed(
-      3
-    )}[main_bg]`,
+
+    ...periodicBackground.filters,
 
     /*
-     * RANDOMLY POSITIONED PRESENTER
+     * =====================================================
+     * PRESENTER OVER BACKGROUND
+     * =====================================================
      */
+
     "[main_bg][person]" +
+
       `overlay=(W-w)/2+${presenterXOffset}:` +
-      "(H-h)/2:" +
-      "shortest=1[main_base]",
+      `(H-h)/2+${presenterYOffset}:` +
+      "shortest=1" +
+
+      "[main_base]",
 
     /*
-     * TICKET-SPECIFIC CARD LAYOUT
+     * =====================================================
+     * TICKET CARD
+     * =====================================================
      */
+
     "[main_base]" +
-      `drawbox=x=${layout.cardX}:` +
-      `y=${layout.cardY}:` +
-      `w=${layout.cardWidth}:` +
-      `h=${layout.cardHeight}:` +
-      "color=black@0.68:t=fill," +
 
       `drawbox=x=${layout.cardX}:` +
       `y=${layout.cardY}:` +
       `w=${layout.cardWidth}:` +
       `h=${layout.cardHeight}:` +
-      "color=0x38E878@0.65:t=3," +
+      "color=black@0.68:" +
+      "t=fill," +
+
+      `drawbox=x=${layout.cardX}:` +
+      `y=${layout.cardY}:` +
+      `w=${layout.cardWidth}:` +
+      `h=${layout.cardHeight}:` +
+      "color=0x38E878@0.65:" +
+      "t=3," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${mainHeadlinePath}':` +
-      `fontcolor=white:` +
+      "fontcolor=white:" +
       `fontsize=${layout.headlineFontSize}:` +
-      `x=(w-text_w)/2:` +
+      "x=(w-text_w)/2:" +
       `y=${layout.headlineY},` +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${mainTotalOddsPath}':` +
-      `fontcolor=0x38E878:` +
+      "fontcolor=0x38E878:" +
       `fontsize=${layout.oddsFontSize}:` +
-      `x=(w-text_w)/2:` +
+      "x=(w-text_w)/2:" +
       `y=${layout.oddsY},` +
 
       selectionDrawFilters +
+
       "," +
 
-      "drawbox=x=45:y=1765:w=990:h=85:" +
-      "color=black@0.72:t=fill," +
+      "drawbox=" +
+      "x=45:" +
+      "y=1765:" +
+      "w=990:" +
+      "h=85:" +
+      "color=black@0.72:" +
+      "t=fill," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${mainCtaPath}':` +
-      "fontcolor=0x38E878:fontsize=30:" +
-      "x=(w-text_w)/2:y=1790," +
+      "fontcolor=0x38E878:" +
+      "fontsize=30:" +
+      "x=(w-text_w)/2:" +
+      "y=1790," +
 
       `trim=duration=${audioDuration.toFixed(
         3
       )},` +
+
       "setpts=PTS-STARTPTS," +
       "format=yuv420p," +
-      "setsar=1[main_v]",
+      "setsar=1" +
+
+      "[main_v]",
 
     /*
+     * =====================================================
      * MAIN AUDIO
+     * =====================================================
      */
+
     "[1:a]" +
+
       "aresample=48000," +
-      "aformat=sample_fmts=fltp:" +
+
+      "aformat=" +
+      "sample_fmts=fltp:" +
       "sample_rates=48000:" +
       "channel_layouts=stereo," +
+
       `atrim=duration=${audioDuration.toFixed(
         3
       )},` +
-      "asetpts=PTS-STARTPTS[main_a]",
+
+      "asetpts=PTS-STARTPTS" +
+
+      "[main_a]",
 
     /*
+     * =====================================================
      * OUTRO
+     * =====================================================
      */
-    `color=c=${outroBackground}:s=1080x1920:r=30:d=${OUTRO_DURATION}[outro_bg]`,
+
+    `color=c=${outroBackground}:` +
+      "s=1080x1920:" +
+      "r=30:" +
+      `d=${OUTRO_DURATION}` +
+      "[outro_bg]",
 
     "[outro_bg]" +
-      "drawbox=x=0:y=1902:w=1080:h=18:" +
-      "color=0x38E878:t=fill," +
+
+      "drawbox=" +
+      "x=0:" +
+      "y=1902:" +
+      "w=1080:" +
+      "h=18:" +
+      "color=0x38E878:" +
+      "t=fill," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${outroTopPath}':` +
-      "fontcolor=white:fontsize=42:" +
-      "x=(w-text_w)/2:y=410," +
+      "fontcolor=white:" +
+      "fontsize=42:" +
+      "x=(w-text_w)/2:" +
+      "y=410," +
 
-      "drawbox=x=165:y=565:w=750:h=180:" +
-      "color=0x38E878@0.16:t=fill," +
+      "drawbox=" +
+      "x=165:" +
+      "y=565:" +
+      "w=750:" +
+      "h=180:" +
+      "color=0x38E878@0.16:" +
+      "t=fill," +
 
-      "drawbox=x=165:y=565:w=750:h=180:" +
-      "color=0x38E878@0.75:t=4," +
+      "drawbox=" +
+      "x=165:" +
+      "y=565:" +
+      "w=750:" +
+      "h=180:" +
+      "color=0x38E878@0.75:" +
+      "t=4," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${outroSubscribePath}':` +
-      "fontcolor=0x38E878:fontsize=100:" +
-      "x=(w-text_w)/2:y=600," +
+      "fontcolor=0x38E878:" +
+      "fontsize=100:" +
+      "x=(w-text_w)/2:" +
+      "y=600," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${outroMessagePath}':` +
-      "fontcolor=white:fontsize=32:" +
-      "x=(w-text_w)/2:y=865," +
+      "fontcolor=white:" +
+      "fontsize=32:" +
+      "x=(w-text_w)/2:" +
+      "y=865," +
 
-      "drawbox=x=130:y=1110:w=820:h=180:" +
-      "color=black@0.42:t=fill," +
+      "drawbox=" +
+      "x=130:" +
+      "y=1110:" +
+      "w=820:" +
+      "h=180:" +
+      "color=black@0.42:" +
+      "t=fill," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${outroWebsitePath}':` +
-      "fontcolor=0x38E878:fontsize=48:" +
-      "x=(w-text_w)/2:y=1165," +
+      "fontcolor=0x38E878:" +
+      "fontsize=48:" +
+      "x=(w-text_w)/2:" +
+      "y=1165," +
 
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${outroBrandPath}':` +
-      "fontcolor=white@0.75:fontsize=34:" +
-      "x=(w-text_w)/2:y=1560," +
+      "fontcolor=white@0.75:" +
+      "fontsize=34:" +
+      "x=(w-text_w)/2:" +
+      "y=1560," +
 
-      "fade=t=in:st=0:d=0.35," +
-      `fade=t=out:st=${outroFadeOutStart}:d=0.35,` +
+      "fade=" +
+      "t=in:" +
+      "st=0:" +
+      "d=0.35," +
+
+      "fade=" +
+      "t=out:" +
+      `st=${outroFadeOutStart}:` +
+      "d=0.35," +
+
       "format=yuv420p," +
       "setsar=1," +
-      "setpts=PTS-STARTPTS[outro_v]",
+      "setpts=PTS-STARTPTS" +
+
+      "[outro_v]",
 
     /*
-     * OUTRO SILENT AUDIO
+     * Outro silent audio.
      */
-    "anullsrc=r=48000:cl=stereo," +
+
+    "anullsrc=" +
+      "r=48000:" +
+      "cl=stereo," +
+
       `atrim=duration=${OUTRO_DURATION},` +
-      "asetpts=PTS-STARTPTS[outro_a]",
+
+      "asetpts=PTS-STARTPTS" +
+
+      "[outro_a]",
 
     /*
-     * CONCATENATE INTRO + MAIN + OUTRO
+     * =====================================================
+     * CONCAT INTRO + MAIN + OUTRO
+     * =====================================================
      */
+
     "[intro_v][intro_a]" +
       "[main_v][main_a]" +
       "[outro_v][outro_a]" +
-      "concat=n=3:v=1:a=1[final_v][final_a]"
+
+      "concat=" +
+      "n=3:" +
+      "v=1:" +
+      "a=1" +
+
+      "[final_v][final_a]"
   ].join(";");
+
+  /*
+   * =========================================================
+   * FFMPEG ARGUMENTS
+   * =========================================================
+   */
 
   const ffmpegArguments = [
     "-y",
 
     /*
-     * Begin the presenter clip from a random
-     * position before looping it.
+     * Start prezentator dintr-un punct variabil.
      */
     "-ss",
-    presenterStartOffset.toFixed(2),
+    presenterStartOffset.toFixed(
+      2
+    ),
 
+    /*
+     * Repetă prezentatorul dacă video-ul lui
+     * este mai scurt decât vocea.
+     */
     "-stream_loop",
     "-1",
 
@@ -1103,19 +1865,28 @@ function main() {
     OUTPUT_FILE
   ];
 
+  /*
+   * =========================================================
+   * RENDER
+   * =========================================================
+   */
+
   console.log(
-    "[SHORTS] Rendering randomized presenter variation..."
+    "[SHORTS] Rendering video with periodic randomized backgrounds..."
   );
 
   execFileSync(
     "ffmpeg",
     ffmpegArguments,
     {
-      stdio: "inherit"
+      stdio:
+        "inherit"
     }
   );
 
-  requireFile(OUTPUT_FILE);
+  requireFile(
+    OUTPUT_FILE
+  );
 
   console.log(
     `[SHORTS] Video generated successfully: ${OUTPUT_FILE}`
@@ -1127,6 +1898,12 @@ function main() {
     )} seconds`
   );
 }
+
+/*
+ * =========================================================
+ * START
+ * =========================================================
+ */
 
 try {
   main();
