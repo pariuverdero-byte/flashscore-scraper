@@ -12,6 +12,23 @@ const OUTPUT_ROOT =
   process.env.SHORTS_OUTPUT_ROOT ||
   "output";
 
+/*
+ * Maximum accepted final video duration.
+ *
+ * Default: 180 seconds.
+ * Optional workflow override:
+ *
+ * SHORTS_MAX_TOTAL_DURATION=180
+ */
+const MAX_TOTAL_DURATION =
+  Math.max(
+    1,
+    Number(
+      process.env.SHORTS_MAX_TOTAL_DURATION ||
+      180
+    ) || 180
+  );
+
 const LANGUAGE =
   String(
     process.env.LANG ||
@@ -775,19 +792,20 @@ function validateVideo(
   }
 
   if (
-    duration > 60
+    duration >
+    MAX_TOTAL_DURATION
   ) {
     throw new Error(
       `${videoFile} is ${duration.toFixed(
         2
-      )} seconds. Maximum is 60 seconds.`
+      )} seconds. Maximum is ${MAX_TOTAL_DURATION} seconds.`
     );
   }
 
   console.log(
     `[BUILD] Video validated: 1080x1920, ${duration.toFixed(
       2
-    )} seconds`
+    )} seconds, maximum ${MAX_TOTAL_DURATION} seconds`
   );
 
   return {
@@ -995,6 +1013,11 @@ function renderVideo({
         SHORTS_BACKGROUND_CHANGE_MAX_SECONDS:
           String(
             variation.backgroundChangeMaxSeconds
+          ),
+
+        SHORTS_MAX_TOTAL_DURATION:
+          String(
+            MAX_TOTAL_DURATION
           )
       }
     }
@@ -1510,6 +1533,10 @@ function main() {
     `[BUILD] YouTube privacy: ${YOUTUBE_PRIVACY_STATUS}`
   );
 
+  console.log(
+    `[BUILD] Maximum video duration: ${MAX_TOTAL_DURATION} seconds`
+  );
+
   for (
     const ticket of
     TICKET_TYPES
@@ -1633,6 +1660,9 @@ function main() {
 
       youtubePrivacyStatus:
         YOUTUBE_PRIVACY_STATUS,
+
+      maximumVideoDuration:
+        MAX_TOTAL_DURATION,
 
       visualVariation: {
         deterministic:
