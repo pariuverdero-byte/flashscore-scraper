@@ -48,7 +48,23 @@ const FONT_BOLD =
 
 const INTRO_DURATION = 3;
 const OUTRO_DURATION = 3;
-const MAX_TOTAL_DURATION = 60;
+
+/*
+ * YouTube Shorts can be up to 3 minutes.
+ *
+ * Default: 180 seconds.
+ * Optional workflow override:
+ *
+ * SHORTS_MAX_TOTAL_DURATION=180
+ */
+const MAX_TOTAL_DURATION =
+  Math.max(
+    1,
+    Number(
+      process.env.SHORTS_MAX_TOTAL_DURATION ||
+      180
+    ) || 180
+  );
 
 /*
  * =========================================================
@@ -1000,6 +1016,10 @@ function main() {
     INTRO_DURATION +
     audioDuration +
     OUTRO_DURATION;
+
+  console.log(
+    `[SHORTS] Maximum allowed duration: ${MAX_TOTAL_DURATION} seconds`
+  );
 
   if (
     finalDuration >
