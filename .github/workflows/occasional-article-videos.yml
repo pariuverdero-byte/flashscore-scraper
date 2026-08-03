@@ -1,0 +1,139 @@
+name: Occasional WordPress Article Videos
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Generate videos without uploading to YouTube or updating WordPress"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    # DST-safe pair. The gate below continues only at 08:00 Europe/Bucharest.
+    - cron: "0 5 * * *"
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: occasional-wordpress-article-videos
+  cancel-in-progress: false
+
+jobs:
+  schedule-gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.gate.outputs.should_run }}
+    steps:
+      - id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual run. Continuing."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          LOCAL_HOUR=$(TZ=Europe/Bucharest date '+%H')
+          LOCAL_TIME=$(TZ=Europe/Bucharest date '+%Y-%m-%d %H:%M')
+          echo "Bucharest time: ${LOCAL_TIME}"
+
+          if [ "$LOCAL_HOUR" = "08" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-publish:
+    needs: schedule-gate
+    if: needs.schedule-gate.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      OCCASIONAL_OUTPUT_ROOT: output/occasional
+      OCCASIONAL_QUEUE_TAG: generate-video
+      OCCASIONAL_DONE_TAG: video-published
+      YOUTUBE_PRIVACY_STATUS: public
+      OCCASIONAL_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies
+        run: |
+          npm install googleapis --no-fund --no-audit
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Edge TTS
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install edge-tts
+          edge-tts --version
+
+      - name: Install FFmpeg and fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          ffmpeg -version
+
+      - name: Verify occasional video files
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUIRED_FILES=(
+            "occasional/config.js"
+            "occasional/helpers.js"
+            "occasional/wordpress.js"
+            "occasional/prepare_article.js"
+            "occasional/render_article_video.js"
+            "occasional/build_manifest.js"
+            "occasional/process_site.js"
+            "publish/platforms/youtube.js"
+          )
+          for FILE in "${REQUIRED_FILES[@]}"; do
+            test -s "$FILE" || { echo "Missing: $FILE"; exit 1; }
+            node --check "$FILE"
+          done
+
+      - name: Process PariuVerde article
+        env:
+          OCCASIONAL_SITE_KEY: pariuverde
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_PV_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_PV_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_PV_REFRESH_TOKEN }}
+        run: node occasional/process_site.js
+
+      - name: Process GreenBetTips article
+        env:
+          OCCASIONAL_SITE_KEY: greenbettips
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: node occasional/process_site.js
+
+      - name: Upload occasional video artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: occasional-article-videos-${{ github.run_number }}
+          path: output/occasional
+          if-no-files-found: warn
+          retention-days: 7
