@@ -4,51 +4,12 @@ on:
   workflow_dispatch:
   schedule:
     # GitHub Actions cron uses UTC.
-    # Romania is UTC+3 in summer and UTC+2 in winter.
-    # Both possible UTC times are scheduled; the gate below allows
-    # the main job to continue only during the 15:00 hour in Bucharest.
-    - cron: "35 12 * * *"
-    - cron: "35 13 * * *"
+    # 13:30 UTC = 16:30 in Romania during daylight-saving time (summer).
+    # During winter, change this cron to "30 14 * * *" to keep 16:30 Romania time.
+    - cron: "30 13 * * *"
 
 jobs:
-  schedule-gate:
-    runs-on: ubuntu-latest
-
-    outputs:
-      should_run: ${{ steps.check-time.outputs.should_run }}
-
-    steps:
-      - name: Check Bucharest local time
-        id: check-time
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual run detected. Workflow will continue."
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          LOCAL_DATE=$(TZ=Europe/Bucharest date '+%Y-%m-%d')
-          LOCAL_TIME=$(TZ=Europe/Bucharest date '+%H:%M')
-          LOCAL_HOUR=$(TZ=Europe/Bucharest date '+%H')
-
-          echo "Bucharest date: ${LOCAL_DATE}"
-          echo "Bucharest time: ${LOCAL_TIME}"
-
-          if [ "${LOCAL_HOUR}" = "15" ]; then
-            echo "It is the 15:00 hour in Romania. Workflow will continue."
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "This is the secondary DST-safe trigger. Main workflow will be skipped."
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-          fi
-
   scrape-build-publish:
-    needs: schedule-gate
-    if: needs.schedule-gate.outputs.should_run == 'true'
-
     runs-on: ubuntu-latest
     timeout-minutes: 75
 
