@@ -101,20 +101,112 @@ function isWithinAgeLimit(
  * =========================================================
  */
 
-async function wpFetch(
+function buildRestRouteFallback(
+  originalUrl
+) {
+  const parsed =
+    new URL(
+      originalUrl
+    );
+
+  const marker =
+    "/wp-json/";
+
+  const markerIndex =
+    parsed.pathname.indexOf(
+      marker
+    );
+
+  if (markerIndex < 0) {
+    return null;
+  }
+
+  const route =
+    "/" +
+    parsed.pathname
+      .slice(
+        markerIndex +
+        marker.length
+      )
+      .replace(
+        /^\/+/,
+        ""
+      );
+
+  const fallback =
+    new URL(
+      parsed.origin
+    );
+
+  fallback.pathname =
+    "/";
+
+  fallback.searchParams.set(
+    "rest_route",
+    route
+  );
+
+  for (
+    const [
+      key,
+      value
+    ] of
+    parsed.searchParams.entries()
+  ) {
+    fallback.searchParams.append(
+      key,
+      value
+    );
+  }
+
+  return fallback.toString();
+}
+
+function mergeWordPressHeaders(
+  headers = {}
+) {
+  return {
+    Accept:
+      "application/json",
+
+    "User-Agent":
+      "Mozilla/5.0 (compatible; PariuVerde-GitHubActions/1.0)",
+
+    "Cache-Control":
+      "no-cache",
+
+    Pragma:
+      "no-cache",
+
+    ...headers
+  };
+}
+
+async function executeWordPressRequest(
   url,
   options = {}
 ) {
   const response =
     await fetch(
       url,
-      options
+      {
+        ...options,
+
+        redirect:
+          "follow",
+
+        headers:
+          mergeWordPressHeaders(
+            options.headers
+          )
+      }
     );
 
   const text =
     await response.text();
 
   let data = null;
+  let isJson = false;
 
   if (text) {
     try {
@@ -122,33 +214,119 @@ async function wpFetch(
         JSON.parse(
           text
         );
+
+      isJson = true;
     } catch {
       data = text;
     }
+  } else {
+    isJson = true;
   }
 
-  if (!response.ok) {
-    throw new Error(
-      `WordPress API ${response.status} ${response.statusText}: ` +
+  return {
+    response,
+    text,
+    data,
+    isJson
+  };
+}
+
+async function wpFetch(
+  url,
+  options = {}
+) {
+  const attempts = [
+    {
+      label:
+        "standard REST URL",
+
+      url
+    }
+  ];
+
+  const fallbackUrl =
+    buildRestRouteFallback(
+      url
+    );
+
+  if (
+    fallbackUrl &&
+    fallbackUrl !== url
+  ) {
+    attempts.push({
+      label:
+        "rest_route fallback",
+
+      url:
+        fallbackUrl
+    });
+  }
+
+  let lastError = null;
+
+  for (
+    let index = 0;
+    index < attempts.length;
+    index += 1
+  ) {
+    const attempt =
+      attempts[index];
+
+    console.log(
+      `[OCCASIONAL] WordPress request via ${attempt.label}: ${attempt.url}`
+    );
+
+    const {
+      response,
+      data,
+      isJson
+    } =
+      await executeWordPressRequest(
+        attempt.url,
+        options
+      );
+
+    if (
+      response.ok &&
+      isJson
+    ) {
+      return data;
+    }
+
+    const preview =
       responsePreview(
         typeof data === "string"
           ? data
           : JSON.stringify(data)
-      )
-    );
+      );
+
+    if (!response.ok) {
+      lastError =
+        new Error(
+          `WordPress API ${response.status} ${response.statusText}: ${preview}`
+        );
+    } else {
+      lastError =
+        new Error(
+          `WordPress REST API returned non-JSON content: ${preview}`
+        );
+    }
+
+    const hasAnotherAttempt =
+      index <
+      attempts.length - 1;
+
+    if (hasAnotherAttempt) {
+      console.warn(
+        `[OCCASIONAL] ${attempt.label} failed. Trying REST route fallback.`
+      );
+    }
   }
 
-  if (
-    text &&
-    typeof data === "string"
-  ) {
-    throw new Error(
-      "WordPress REST API returned non-JSON content: " +
-      responsePreview(data)
+  throw lastError ||
+    new Error(
+      "WordPress REST API request failed."
     );
-  }
-
-  return data;
 }
 
 /*
