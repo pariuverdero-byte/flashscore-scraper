@@ -10,7 +10,7 @@ on:
     # GitHub Actions cron uses UTC.
     # 13:30 UTC = 16:30 in Romania during daylight-saving time (summer).
     # During winter, change this to "30 14 * * *" to keep 16:30 Romania time.
-    - cron: "30 13 * * *"
+    - cron: "00 12 * * *"
 
 jobs:
   scrape-build-publish:
