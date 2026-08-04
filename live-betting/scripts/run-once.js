@@ -81,7 +81,13 @@ async function mapLimited(items, limit, fn) {
 }
 
 /**
- * Nu afișăm meciurile pentru care Flashscore nu oferă statistici reale.
+ * Afișăm numai meciurile pentru care avem statistici
+ * vizibile și suficient de complete.
+ *
+ * Cerem minimum două dintre următoarele trei categorii:
+ * - șuturi;
+ * - cornere;
+ * - posesie validă, aproximativ 100% cumulat.
  */
 function hasUsableStatistics(match) {
   if (!match?.statsAvailable) {
@@ -99,29 +105,32 @@ function hasUsableStatistics(match) {
     Number(home.shotsOnTarget || 0) +
     Number(away.shotsOnTarget || 0);
 
-  const corners =
+  const totalCorners =
     Number(home.corners || 0) +
     Number(away.corners || 0);
 
-  const possession =
+  const totalPossession =
     Number(home.possession || 0) +
     Number(away.possession || 0);
 
-  const xg =
-    Number(home.xg || 0) +
-    Number(away.xg || 0);
+  const hasShots =
+    totalShots > 0 &&
+    shotsOnTarget >= 0;
 
-  /*
-   * Acceptăm meciul dacă există cel puțin o categorie relevantă.
-   * Nu este necesar ca Flashscore să ofere toate statisticile.
-   */
-  return (
-    totalShots > 0 ||
-    shotsOnTarget > 0 ||
-    corners > 0 ||
-    possession > 0 ||
-    xg > 0
-  );
+  const hasCorners =
+    totalCorners > 0;
+
+  const hasValidPossession =
+    totalPossession >= 95 &&
+    totalPossession <= 105;
+
+  const validCategories = [
+    hasShots,
+    hasCorners,
+    hasValidPossession,
+  ].filter(Boolean).length;
+
+  return validCategories >= 2;
 }
 
 function signalFamily(signal) {
@@ -151,8 +160,14 @@ function signalFamily(signal) {
 }
 
 /**
- * Elimină din feed eventualele semnale similare rămase
- * din ciclurile anterioare.
+ * Elimină din feed semnalele similare din aceeași familie.
+ *
+ * Exemplu:
+ * - Over 0.5 până la final
+ * - Over 1.5 în meci
+ *
+ * Dacă ambele reprezintă practic aceeași situație,
+ * rămâne semnalul cu încrederea mai mare.
  */
 function deduplicateActiveSignals(signals) {
   const selected = new Map();
@@ -175,6 +190,69 @@ function deduplicateActiveSignals(signals) {
   }
 
   return [...selected.values()];
+}
+
+/**
+ * Închide semnalele active atunci când:
+ * - meciul nu mai este live;
+ * - minutul a trecut de limita maximă;
+ * - statisticile au devenit indisponibile.
+ */
+function expireInvalidSignals(
+  signals,
+  selectedForProcessing,
+) {
+  const currentMatchesById = new Map(
+    selectedForProcessing.map(
+      (match) => [match.id, match],
+    ),
+  );
+
+  return signals.map((signal) => {
+    if (signal.status !== 'active') {
+      return signal;
+    }
+
+    const match = currentMatchesById.get(
+      signal.matchId,
+    );
+
+    if (!match) {
+      return {
+        ...signal,
+        status: 'expired',
+        closedAt: nowIso(),
+        closeReason: 'match_not_live',
+      };
+    }
+
+    const minute = Number(
+      match.minute || 0,
+    );
+
+    if (
+      minute > LIVE_CONFIG.maxMinute
+    ) {
+      return {
+        ...signal,
+        status: 'expired',
+        closedAt: nowIso(),
+        closeReason: 'minute_limit',
+      };
+    }
+
+    if (!hasUsableStatistics(match)) {
+      return {
+        ...signal,
+        status: 'expired',
+        closedAt: nowIso(),
+        closeReason:
+          'statistics_unavailable',
+      };
+    }
+
+    return signal;
+  });
 }
 
 const previousPayload = await readJson(
@@ -205,10 +283,10 @@ const enriched = await mapLimited(
 );
 
 /*
- * 3. Selectăm maximum 15 meciuri.
+ * 3. Selectăm maximum 15 meciuri pentru procesare.
  *
- * Păstrăm această listă pentru procesarea și închiderea
- * eventualelor semnale existente.
+ * Această listă include și meciurile fără statistici complete,
+ * deoarece trebuie să putem închide eventualele semnale vechi.
  */
 const selectedForProcessing = selectMatches(
   enriched,
@@ -216,7 +294,7 @@ const selectedForProcessing = selectMatches(
 );
 
 /*
- * 4. Pentru afișare păstrăm numai meciurile cu statistici utile.
+ * 4. Pentru feed păstrăm numai meciurile cu statistici utile.
  */
 const selectedForFeed =
   selectedForProcessing.filter(
@@ -224,7 +302,7 @@ const selectedForFeed =
   );
 
 /*
- * 5. Citim și actualizăm istoricul semnalelor.
+ * 5. Citim istoricul semnalelor și actualizăm rezultatele.
  */
 let signals = await readJson(
   signalsFile,
@@ -237,8 +315,16 @@ signals = settleSignals(
 );
 
 /*
- * 6. Generăm semnale numai pentru meciurile
- * care vor fi afișate.
+ * 6. Închidem semnalele care nu mai trebuie afișate.
+ */
+signals = expireInvalidSignals(
+  signals,
+  selectedForProcessing,
+);
+
+/*
+ * 7. Generăm semnale numai pentru meciurile
+ * care au statistici suficiente.
  */
 for (const match of selectedForFeed) {
   const generatedSignals = generateSignals(
@@ -253,11 +339,11 @@ for (const match of selectedForFeed) {
 }
 
 /*
- * 7. Selectăm semnalele active și eliminăm
- * eventualele dubluri din aceeași familie.
+ * 8. Selectăm semnalele active și eliminăm dublurile.
  */
 const rawActiveSignals = signals.filter(
-  (signal) => signal.status === 'active',
+  (signal) =>
+    signal.status === 'active',
 );
 
 const activeSignals =
@@ -266,11 +352,12 @@ const activeSignals =
   );
 
 /*
- * 8. Construim feed-ul public.
+ * 9. Construim feed-ul public.
  */
 const matches = selectedForFeed.map(
   (match) => ({
     ...match,
+
     signals: activeSignals
       .filter(
         (signal) =>
@@ -290,6 +377,9 @@ const matches = selectedForFeed.map(
 
 const generatedAt = nowIso();
 
+/*
+ * 10. Salvăm starea internă completă.
+ */
 await writeJsonAtomic(
   matchesFile,
   {
@@ -298,22 +388,31 @@ await writeJsonAtomic(
   },
 );
 
+/*
+ * 11. Salvăm istoricul semnalelor.
+ */
 await writeJsonAtomic(
   signalsFile,
   signals,
 );
 
+/*
+ * 12. Salvăm feed-ul public pentru WordPress.
+ */
 await writeJsonAtomic(
   feedFile,
   {
-    version: 2,
+    version: 3,
+
     generatedAt,
+
     refreshSeconds:
       LIVE_CONFIG.pollSeconds,
 
     disclaimer: {
       ro:
         'Semnalele sunt informative și nu garantează câștiguri. Joacă responsabil.',
+
       en:
         'Signals are informational and do not guarantee winnings. Gamble responsibly.',
     },
