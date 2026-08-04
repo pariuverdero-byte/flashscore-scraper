@@ -2,53 +2,86 @@ name: Live Betting Feed
 
 on:
   workflow_dispatch:
+
   schedule:
-    # GitHub Actions minimum practical cadence is 5 minutes.
-    # Use this only for MVP/testing; production should use the daemon on a VPS.
     - cron: "*/5 * * * *"
+
+permissions:
+  contents: write
 
 concurrency:
   group: live-betting-feed
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   live-feed:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+
+    timeout-minutes: 10
+
     env:
-      LIVE_MAX_MATCHES: "15"
-      LIVE_MIN_CONFIDENCE: "72"
-      PV_LIVE_ENDPOINT: "https://pariuverde.ro/wp-json/pv-live/v1/feed"
-      GBT_LIVE_ENDPOINT: "https://greenbettips.com/wp-json/pv-live/v1/feed"
+      PV_LIVE_ENDPOINT: ${{ secrets.PV_LIVE_ENDPOINT }}
       PV_LIVE_TOKEN: ${{ secrets.PV_LIVE_TOKEN }}
+
+      GBT_LIVE_ENDPOINT: ${{ secrets.GBT_LIVE_ENDPOINT }}
       GBT_LIVE_TOKEN: ${{ secrets.GBT_LIVE_TOKEN }}
+
+      LIVE_MAX_MATCHES: "15"
+      LIVE_POLL_SECONDS: "75"
+
+      PREMATCH_CACHE_HOURS: "12"
+      PREMATCH_MAX_FETCHES_PER_CYCLE: "3"
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: npm
-      - run: npm install --no-fund --no-audit
+          node-version: "24"
+
+      - name: Install dependencies
+        run: npm install --no-fund --no-audit
+
       - name: Restore live state
         uses: actions/cache/restore@v4
         with:
-          path: live-betting/data
-          key: live-state-${{ github.run_id }}
-          restore-keys: live-state-
+          path: |
+            live-betting/data/live_matches.json
+            live-betting/data/signals.json
+            live-betting/data/live_feed.json
+            live-betting/data/pre_match_cache.json
+          key: live-betting-state-${{ github.run_id }}
+          restore-keys: |
+            live-betting-state-
+
       - name: Build live feed
         run: node live-betting/scripts/run-once.js
+
       - name: Publish to both WordPress sites
         run: node live-betting/scripts/publish-wordpress.js
+
       - name: Save live state
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: live-betting/data
-          key: live-state-${{ github.run_id }}
+          path: |
+            live-betting/data/live_matches.json
+            live-betting/data/signals.json
+            live-betting/data/live_feed.json
+            live-betting/data/pre_match_cache.json
+          key: live-betting-state-${{ github.run_id }}
+
       - name: Upload debug feed
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: live-betting-feed
-          path: live-betting/data/*.json
+          name: live-betting-feed-${{ github.run_id }}
+          path: |
+            live-betting/data/live_feed.json
+            live-betting/data/live_matches.json
+            live-betting/data/signals.json
+            live-betting/data/pre_match_cache.json
+          if-no-files-found: warn
           retention-days: 3
