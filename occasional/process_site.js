@@ -1,7 +1,9 @@
 import path from "path";
+
 import {
   getSiteConfig
 } from "./config.js";
+
 import {
   ensureDir,
   normalizeRate,
@@ -11,21 +13,31 @@ import {
   selectDeterministic,
   writeJson
 } from "./helpers.js";
+
 import {
   ensureTag,
   fetchNextArticle,
   getWordPressCredentials,
   updateArticleAfterUpload
 } from "./wordpress.js";
+
 import {
   prepareArticle
 } from "./prepare_article.js";
+
 import {
   renderArticleVideo
 } from "./render_article_video.js";
+
 import {
   buildManifest
 } from "./build_manifest.js";
+
+/*
+ * =========================================================
+ * HELPERS
+ * =========================================================
+ */
 
 function parseBoolean(
   value,
@@ -69,6 +81,12 @@ function parsePositiveInteger(
     : fallback;
 }
 
+/*
+ * =========================================================
+ * MAIN
+ * =========================================================
+ */
+
 async function main() {
   const site =
     getSiteConfig(
@@ -97,18 +115,18 @@ async function main() {
       "video-published"
     ).trim();
 
+  const explicitPostId =
+    String(
+      process.env.OCCASIONAL_POST_ID ||
+      ""
+    ).trim();
+
   const categoryFallbackSlug =
     String(
       process.env.OCCASIONAL_CATEGORY_FALLBACK ||
       "ocazional"
     ).trim();
 
-  /*
-   * Safety default: category fallback is OFF.
-   * Only an explicitly saved generate-video tag queues a post.
-   * Enable fallback manually only if you intentionally want every
-   * unprocessed article in the configured category to be eligible.
-   */
   const allowCategoryFallback =
     parseBoolean(
       process.env.OCCASIONAL_ALLOW_CATEGORY_FALLBACK,
@@ -118,7 +136,7 @@ async function main() {
   const postLimit =
     parsePositiveInteger(
       process.env.OCCASIONAL_POST_SCAN_LIMIT,
-      50
+      20
     );
 
   const maximumAgeDays =
@@ -154,11 +172,11 @@ async function main() {
   );
 
   console.log(
-    `[OCCASIONAL] Scan limit: ${postLimit} posts`
+    `[OCCASIONAL] Maximum article age: ${maximumAgeDays} days`
   );
 
   console.log(
-    `[OCCASIONAL] Maximum article age: ${maximumAgeDays} days`
+    `[OCCASIONAL] Explicit post ID: ${explicitPostId || "none"}`
   );
 
   console.log(
@@ -171,14 +189,20 @@ async function main() {
     );
   }
 
+  /*
+   * Ensure both operational tags exist.
+   */
   const queueTag =
     await ensureTag({
       siteUrl:
         site.siteUrl,
+
       user,
       appPassword,
+
       slug:
         queueSlug,
+
       name:
         "Generate Video"
     });
@@ -187,10 +211,13 @@ async function main() {
     await ensureTag({
       siteUrl:
         site.siteUrl,
+
       user,
       appPassword,
+
       slug:
         doneSlug,
+
       name:
         "Video Published"
     });
@@ -203,16 +230,32 @@ async function main() {
     `[OCCASIONAL] Done tag ID: ${doneTag.id}`
   );
 
+  /*
+   * Native WordPress query.
+   */
   const lookup =
     await fetchNextArticle({
       siteUrl:
         site.siteUrl,
+
       user,
       appPassword,
+
+      queueTagId:
+        queueTag.id,
+
+      doneTagId:
+        doneTag.id,
+
       queueTagSlug:
         queueSlug,
+
       doneTagSlug:
         doneSlug,
+
+      explicitPostId:
+        explicitPostId || null,
+
       categoryFallbackSlug,
       allowCategoryFallback,
       postLimit,
@@ -224,15 +267,19 @@ async function main() {
 
   if (!post) {
     console.log(
-      `[OCCASIONAL] No safely queued article found for ${site.key}.`
+      `[OCCASIONAL] No eligible article found for ${site.key}.`
     );
 
     console.log(
-      "[OCCASIONAL] The tag must be saved on the post, not only typed in the WordPress tag field."
+      "[OCCASIONAL] WordPress native tag query returned no queued published posts."
     );
 
     console.log(
-      "[OCCASIONAL] In Gutenberg: type generate-video, press Enter so it becomes a tag badge, then click Update."
+      `[OCCASIONAL] Confirm that the post REST response contains tag ID ${queueTag.id}.`
+    );
+
+    console.log(
+      "[OCCASIONAL] In Gutenberg, type generate-video, press Enter, then click Update."
     );
 
     ensureDir(
@@ -247,24 +294,39 @@ async function main() {
       {
         status:
           "nothing_to_process",
+
         checkedAt:
           new Date().toISOString(),
+
         site:
           site.key,
+
         queueTag:
           queueSlug,
+
+        queueTagId:
+          queueTag.id,
+
         doneTag:
           doneSlug,
-        queueTagFound:
-          lookup.queueTagFound,
-        doneTagFound:
-          lookup.doneTagFound,
+
+        doneTagId:
+          doneTag.id,
+
+        explicitPostId:
+          explicitPostId || null,
+
         allowCategoryFallback,
+
         categoryFallbackSlug:
           allowCategoryFallback
             ? categoryFallbackSlug
             : null,
-        inspectedPosts:
+
+        lookupSource:
+          lookup.source,
+
+        diagnostics:
           lookup.diagnostics
       }
     );
@@ -288,6 +350,9 @@ async function main() {
     `[OCCASIONAL] Article categories: ${post.categorySlugs.join(", ") || "none"}`
   );
 
+  /*
+   * Build article files.
+   */
   const article =
     prepareArticle({
       post,
@@ -295,6 +360,9 @@ async function main() {
       outputRoot
     });
 
+  /*
+   * Deterministic presenter selection.
+   */
   const presenterFile =
     process.env.SHORTS_PRESENTER_FILE ||
     selectDeterministic(
@@ -306,6 +374,13 @@ async function main() {
     presenterFile
   );
 
+  console.log(
+    `[OCCASIONAL] Presenter: ${presenterFile}`
+  );
+
+  /*
+   * Generate speech and subtitles.
+   */
   run(
     "edge-tts",
     [
@@ -319,29 +394,43 @@ async function main() {
       )}`,
 
       "--volume=+0%",
+
       "--file",
       article.files.scriptFile,
+
       "--write-media",
       article.files.voiceFile,
+
       "--write-subtitles",
       article.files.subtitlesFile
     ]
   );
 
+  /*
+   * Render vertical video.
+   */
   renderArticleVideo({
     presenterFile,
+
     voiceFile:
       article.files.voiceFile,
+
     subtitlesFile:
       article.files.subtitlesFile,
+
     titleFile:
       article.files.titleFile,
+
     websiteFile:
       article.files.websiteFile,
+
     videoFile:
       article.files.videoFile
   });
 
+  /*
+   * Build social distribution manifest.
+   */
   buildManifest({
     article
   });
@@ -354,6 +443,9 @@ async function main() {
     return;
   }
 
+  /*
+   * Upload to YouTube.
+   */
   run(
     "node",
     [
@@ -363,6 +455,7 @@ async function main() {
       env: {
         DISTRIBUTION_MANIFEST_FILE:
           article.files.manifestFile,
+
         DISTRIBUTION_RESULTS_FILE:
           article.files.resultsFile
       }
@@ -383,16 +476,24 @@ async function main() {
     );
   }
 
+  /*
+   * Update WordPress only after successful YouTube upload.
+   */
   await updateArticleAfterUpload({
     siteUrl:
       site.siteUrl,
+
     user,
     appPassword,
+
     post,
+
     queueTagId:
       queueTag.id,
+
     doneTagId:
       doneTag.id,
+
     youtubeUrl:
       results.youtube.url
   });
@@ -405,6 +506,12 @@ async function main() {
     `[OCCASIONAL] Completed successfully for post ${post.id}.`
   );
 }
+
+/*
+ * =========================================================
+ * START
+ * =========================================================
+ */
 
 main().catch(
   (error) => {
