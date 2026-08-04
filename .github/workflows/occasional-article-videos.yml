@@ -10,12 +10,9 @@ on:
         type: boolean
 
   schedule:
-    # DST-safe:
-    # Summer: 05:17 UTC = 08:17 Romania
-    # Winter: 06:17 UTC = 08:17 Romania
-    #
-    # Minute 17 avoids the GitHub Actions congestion
-    # that commonly occurs at the start of the hour.
+    # DST-safe pair:
+    # summer 05:17 UTC = 08:17 Romania
+    # winter 06:17 UTC = 08:17 Romania
     - cron: "17 5 * * *"
     - cron: "17 6 * * *"
 
@@ -40,56 +37,35 @@ jobs:
         run: |
           set -euo pipefail
 
-          EVENT_NAME="${{ github.event_name }}"
-
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "Manual run detected. Continuing."
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual run detected."
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          LOCAL_DATE=$(TZ=Europe/Bucharest date '+%Y-%m-%d')
           LOCAL_HOUR=$(TZ=Europe/Bucharest date '+%H')
-          LOCAL_MINUTE=$(TZ=Europe/Bucharest date '+%M')
           LOCAL_TIME=$(TZ=Europe/Bucharest date '+%Y-%m-%d %H:%M:%S %Z')
 
           echo "Bucharest time: ${LOCAL_TIME}"
-          echo "Local hour: ${LOCAL_HOUR}"
-          echo "Local minute: ${LOCAL_MINUTE}"
 
-          #
-          # Accept a wider morning window.
-          #
-          # This prevents a delayed GitHub scheduled run
-          # from being rejected merely because it started
-          # after 09:00.
-          #
           if [ "$LOCAL_HOUR" -ge 8 ] && [ "$LOCAL_HOUR" -le 10 ]; then
-            echo "Execution is inside the accepted Romanian window."
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Execution is outside the accepted Romanian window."
             echo "should_run=false" >> "$GITHUB_OUTPUT"
           fi
 
   build-and-publish:
     needs: schedule-gate
-
     if: needs.schedule-gate.outputs.should_run == 'true'
 
     runs-on: ubuntu-latest
-
     timeout-minutes: 90
 
     env:
       OCCASIONAL_OUTPUT_ROOT: output/occasional
-      OCCASIONAL_QUEUE_TAG: generate-video
-      OCCASIONAL_DONE_TAG: video-published
-
       OCCASIONAL_MAX_POSTS_PER_SITE: "1"
-
+      OCCASIONAL_YOUTUBE_RETRY_ATTEMPTS: "3"
       YOUTUBE_PRIVACY_STATUS: public
-
       OCCASIONAL_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
 
     steps:
@@ -100,12 +76,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           echo "Event: ${{ github.event_name }}"
           echo "Branch: ${{ github.ref_name }}"
-          echo "Repository: ${{ github.repository }}"
           echo "Romania time: $(TZ=Europe/Bucharest date '+%Y-%m-%d %H:%M:%S %Z')"
-          echo "UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Dry run: ${OCCASIONAL_DRY_RUN}"
 
       - name: Set up Node.js
@@ -117,11 +90,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          npm install \
-            googleapis \
-            --no-fund \
-            --no-audit
+          npm install googleapis --no-fund --no-audit
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -132,27 +101,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          python -m pip install \
-            --upgrade \
-            pip
-
-          python -m pip install \
-            edge-tts
-
+          python -m pip install --upgrade pip
+          python -m pip install edge-tts
           edge-tts --version
 
       - name: Install FFmpeg and fonts
         shell: bash
         run: |
           set -euo pipefail
-
           sudo apt-get update
-
-          sudo apt-get install -y \
-            ffmpeg \
-            fonts-dejavu-core
-
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
           ffmpeg -version
           ffprobe -version
 
@@ -173,42 +131,21 @@ jobs:
           )
 
           for FILE in "${REQUIRED_FILES[@]}"; do
-            if [ ! -s "$FILE" ]; then
-              echo "Missing or empty required file: $FILE"
+            test -s "$FILE" || {
+              echo "Missing or empty: $FILE"
               exit 1
-            fi
+            }
 
-            echo "Checking JavaScript syntax: $FILE"
             node --check "$FILE"
           done
 
-      - name: Verify presenter files
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          PRESENTERS=(
-            "assets/presenters/ro_presenter_01.mp4"
-            "assets/presenters/ro_presenter_02.mp4"
-            "assets/presenters/ro_presenter_03.mp4"
-            "assets/presenters/en_presenter_01.mp4"
-            "assets/presenters/en_presenter_02.mp4"
-            "assets/presenters/en_presenter_03.mp4"
-          )
-
-          for FILE in "${PRESENTERS[@]}"; do
-            if [ ! -s "$FILE" ]; then
-              echo "Missing presenter file: $FILE"
-              exit 1
-            fi
-
-            echo "Presenter found: $FILE"
-          done
-
-      - name: Process PariuVerde article
-        continue-on-error: true
+      - name: Process PariuVerde articles
         env:
           OCCASIONAL_SITE_KEY: pariuverde
+
+          # Confirmed IDs on pariuverde.ro
+          OCCASIONAL_QUEUE_TAG_ID: "711"
+          OCCASIONAL_DONE_TAG_ID: "710"
 
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
@@ -217,14 +154,15 @@ jobs:
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_PV_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_PV_REFRESH_TOKEN }}
 
-        run: |
-          set -euo pipefail
-          node occasional/process_site.js
+        run: node occasional/process_site.js
 
-      - name: Process GreenBetTips article
-        continue-on-error: true
+      - name: Process GreenBetTips articles
         env:
           OCCASIONAL_SITE_KEY: greenbettips
+
+          # IDs previously returned by greenbettips.com
+          OCCASIONAL_QUEUE_TAG_ID: "708"
+          OCCASIONAL_DONE_TAG_ID: "709"
 
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
@@ -233,9 +171,7 @@ jobs:
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
 
-        run: |
-          set -euo pipefail
-          node occasional/process_site.js
+        run: node occasional/process_site.js
 
       - name: Show generated output
         if: always()
@@ -243,15 +179,15 @@ jobs:
         run: |
           echo "Generated files:"
           find output/occasional \
-            -maxdepth 5 \
+            -maxdepth 6 \
             -type f \
             -print 2>/dev/null || true
 
           echo ""
-          echo "JSON results:"
+          echo "Status files:"
           find output/occasional \
             -type f \
-            -name "*.json" \
+            -name "*-status.json" \
             -print \
             -exec cat {} \; 2>/dev/null || true
 
