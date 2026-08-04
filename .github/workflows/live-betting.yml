@@ -1,0 +1,54 @@
+name: Live Betting Feed
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub Actions minimum practical cadence is 5 minutes.
+    # Use this only for MVP/testing; production should use the daemon on a VPS.
+    - cron: "*/5 * * * *"
+
+concurrency:
+  group: live-betting-feed
+  cancel-in-progress: true
+
+jobs:
+  live-feed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      LIVE_MAX_MATCHES: "15"
+      LIVE_MIN_CONFIDENCE: "72"
+      PV_LIVE_ENDPOINT: "https://pariuverde.ro/wp-json/pv-live/v1/feed"
+      GBT_LIVE_ENDPOINT: "https://greenbettips.com/wp-json/pv-live/v1/feed"
+      PV_LIVE_TOKEN: ${{ secrets.PV_LIVE_TOKEN }}
+      GBT_LIVE_TOKEN: ${{ secrets.GBT_LIVE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm install --no-fund --no-audit
+      - name: Restore live state
+        uses: actions/cache/restore@v4
+        with:
+          path: live-betting/data
+          key: live-state-${{ github.run_id }}
+          restore-keys: live-state-
+      - name: Build live feed
+        run: node live-betting/scripts/run-once.js
+      - name: Publish to both WordPress sites
+        run: node live-betting/scripts/publish-wordpress.js
+      - name: Save live state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: live-betting/data
+          key: live-state-${{ github.run_id }}
+      - name: Upload debug feed
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-betting-feed
+          path: live-betting/data/*.json
+          retention-days: 3
