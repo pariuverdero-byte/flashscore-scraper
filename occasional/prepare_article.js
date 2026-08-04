@@ -99,7 +99,6 @@ export function prepareArticle({ post, site, outputRoot }) {
       websiteFile,
       scriptFile,
       voiceFile: path.join(articleDir, "voice.mp3"),
-      subtitlesFile: path.join(articleDir, "subs.srt"),
       videoFile: path.join(articleDir, "short.mp4"),
       manifestFile: path.join(articleDir, "distribution_manifest.json"),
       resultsFile: path.join(articleDir, "distribution_results.json")

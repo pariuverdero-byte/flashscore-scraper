@@ -6,6 +6,7 @@ import {
 
 import {
   ensureDir,
+  hashString,
   normalizeRate,
   readJson,
   requireFile,
@@ -64,6 +65,130 @@ function positiveInteger(value, fallback) {
     parsed > 0
     ? parsed
     : fallback;
+}
+
+function signedRate(
+  baseRate,
+  adjustment
+) {
+  const match =
+    String(baseRate || "+0%")
+      .trim()
+      .match(
+        /^([+-]?)(\d+)%$/
+      );
+
+  const base =
+    match
+      ? (
+          (
+            match[1] === "-"
+              ? -1
+              : 1
+          ) *
+          Number(
+            match[2]
+          )
+        )
+      : 0;
+
+  const value =
+    Math.max(
+      -15,
+      Math.min(
+        20,
+        base +
+        adjustment
+      )
+    );
+
+  return value >= 0
+    ? `+${value}%`
+    : `${value}%`;
+}
+
+function buildVariation(
+  site,
+  post
+) {
+  const seed =
+    hashString(
+      `${site.key}|${post.id}|${post.modified}`
+    );
+
+  const zoomOptions = [
+    1.02,
+    1.04,
+    1.06
+  ];
+
+  const xOptions = [
+    -18,
+    0,
+    18
+  ];
+
+  const yOptions = [
+    -12,
+    0,
+    14
+  ];
+
+  const rateAdjustments = [
+    -2,
+    0,
+    2
+  ];
+
+  return {
+    zoom:
+      zoomOptions[
+        seed %
+        zoomOptions.length
+      ],
+
+    offsetX:
+      xOptions[
+        (
+          seed >>> 3
+        ) %
+        xOptions.length
+      ],
+
+    offsetY:
+      yOptions[
+        (
+          seed >>> 6
+        ) %
+        yOptions.length
+      ],
+
+    mirror:
+      (
+        (
+          seed >>> 9
+        ) %
+        5
+      ) === 0,
+
+    presetIndex:
+      (
+        seed >>> 12
+      ) %
+      6,
+
+    ttsRate:
+      signedRate(
+        process.env.SHORTS_TTS_RATE ||
+        site.ttsRate,
+        rateAdjustments[
+          (
+            seed >>> 15
+          ) %
+          rateAdjustments.length
+        ]
+      )
+  };
 }
 
 function sleep(milliseconds) {
@@ -196,6 +321,16 @@ async function processPost({
     `[OCCASIONAL] Presenter: ${presenterFile}`
   );
 
+  const variation =
+    buildVariation(
+      site,
+      post
+    );
+
+  console.log(
+    `[OCCASIONAL] TTS rate: ${variation.ttsRate}`
+  );
+
   run(
     "edge-tts",
     [
@@ -204,8 +339,7 @@ async function processPost({
       site.ttsVoice,
 
       `--rate=${normalizeRate(
-        process.env.SHORTS_TTS_RATE ||
-        site.ttsRate
+        variation.ttsRate
       )}`,
 
       "--volume=+0%",
@@ -214,10 +348,7 @@ async function processPost({
       article.files.scriptFile,
 
       "--write-media",
-      article.files.voiceFile,
-
-      "--write-subtitles",
-      article.files.subtitlesFile
+      article.files.voiceFile
     ]
   );
 
@@ -227,9 +358,6 @@ async function processPost({
     voiceFile:
       article.files.voiceFile,
 
-    subtitlesFile:
-      article.files.subtitlesFile,
-
     titleFile:
       article.files.titleFile,
 
@@ -237,7 +365,9 @@ async function processPost({
       article.files.websiteFile,
 
     videoFile:
-      article.files.videoFile
+      article.files.videoFile,
+
+    variation
   });
 
   buildManifest({
