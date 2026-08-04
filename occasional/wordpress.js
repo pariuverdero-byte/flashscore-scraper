@@ -4,6 +4,12 @@ import {
   requireEnv
 } from "./helpers.js";
 
+/*
+ * =========================================================
+ * BASIC HELPERS
+ * =========================================================
+ */
+
 function authHeader(
   user,
   appPassword
@@ -34,6 +40,67 @@ function responsePreview(
     .slice(0, maximum);
 }
 
+function parsePositiveInteger(
+  value,
+  fallback
+) {
+  const parsed =
+    Number.parseInt(
+      String(value || ""),
+      10
+    );
+
+  return Number.isFinite(parsed) &&
+    parsed > 0
+    ? parsed
+    : fallback;
+}
+
+function isWithinAgeLimit(
+  post,
+  maximumAgeDays
+) {
+  if (
+    !Number.isFinite(maximumAgeDays) ||
+    maximumAgeDays <= 0
+  ) {
+    return true;
+  }
+
+  const date =
+    new Date(
+      post?.date_gmt
+        ? `${post.date_gmt}Z`
+        : post?.date
+    );
+
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+    return false;
+  }
+
+  const maximumAgeMs =
+    maximumAgeDays *
+    24 *
+    60 *
+    60 *
+    1000;
+
+  return (
+    Date.now() -
+    date.getTime()
+  ) <= maximumAgeMs;
+}
+
+/*
+ * =========================================================
+ * SAFE WORDPRESS FETCH
+ * =========================================================
+ */
+
 async function wpFetch(
   url,
   options = {}
@@ -46,13 +113,6 @@ async function wpFetch(
 
   const text =
     await response.text();
-
-  const contentType =
-    String(
-      response.headers.get(
-        "content-type"
-      ) || ""
-    ).toLowerCase();
 
   let data = null;
 
@@ -80,9 +140,6 @@ async function wpFetch(
 
   if (
     text &&
-    !contentType.includes(
-      "application/json"
-    ) &&
     typeof data === "string"
   ) {
     throw new Error(
@@ -93,6 +150,12 @@ async function wpFetch(
 
   return data;
 }
+
+/*
+ * =========================================================
+ * TAXONOMY HELPERS
+ * =========================================================
+ */
 
 async function fetchTerms({
   siteUrl,
@@ -195,55 +258,18 @@ function buildTermMaps(
   };
 }
 
-function getEmbeddedTerms(
-  post,
-  taxonomy
-) {
-  const groups =
-    post?._embedded?.[
-      "wp:term"
-    ];
-
-  if (!Array.isArray(groups)) {
-    return [];
-  }
-
-  return groups
-    .flat()
-    .filter(
-      (term) =>
-        term?.taxonomy === taxonomy
-    );
-}
-
 function postTermSlugs({
   post,
   taxonomy,
   maps
 }) {
-  const embedded =
-    getEmbeddedTerms(
-      post,
-      taxonomy
-    );
-
-  const slugs =
-    new Set(
-      embedded
-        .map(
-          (term) =>
-            normalizeSlug(
-              term?.slug ||
-              term?.name
-            )
-        )
-        .filter(Boolean)
-    );
-
   const ids =
     taxonomy === "category"
       ? post?.categories
       : post?.tags;
+
+  const slugs =
+    [];
 
   for (
     const id of
@@ -263,69 +289,20 @@ function postTermSlugs({
       );
 
     if (slug) {
-      slugs.add(slug);
+      slugs.push(slug);
     }
   }
 
   return [
-    ...slugs
+    ...new Set(slugs)
   ];
 }
 
-function parsePositiveInteger(
-  value,
-  fallback
-) {
-  const parsed =
-    Number.parseInt(
-      String(value || ""),
-      10
-    );
-
-  return Number.isFinite(parsed) &&
-    parsed > 0
-    ? parsed
-    : fallback;
-}
-
-function isWithinAgeLimit(
-  post,
-  maximumAgeDays
-) {
-  if (
-    !Number.isFinite(maximumAgeDays) ||
-    maximumAgeDays <= 0
-  ) {
-    return true;
-  }
-
-  const date =
-    new Date(
-      post?.date_gmt
-        ? `${post.date_gmt}Z`
-        : post?.date
-    );
-
-  if (
-    Number.isNaN(
-      date.getTime()
-    )
-  ) {
-    return false;
-  }
-
-  const maximumAgeMs =
-    maximumAgeDays *
-    24 *
-    60 *
-    60 *
-    1000;
-
-  return (
-    Date.now() -
-    date.getTime()
-  ) <= maximumAgeMs;
-}
+/*
+ * =========================================================
+ * TAG MANAGEMENT
+ * =========================================================
+ */
 
 export async function ensureTag({
   siteUrl,
@@ -370,16 +347,20 @@ export async function ensureTag({
   return wpFetch(
     `${siteUrl}/wp-json/wp/v2/tags`,
     {
-      method: "POST",
+      method:
+        "POST",
+
       headers: {
         Authorization:
           authHeader(
             user,
             appPassword
           ),
+
         "Content-Type":
           "application/json"
       },
+
       body:
         JSON.stringify({
           name,
@@ -390,15 +371,246 @@ export async function ensureTag({
   );
 }
 
+/*
+ * =========================================================
+ * POST NORMALIZATION
+ * =========================================================
+ */
+
+function normalizePost({
+  post,
+  tagMaps,
+  categoryMaps,
+  matchedBy
+}) {
+  const title =
+    cleanInline(
+      post.title?.raw ||
+      post.title?.rendered ||
+      ""
+    );
+
+  const tagSlugs =
+    postTermSlugs({
+      post,
+      taxonomy:
+        "post_tag",
+      maps:
+        tagMaps
+    });
+
+  const categorySlugs =
+    postTermSlugs({
+      post,
+      taxonomy:
+        "category",
+      maps:
+        categoryMaps
+    });
+
+  const featured =
+    post?._embedded?.[
+      "wp:featuredmedia"
+    ]?.[0]?.source_url ||
+    null;
+
+  return {
+    id:
+      post.id,
+
+    date:
+      post.date,
+
+    modified:
+      post.modified,
+
+    slug:
+      post.slug,
+
+    status:
+      post.status,
+
+    link:
+      post.link,
+
+    title,
+
+    excerpt:
+      htmlToText(
+        post.excerpt?.raw ||
+        post.excerpt?.rendered ||
+        ""
+      ),
+
+    contentHtml:
+      post.content?.raw ||
+      post.content?.rendered ||
+      "",
+
+    contentText:
+      htmlToText(
+        post.content?.raw ||
+        post.content?.rendered ||
+        ""
+      ),
+
+    tags:
+      Array.isArray(post.tags)
+        ? post.tags
+        : [],
+
+    tagSlugs,
+    categorySlugs,
+    matchedBy,
+    featuredImage:
+      featured
+  };
+}
+
+/*
+ * =========================================================
+ * DIRECT POST LOOKUP
+ * =========================================================
+ */
+
+async function fetchExplicitPost({
+  siteUrl,
+  headers,
+  postId,
+  queueTagId,
+  doneTagId,
+  tagMaps,
+  categoryMaps,
+  maximumAgeDays
+}) {
+  const post =
+    await wpFetch(
+      `${siteUrl}/wp-json/wp/v2/posts/${postId}` +
+      "?context=edit&_embed=1",
+      { headers }
+    );
+
+  const tags =
+    Array.isArray(post?.tags)
+      ? post.tags.map(Number)
+      : [];
+
+  const hasQueueTag =
+    tags.includes(
+      Number(queueTagId)
+    );
+
+  const hasDoneTag =
+    tags.includes(
+      Number(doneTagId)
+    );
+
+  const withinAgeLimit =
+    isWithinAgeLimit(
+      post,
+      maximumAgeDays
+    );
+
+  if (
+    post?.status !== "publish"
+  ) {
+    throw new Error(
+      `Explicit WordPress post ${postId} is not published.`
+    );
+  }
+
+  if (hasDoneTag) {
+    throw new Error(
+      `Explicit WordPress post ${postId} already has the done tag.`
+    );
+  }
+
+  if (!withinAgeLimit) {
+    throw new Error(
+      `Explicit WordPress post ${postId} is older than the configured age limit.`
+    );
+  }
+
+  console.log(
+    `[OCCASIONAL] Explicit post ${postId}: ` +
+    `queue=${hasQueueTag}, done=${hasDoneTag}`
+  );
+
+  return normalizePost({
+    post,
+    tagMaps,
+    categoryMaps,
+    matchedBy:
+      hasQueueTag
+        ? "explicit_post_id_with_queue_tag"
+        : "explicit_post_id"
+  });
+}
+
+/*
+ * =========================================================
+ * NATIVE TAG QUERY
+ * =========================================================
+ */
+
+async function fetchPostsByTag({
+  siteUrl,
+  headers,
+  tagId,
+  postLimit
+}) {
+  return wpFetch(
+    `${siteUrl}/wp-json/wp/v2/posts` +
+    "?status=publish" +
+    `&tags=${encodeURIComponent(tagId)}` +
+    `&per_page=${encodeURIComponent(postLimit)}` +
+    "&orderby=date&order=asc" +
+    "&context=edit&_embed=1",
+    { headers }
+  );
+}
+
+/*
+ * =========================================================
+ * OPTIONAL CATEGORY FALLBACK
+ * =========================================================
+ */
+
+async function fetchPostsByCategory({
+  siteUrl,
+  headers,
+  categoryId,
+  postLimit
+}) {
+  return wpFetch(
+    `${siteUrl}/wp-json/wp/v2/posts` +
+    "?status=publish" +
+    `&categories=${encodeURIComponent(categoryId)}` +
+    `&per_page=${encodeURIComponent(postLimit)}` +
+    "&orderby=date&order=asc" +
+    "&context=edit&_embed=1",
+    { headers }
+  );
+}
+
+/*
+ * =========================================================
+ * FETCH NEXT ARTICLE
+ * =========================================================
+ */
+
 export async function fetchNextArticle({
   siteUrl,
   user,
   appPassword,
+  queueTagId,
+  doneTagId,
   queueTagSlug,
   doneTagSlug,
+  explicitPostId = null,
   categoryFallbackSlug = "",
   allowCategoryFallback = false,
-  postLimit = 50,
+  postLimit = 20,
   maximumAgeDays = 30
 }) {
   const headers = {
@@ -414,7 +626,7 @@ export async function fetchNextArticle({
       100,
       parsePositiveInteger(
         postLimit,
-        50
+        20
       )
     );
 
@@ -426,28 +638,22 @@ export async function fetchNextArticle({
 
   const [
     tags,
-    categories,
-    posts
+    categories
   ] =
     await Promise.all([
       fetchTerms({
         siteUrl,
         headers,
-        taxonomy: "post_tag"
+        taxonomy:
+          "post_tag"
       }),
+
       fetchTerms({
         siteUrl,
         headers,
-        taxonomy: "category"
-      }),
-      wpFetch(
-        `${siteUrl}/wp-json/wp/v2/posts` +
-        "?status=publish" +
-        `&per_page=${safePostLimit}` +
-        "&orderby=date&order=desc" +
-        "&context=edit&_embed=1",
-        { headers }
-      )
+        taxonomy:
+          "category"
+      })
     ]);
 
   const tagMaps =
@@ -466,214 +672,301 @@ export async function fetchNextArticle({
       doneTagSlug
     );
 
-  const fallbackSlug =
-    normalizeSlug(
-      categoryFallbackSlug
+  const queueTerm =
+    tagMaps.byId.get(
+      Number(queueTagId)
+    ) ||
+    tagMaps.bySlug.get(
+      queueSlug
     );
 
-  const diagnostics = [];
-  const candidates = [];
+  const doneTerm =
+    tagMaps.byId.get(
+      Number(doneTagId)
+    ) ||
+    tagMaps.bySlug.get(
+      doneSlug
+    );
 
-  for (
-    const post of
-    Array.isArray(posts)
-      ? posts
-      : []
+  if (!queueTerm?.id) {
+    throw new Error(
+      `Queue tag "${queueSlug}" could not be resolved.`
+    );
+  }
+
+  if (!doneTerm?.id) {
+    throw new Error(
+      `Done tag "${doneSlug}" could not be resolved.`
+    );
+  }
+
+  if (
+    explicitPostId !== null &&
+    explicitPostId !== undefined &&
+    String(explicitPostId).trim() !== ""
   ) {
-    const tagSlugs =
-      postTermSlugs({
-        post,
-        taxonomy: "post_tag",
-        maps: tagMaps
-      });
-
-    const categorySlugs =
-      postTermSlugs({
-        post,
-        taxonomy: "category",
-        maps: categoryMaps
-      });
-
-    const hasQueueTag =
-      tagSlugs.includes(
-        queueSlug
+    const parsedPostId =
+      parsePositiveInteger(
+        explicitPostId,
+        0
       );
 
-    const hasDoneTag =
-      tagSlugs.includes(
-        doneSlug
+    if (!parsedPostId) {
+      throw new Error(
+        `Invalid OCCASIONAL_POST_ID: ${explicitPostId}`
       );
-
-    const matchesFallbackCategory =
-      Boolean(
-        allowCategoryFallback &&
-        fallbackSlug &&
-        categorySlugs.includes(
-          fallbackSlug
-        )
-      );
-
-    const withinAgeLimit =
-      isWithinAgeLimit(
-        post,
-        safeMaximumAgeDays
-      );
-
-    const title =
-      cleanInline(
-        post.title?.raw ||
-        post.title?.rendered ||
-        ""
-      );
-
-    diagnostics.push({
-      id: post.id,
-      title,
-      date:
-        post.date || null,
-      tags:
-        tagSlugs,
-      categories:
-        categorySlugs,
-      hasQueueTag,
-      hasDoneTag,
-      matchesFallbackCategory,
-      withinAgeLimit
-    });
-
-    if (
-      !withinAgeLimit ||
-      hasDoneTag ||
-      (
-        !hasQueueTag &&
-        !matchesFallbackCategory
-      )
-    ) {
-      continue;
     }
 
-    candidates.push({
-      post,
-      title,
-      tagSlugs,
-      categorySlugs,
-      matchedBy:
-        hasQueueTag
-          ? "queue_tag"
-          : "category_fallback"
-    });
-  }
+    const explicitPost =
+      await fetchExplicitPost({
+        siteUrl,
+        headers,
+        postId:
+          parsedPostId,
+        queueTagId:
+          queueTerm.id,
+        doneTagId:
+          doneTerm.id,
+        tagMaps,
+        categoryMaps,
+        maximumAgeDays:
+          safeMaximumAgeDays
+      });
 
-  console.log(
-    `[OCCASIONAL] Inspected ${diagnostics.length} recent published posts.`
-  );
-
-  for (
-    const item of
-    diagnostics.slice(0, 15)
-  ) {
-    console.log(
-      `[OCCASIONAL] Post ${item.id}: ` +
-      `${item.title || "(untitled)"} | ` +
-      `tags=[${item.tags.join(", ") || "none"}] | ` +
-      `categories=[${item.categories.join(", ") || "none"}] | ` +
-      `queue=${item.hasQueueTag} | ` +
-      `done=${item.hasDoneTag}`
-    );
-  }
-
-  if (candidates.length === 0) {
     return {
-      post: null,
-      diagnostics,
-      queueTagFound:
-        tagMaps.bySlug.has(
-          queueSlug
-        ),
-      doneTagFound:
-        tagMaps.bySlug.has(
-          doneSlug
-        )
+      post:
+        explicitPost,
+
+      source:
+        "explicit_post_id",
+
+      diagnostics: {
+        queueTagId:
+          queueTerm.id,
+        doneTagId:
+          doneTerm.id,
+        explicitPostId:
+          parsedPostId
+      }
     };
   }
 
   /*
-   * Process the oldest valid queued article first.
-   * This preserves queue order and prevents newer posts
-   * from starving older explicitly tagged posts.
+   * Primary and safest path:
+   * ask WordPress itself for posts with the queue tag.
    */
-  candidates.sort(
-    (left, right) =>
-      new Date(
-        left.post.date
-      ).getTime() -
-      new Date(
-        right.post.date
-      ).getTime()
+  const queuedPosts =
+    await fetchPostsByTag({
+      siteUrl,
+      headers,
+      tagId:
+        queueTerm.id,
+      postLimit:
+        safePostLimit
+    });
+
+  console.log(
+    `[OCCASIONAL] Native WordPress tag query returned ` +
+    `${Array.isArray(queuedPosts) ? queuedPosts.length : 0} post(s).`
   );
 
-  const selected =
-    candidates[0];
+  const validQueuedPosts =
+    (Array.isArray(queuedPosts)
+      ? queuedPosts
+      : []
+    ).filter(
+      (post) => {
+        const tagIds =
+          Array.isArray(post?.tags)
+            ? post.tags.map(Number)
+            : [];
 
-  const post =
-    selected.post;
+        const hasDoneTag =
+          tagIds.includes(
+            Number(doneTerm.id)
+          );
 
-  const featured =
-    post?._embedded?.[
-      "wp:featuredmedia"
-    ]?.[0]?.source_url ||
-    null;
+        const withinAgeLimit =
+          isWithinAgeLimit(
+            post,
+            safeMaximumAgeDays
+          );
+
+        console.log(
+          `[OCCASIONAL] Native candidate ${post.id}: ` +
+          `${cleanInline(post.title?.raw || post.title?.rendered || "")} | ` +
+          `done=${hasDoneTag} | withinAgeLimit=${withinAgeLimit}`
+        );
+
+        return (
+          !hasDoneTag &&
+          withinAgeLimit
+        );
+      }
+    );
+
+  if (validQueuedPosts.length > 0) {
+    const selected =
+      validQueuedPosts[0];
+
+    return {
+      post:
+        normalizePost({
+          post:
+            selected,
+          tagMaps,
+          categoryMaps,
+          matchedBy:
+            "native_queue_tag_query"
+        }),
+
+      source:
+        "native_queue_tag_query",
+
+      diagnostics: {
+        queueTagId:
+          queueTerm.id,
+        doneTagId:
+          doneTerm.id,
+        queuedPostCount:
+          queuedPosts.length,
+        validQueuedPostCount:
+          validQueuedPosts.length
+      }
+    };
+  }
+
+  /*
+   * Optional fallback.
+   * Disabled by default because it can process an article
+   * without an explicit queue tag.
+   */
+  if (
+    allowCategoryFallback &&
+    normalizeSlug(
+      categoryFallbackSlug
+    )
+  ) {
+    const fallbackSlug =
+      normalizeSlug(
+        categoryFallbackSlug
+      );
+
+    const categoryTerm =
+      categoryMaps.bySlug.get(
+        fallbackSlug
+      );
+
+    if (!categoryTerm?.id) {
+      console.warn(
+        `[OCCASIONAL] Fallback category "${fallbackSlug}" was not found.`
+      );
+    } else {
+      const categoryPosts =
+        await fetchPostsByCategory({
+          siteUrl,
+          headers,
+          categoryId:
+            categoryTerm.id,
+          postLimit:
+            safePostLimit
+        });
+
+      const validCategoryPosts =
+        (Array.isArray(categoryPosts)
+          ? categoryPosts
+          : []
+        ).filter(
+          (post) => {
+            const tagIds =
+              Array.isArray(post?.tags)
+                ? post.tags.map(Number)
+                : [];
+
+            const hasDoneTag =
+              tagIds.includes(
+                Number(doneTerm.id)
+              );
+
+            return (
+              !hasDoneTag &&
+              isWithinAgeLimit(
+                post,
+                safeMaximumAgeDays
+              )
+            );
+          }
+        );
+
+      if (validCategoryPosts.length === 1) {
+        const selected =
+          validCategoryPosts[0];
+
+        console.warn(
+          `[OCCASIONAL] Using safe category fallback for post ${selected.id}.`
+        );
+
+        return {
+          post:
+            normalizePost({
+              post:
+                selected,
+              tagMaps,
+              categoryMaps,
+              matchedBy:
+                "single_post_category_fallback"
+            }),
+
+          source:
+            "single_post_category_fallback",
+
+          diagnostics: {
+            queueTagId:
+              queueTerm.id,
+            doneTagId:
+              doneTerm.id,
+            fallbackCategoryId:
+              categoryTerm.id,
+            fallbackCandidateCount:
+              1
+          }
+        };
+      }
+
+      console.warn(
+        `[OCCASIONAL] Category fallback found ${validCategoryPosts.length} ` +
+        "eligible posts. For safety, fallback runs only when exactly one post is eligible."
+      );
+    }
+  }
 
   return {
-    post: {
-      id: post.id,
-      date: post.date,
-      modified: post.modified,
-      slug: post.slug,
-      status: post.status,
-      link: post.link,
-      title:
-        selected.title,
-      excerpt:
-        htmlToText(
-          post.excerpt?.raw ||
-          post.excerpt?.rendered ||
-          ""
-        ),
-      contentHtml:
-        post.content?.raw ||
-        post.content?.rendered ||
-        "",
-      contentText:
-        htmlToText(
-          post.content?.raw ||
-          post.content?.rendered ||
-          ""
-        ),
-      tags:
-        Array.isArray(post.tags)
-          ? post.tags
-          : [],
-      tagSlugs:
-        selected.tagSlugs,
-      categorySlugs:
-        selected.categorySlugs,
-      matchedBy:
-        selected.matchedBy,
-      featuredImage:
-        featured
-    },
-    diagnostics,
-    queueTagFound:
-      tagMaps.bySlug.has(
-        queueSlug
-      ),
-    doneTagFound:
-      tagMaps.bySlug.has(
-        doneSlug
-      )
+    post:
+      null,
+
+    source:
+      "none",
+
+    diagnostics: {
+      queueTagId:
+        queueTerm.id,
+      doneTagId:
+        doneTerm.id,
+      queuedPostCount:
+        Array.isArray(queuedPosts)
+          ? queuedPosts.length
+          : 0,
+      message:
+        "WordPress returned no eligible published posts for the queue tag."
+    }
   };
 }
+
+/*
+ * =========================================================
+ * UPDATE ARTICLE AFTER YOUTUBE UPLOAD
+ * =========================================================
+ */
 
 export async function updateArticleAfterUpload({
   siteUrl,
@@ -719,15 +1012,19 @@ export async function updateArticleAfterUpload({
         : `${embed}\n\n${content}`;
   }
 
+  const existingTags =
+    Array.isArray(post.tags)
+      ? post.tags
+          .map(Number)
+          .filter(Number.isFinite)
+      : [];
+
   const tags = [
     ...new Set([
-      ...(post.tags || [])
-        .map(Number)
-        .filter(
-          (id) =>
-            Number.isFinite(id) &&
-            id !== Number(queueTagId)
-        ),
+      ...existingTags.filter(
+        (id) =>
+          id !== Number(queueTagId)
+      ),
       Number(doneTagId)
     ])
   ].filter(Number.isFinite);
@@ -735,16 +1032,20 @@ export async function updateArticleAfterUpload({
   return wpFetch(
     `${siteUrl}/wp-json/wp/v2/posts/${post.id}`,
     {
-      method: "POST",
+      method:
+        "POST",
+
       headers: {
         Authorization:
           authHeader(
             user,
             appPassword
           ),
+
         "Content-Type":
           "application/json"
       },
+
       body:
         JSON.stringify({
           content,
@@ -754,12 +1055,19 @@ export async function updateArticleAfterUpload({
   );
 }
 
+/*
+ * =========================================================
+ * CREDENTIALS
+ * =========================================================
+ */
+
 export function getWordPressCredentials() {
   return {
     user:
       requireEnv(
         "WP_USER"
       ),
+
     appPassword:
       requireEnv(
         "WP_APP_PASS"
