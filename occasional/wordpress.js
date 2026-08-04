@@ -215,9 +215,50 @@ async function executeWordPressRequest(
           text
         );
 
-      isJson = true;
+      /*
+       * Some WordPress/security/cache layers return
+       * JSON that is encoded as a JSON string.
+       *
+       * Example:
+       * "[{\"id\":709,\"slug\":\"generate-video\"}]"
+       *
+       * Parse nested JSON strings safely, up to three levels.
+       */
+      for (
+        let level = 0;
+        level < 3;
+        level += 1
+      ) {
+        if (
+          typeof data !== "string"
+        ) {
+          break;
+        }
+
+        const trimmed =
+          data.trim();
+
+        if (
+          !trimmed ||
+          !(
+            trimmed.startsWith("[") ||
+            trimmed.startsWith("{")
+          )
+        ) {
+          break;
+        }
+
+        data =
+          JSON.parse(
+            trimmed
+          );
+      }
+
+      isJson =
+        typeof data !== "string";
     } catch {
       data = text;
+      isJson = false;
     }
   } else {
     isJson = true;
@@ -290,6 +331,18 @@ async function wpFetch(
       response.ok &&
       isJson
     ) {
+      const shape =
+        Array.isArray(data)
+          ? `array(${data.length})`
+          : data &&
+            typeof data === "object"
+            ? "object"
+            : typeof data;
+
+      console.log(
+        `[OCCASIONAL] WordPress JSON payload shape: ${shape}`
+      );
+
       return data;
     }
 
