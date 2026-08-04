@@ -8,10 +8,16 @@ on:
         required: false
         default: false
         type: boolean
+
   schedule:
-    # DST-safe pair. The gate below continues only at 08:00 Europe/Bucharest.
-    - cron: "0 5 * * *"
-    - cron: "0 6 * * *"
+    # DST-safe:
+    # Summer: 05:17 UTC = 08:17 Romania
+    # Winter: 06:17 UTC = 08:17 Romania
+    #
+    # Minute 17 avoids the GitHub Actions congestion
+    # that commonly occurs at the start of the hour.
+    - cron: "17 5 * * *"
+    - cron: "17 6 * * *"
 
 permissions:
   contents: read
@@ -23,46 +29,84 @@ concurrency:
 jobs:
   schedule-gate:
     runs-on: ubuntu-latest
+
     outputs:
       should_run: ${{ steps.gate.outputs.should_run }}
+
     steps:
-      - id: gate
+      - name: Check Romanian execution window
+        id: gate
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual run. Continuing."
+          EVENT_NAME="${{ github.event_name }}"
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "Manual run detected. Continuing."
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          LOCAL_DATE=$(TZ=Europe/Bucharest date '+%Y-%m-%d')
           LOCAL_HOUR=$(TZ=Europe/Bucharest date '+%H')
-          LOCAL_TIME=$(TZ=Europe/Bucharest date '+%Y-%m-%d %H:%M')
-          echo "Bucharest time: ${LOCAL_TIME}"
+          LOCAL_MINUTE=$(TZ=Europe/Bucharest date '+%M')
+          LOCAL_TIME=$(TZ=Europe/Bucharest date '+%Y-%m-%d %H:%M:%S %Z')
 
-          if [ "$LOCAL_HOUR" = "08" ]; then
+          echo "Bucharest time: ${LOCAL_TIME}"
+          echo "Local hour: ${LOCAL_HOUR}"
+          echo "Local minute: ${LOCAL_MINUTE}"
+
+          #
+          # Accept a wider morning window.
+          #
+          # This prevents a delayed GitHub scheduled run
+          # from being rejected merely because it started
+          # after 09:00.
+          #
+          if [ "$LOCAL_HOUR" -ge 8 ] && [ "$LOCAL_HOUR" -le 10 ]; then
+            echo "Execution is inside the accepted Romanian window."
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           else
+            echo "Execution is outside the accepted Romanian window."
             echo "should_run=false" >> "$GITHUB_OUTPUT"
           fi
 
   build-and-publish:
     needs: schedule-gate
+
     if: needs.schedule-gate.outputs.should_run == 'true'
+
     runs-on: ubuntu-latest
+
     timeout-minutes: 90
 
     env:
       OCCASIONAL_OUTPUT_ROOT: output/occasional
       OCCASIONAL_QUEUE_TAG: generate-video
       OCCASIONAL_DONE_TAG: video-published
+
+      OCCASIONAL_MAX_POSTS_PER_SITE: "1"
+
       YOUTUBE_PRIVACY_STATUS: public
+
       OCCASIONAL_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Show workflow context
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Event: ${{ github.event_name }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Romania time: $(TZ=Europe/Bucharest date '+%Y-%m-%d %H:%M:%S %Z')"
+          echo "UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Dry run: ${OCCASIONAL_DRY_RUN}"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -70,8 +114,14 @@ jobs:
           node-version: "20"
 
       - name: Install Node dependencies
+        shell: bash
         run: |
-          npm install googleapis --no-fund --no-audit
+          set -euo pipefail
+
+          npm install \
+            googleapis \
+            --no-fund \
+            --no-audit
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -79,21 +129,38 @@ jobs:
           python-version: "3.12"
 
       - name: Install Edge TTS
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install edge-tts
+          set -euo pipefail
+
+          python -m pip install \
+            --upgrade \
+            pip
+
+          python -m pip install \
+            edge-tts
+
           edge-tts --version
 
       - name: Install FFmpeg and fonts
+        shell: bash
         run: |
+          set -euo pipefail
+
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core
+
+          sudo apt-get install -y \
+            ffmpeg \
+            fonts-dejavu-core
+
           ffmpeg -version
+          ffprobe -version
 
       - name: Verify occasional video files
         shell: bash
         run: |
           set -euo pipefail
+
           REQUIRED_FILES=(
             "occasional/config.js"
             "occasional/helpers.js"
@@ -104,30 +171,89 @@ jobs:
             "occasional/process_site.js"
             "publish/platforms/youtube.js"
           )
+
           for FILE in "${REQUIRED_FILES[@]}"; do
-            test -s "$FILE" || { echo "Missing: $FILE"; exit 1; }
+            if [ ! -s "$FILE" ]; then
+              echo "Missing or empty required file: $FILE"
+              exit 1
+            fi
+
+            echo "Checking JavaScript syntax: $FILE"
             node --check "$FILE"
           done
 
+      - name: Verify presenter files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PRESENTERS=(
+            "assets/presenters/ro_presenter_01.mp4"
+            "assets/presenters/ro_presenter_02.mp4"
+            "assets/presenters/ro_presenter_03.mp4"
+            "assets/presenters/en_presenter_01.mp4"
+            "assets/presenters/en_presenter_02.mp4"
+            "assets/presenters/en_presenter_03.mp4"
+          )
+
+          for FILE in "${PRESENTERS[@]}"; do
+            if [ ! -s "$FILE" ]; then
+              echo "Missing presenter file: $FILE"
+              exit 1
+            fi
+
+            echo "Presenter found: $FILE"
+          done
+
       - name: Process PariuVerde article
+        continue-on-error: true
         env:
           OCCASIONAL_SITE_KEY: pariuverde
+
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_PV_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_PV_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_PV_REFRESH_TOKEN }}
-        run: node occasional/process_site.js
+
+        run: |
+          set -euo pipefail
+          node occasional/process_site.js
 
       - name: Process GreenBetTips article
+        continue-on-error: true
         env:
           OCCASIONAL_SITE_KEY: greenbettips
+
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
+
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
-        run: node occasional/process_site.js
+
+        run: |
+          set -euo pipefail
+          node occasional/process_site.js
+
+      - name: Show generated output
+        if: always()
+        shell: bash
+        run: |
+          echo "Generated files:"
+          find output/occasional \
+            -maxdepth 5 \
+            -type f \
+            -print 2>/dev/null || true
+
+          echo ""
+          echo "JSON results:"
+          find output/occasional \
+            -type f \
+            -name "*.json" \
+            -print \
+            -exec cat {} \; 2>/dev/null || true
 
       - name: Upload occasional video artifacts
         if: always()
