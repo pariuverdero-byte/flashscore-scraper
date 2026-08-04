@@ -1,0 +1,25 @@
+export const LIVE_CONFIG = {
+  maxMatches: Number(process.env.LIVE_MAX_MATCHES || 15),
+  pollSeconds: Number(process.env.LIVE_POLL_SECONDS || 75),
+  minMinute: Number(process.env.LIVE_MIN_MINUTE || 12),
+  maxMinute: Number(process.env.LIVE_MAX_MINUTE || 88),
+  minConfidence: Number(process.env.LIVE_MIN_CONFIDENCE || 72),
+  cooldownMinutes: Number(process.env.LIVE_COOLDOWN_MINUTES || 9),
+  signalTtlMinutes: Number(process.env.LIVE_SIGNAL_TTL_MINUTES || 8),
+  maxSignalsPerMatch: Number(process.env.LIVE_MAX_SIGNALS_PER_MATCH || 2),
+  languages: ['ro', 'en'],
+  competitionDenylist: [
+    /friendly/i,
+    /virtual/i,
+    /esoccer/i,
+    /women.*friendly/i,
+    /u19.*friendly/i,
+  ],
+  selectionWeights: {
+    live: 30,
+    minuteWindow: 20,
+    competition: 15,
+    statsAvailable: 25,
+    preMatchContext: 10,
+  },
+};
