@@ -102,9 +102,35 @@ const previousPayload = await readJson(matchesFile, { matches: [] });
 const previousById = new Map((previousPayload.matches || []).map((match) => [match.id, match]));
 
 const liveList = await fetchLiveMatches();
-const liveStates = await mapLimited(liveList, 4, fetchMatchState);
-const selectedForProcessing = selectMatches(liveStates, LIVE_CONFIG.maxMatches);
-const selectedWithStats = selectedForProcessing.filter(hasUsableStatistics);
+
+console.log(
+  `[live-debug] fetched=${liveList.length}`
+);
+
+const liveStates =
+  await mapLimited(
+    liveList,
+    4,
+    fetchMatchState
+  );
+
+const selectedForProcessing =
+  selectMatches(
+    liveStates,
+    LIVE_CONFIG.maxMatches
+  );
+
+const selectedWithStats =
+  selectedForProcessing.filter(
+    hasUsableStatistics
+  );
+
+console.log(
+  `[live-debug] states=${liveStates.length}, ` +
+  `selected=${selectedForProcessing.length}, ` +
+  `withStats=${selectedWithStats.length}, ` +
+  `max=${LIVE_CONFIG.maxMatches}`
+);
 
 const prematchCache = await readJson(prematchCacheFile, {});
 const prematchResult = await enrichWithPrematch(selectedWithStats, prematchCache, {
@@ -112,6 +138,10 @@ const prematchResult = await enrichWithPrematch(selectedWithStats, prematchCache
   maxFetches: Number(process.env.PREMATCH_MAX_FETCHES_PER_CYCLE || 3),
 });
 const selectedForFeed = prematchResult.matches;
+
+console.log(
+  `[live-debug] feed=${selectedForFeed.length}`
+);
 
 let signals = await readJson(signalsFile, []);
 signals = settleSignals(signals, selectedForProcessing);
