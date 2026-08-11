@@ -189,32 +189,41 @@ function formSummary(items = []) {
   if (!list.length) return null;
 
   const record = { W: 0, D: 0, L: 0 };
-  let over15 = 0;
-  let over25 = 0;
+  const totals = [];
   let btts = 0;
 
   for (const item of list) {
     if (record[item?.result] !== undefined) record[item.result] += 1;
-
     const m = safe(item?.score).match(/(\d+)\s*[-:]\s*(\d+)/);
     if (!m) continue;
-
     const a = Number(m[1]);
     const b = Number(m[2]);
-
-    if (a + b >= 2) over15 += 1;
-    if (a + b >= 3) over25 += 1;
+    totals.push(a + b);
     if (a > 0 && b > 0) btts += 1;
   }
 
+  const avg = totals.length
+    ? totals.reduce((sum, value) => sum + value, 0) / totals.length
+    : null;
+
+  const countOver = (line) => totals.filter(v => v > line).length;
+  const countUnder = (line) => totals.filter(v => v < line).length;
+
   return {
     matches: list.length,
+    score_samples: totals.length,
     wins: record.W,
     draws: record.D,
     losses: record.L,
-    over15,
-    over25,
+    avg_total_goals: avg === null ? null : Number(avg.toFixed(2)),
+    over_1_5: countOver(1.5),
+    over_2_5: countOver(2.5),
+    over_3_5: countOver(3.5),
+    under_1_5: countUnder(1.5),
+    under_2_5: countUnder(2.5),
+    under_3_5: countUnder(3.5),
     btts,
+    totals,
     scores: list.map(x => safe(x.score)).filter(Boolean)
   };
 }
@@ -250,6 +259,195 @@ function compactPrematch(data) {
   const text = JSON.stringify(out);
   return /[1-9]/.test(text) ? out : null;
 }
+
+function parseGoalsMarket(market = "") {
+  const text = safe(market).toLowerCase();
+  const m = text.match(/(?:over|under|peste|sub)\s*(\d+(?:[.,]\d+)?)/i);
+  return {
+    line: m ? Number(m[1].replace(",", ".")) : null,
+    direction: /\b(?:over|peste)\b/i.test(text)
+      ? "over"
+      : /\b(?:under|sub)\b/i.test(text)
+        ? "under"
+        : null
+  };
+}
+
+function buildGoalsEvidence(prematch, market) {
+  const { line, direction } = parseGoalsMarket(market);
+  const home = prematch?.recent_form?.home;
+  const away = prematch?.recent_form?.away;
+  const hm = Number(home?.score_samples || 0);
+  const am = Number(away?.score_samples || 0);
+
+  if (!Number.isFinite(line) || !direction || hm < 3 || am < 3) {
+    return { usable: false, type: "goals" };
+  }
+
+  const ha = Number(home?.avg_total_goals);
+  const aa = Number(away?.avg_total_goals);
+  if (!Number.isFinite(ha) || !Number.isFinite(aa)) {
+    return { usable: false, type: "goals" };
+  }
+
+  const out = {
+    usable: true,
+    type: "goals",
+    direction,
+    line,
+    home_matches: hm,
+    away_matches: am,
+    home_avg_total_goals: ha,
+    away_avg_total_goals: aa
+  };
+
+  // Exact-line hit rates only with a full five-match sample for both teams.
+  const key = `${direction}_${String(line).replace(".", "_")}`;
+  if (
+    hm >= 5 && am >= 5 &&
+    Number.isFinite(Number(home?.[key])) &&
+    Number.isFinite(Number(away?.[key]))
+  ) {
+    out.home_hits = Number(home[key]);
+    out.away_hits = Number(away[key]);
+    out.home_hit_rate = Math.round(out.home_hits / hm * 100);
+    out.away_hit_rate = Math.round(out.away_hits / am * 100);
+  }
+
+  return out;
+}
+
+function buildResultEvidence(prematch) {
+  const home = prematch?.recent_form?.home;
+  const away = prematch?.recent_form?.away;
+  const hm = Number(home?.matches || 0);
+  const am = Number(away?.matches || 0);
+  const st = prematch?.standings || {};
+  const hp = Number(st.home_position);
+  const ap = Number(st.away_position);
+  const hplayed = Number(st.home_played || 0);
+  const aplayed = Number(st.away_played || 0);
+
+  const formUsable = hm >= 3 && am >= 3;
+  const standingsUsable =
+    Number.isFinite(hp) && Number.isFinite(ap) &&
+    hplayed >= 3 && aplayed >= 3;
+
+  if (!formUsable && !standingsUsable) {
+    return { usable: false, type: "result" };
+  }
+
+  const out = { usable: true, type: "result" };
+  if (formUsable) {
+    out.home_form = {
+      matches: hm,
+      wins: Number(home?.wins || 0),
+      draws: Number(home?.draws || 0),
+      losses: Number(home?.losses || 0)
+    };
+    out.away_form = {
+      matches: am,
+      wins: Number(away?.wins || 0),
+      draws: Number(away?.draws || 0),
+      losses: Number(away?.losses || 0)
+    };
+  }
+  if (standingsUsable) {
+    out.standings = {
+      home_position: hp,
+      away_position: ap,
+      home_played: hplayed,
+      away_played: aplayed,
+      home_points: Number(st.home_points),
+      away_points: Number(st.away_points)
+    };
+  }
+  return out;
+}
+
+function buildBttsEvidence(prematch) {
+  const home = prematch?.recent_form?.home;
+  const away = prematch?.recent_form?.away;
+  const hm = Number(home?.score_samples || 0);
+  const am = Number(away?.score_samples || 0);
+  if (hm < 5 || am < 5) return { usable: false, type: "btts" };
+  return {
+    usable: true,
+    type: "btts",
+    home_matches: hm,
+    away_matches: am,
+    home_btts: Number(home?.btts || 0),
+    away_btts: Number(away?.btts || 0),
+    home_btts_rate: Math.round(Number(home?.btts || 0) / hm * 100),
+    away_btts_rate: Math.round(Number(away?.btts || 0) / am * 100)
+  };
+}
+
+function buildAnalysisEvidence(selection, prematch) {
+  if (!prematch) return { usable: false, type: "none" };
+
+  const cls = marketClass(selection);
+  const market = safe(selection.market_raw);
+
+  if (cls === "double_chance_goals") {
+    const result = buildResultEvidence(prematch);
+    const goals = buildGoalsEvidence(prematch, market);
+    if (!result.usable || !goals.usable) {
+      return { usable: false, type: "double_chance_goals" };
+    }
+    return { usable: true, type: "double_chance_goals", result, goals };
+  }
+
+  if (cls === "double_chance" || cls === "result") {
+    return buildResultEvidence(prematch);
+  }
+
+  if (cls === "goals") {
+    // Current prematch parser does not reliably expose team-specific GF/GA perspective.
+    if (/team goals|team total|goluri echip|gol echip/i.test(market)) {
+      return { usable: false, type: "team_goals" };
+    }
+    return buildGoalsEvidence(prematch, market);
+  }
+
+  if (cls === "btts") return buildBttsEvidence(prematch);
+
+  // Do not comment on corners/cards until genuine historical averages are supplied.
+  if (cls === "corners" || cls === "cards") {
+    return { usable: false, type: cls };
+  }
+
+  return { usable: false, type: cls || "unknown" };
+}
+
+function cleanReason(reason, evidence) {
+  if (evidence?.usable !== true) return "";
+  const text = safe(reason);
+  if (!text || !/\d/.test(text)) return "";
+
+  const banned = [
+    /no data/i,
+    /no prematch/i,
+    /without form/i,
+    /fără date/i,
+    /fara date/i,
+    /fără formă/i,
+    /fara forma/i,
+    /structura pieței/i,
+    /structura pietei/i,
+    /market structure/i,
+    /low line/i,
+    /linie redusă/i,
+    /linie redusa/i,
+    /moderate threshold/i,
+    /pragul .*moderat/i,
+    /balanced selection/i,
+    /conservative pick/i
+  ];
+
+  return banned.some(rule => rule.test(text)) ? "" : text;
+}
+
 
 async function collectPrematchContext(bundles) {
   if (!OPENAI_API_KEY || AI_PREMATCH_MAX <= 0) return new Map();
@@ -323,8 +521,16 @@ async function askAI(bundles, prematchContext = new Map()) {
   const selectionMap = new Map();
   for (const b of bundles) for (const t of [b.cota2, b.day]) for (const s of t.selections) selectionMap.set(s.__sid, s);
   const selections = [...selectionMap.entries()].map(([selection_id, s]) => ({
-    selection_id, teams: s.teams, market: s.market_raw, odd: s.odd, source: s.source || "unknown", market_class: marketClass(s),
-    prematch: prematchContext.get(s.match_id) || null
+    selection_id,
+    teams: s.teams,
+    market: s.market_raw,
+    odd: s.odd,
+    source: s.source || "unknown",
+    market_class: marketClass(s),
+    evidence: s.__analysisEvidence || buildAnalysisEvidence(
+      s,
+      prematchContext.get(s.match_id) || null
+    )
   }));
   const compactBundles = bundles.map(b => ({
     bundle_id: b.id,
@@ -344,19 +550,51 @@ async function askAI(bundles, prematchContext = new Map()) {
       }}
     }, required: ["bundle_id", "annotations"]
   };
-  const instructions = `You are a football betting analyst and conservative ticket curator. Choose exactly one supplied bundle. Never invent or modify event, market, odd, selection_id or bundle_id. Prefer sensible diversity when it already exists: double chance + goals, double chance, corners, cards, BTTS, totals, then plain 1X2. Keep Odds 2 conservative and the day ticket balanced.
+  const instructions = `You are a football betting analyst and conservative ticket curator. Choose exactly one supplied bundle.
 
-PREMATCH DATA:
-- Each selection may contain prematch data scraped from Flashscore: standings, recent results, H2H and market odds.
-- Use ONLY those supplied facts. Never invent statistics, injuries, lineups, motivation, news or form that is not present.
-- When prematch data exists, the reason MUST contain at least one concrete statistic (for example W-D-L record, goals pattern, standings position or H2H record) and connect it to the chosen market.
-- Prefer selections whose supplied statistics genuinely support the market; do not select a market merely because its class is preferred.
-- If prematch data is missing, keep the reason cautious and say the pick is based on market/odds structure only; do not fabricate evidence.
+HARD RULES:
+- Never invent or modify an event, market, odd, selection_id or bundle_id.
+- Use ONLY the evidence object supplied for that selection.
+- Never invent form, goals, standings, H2H, cards, corners, injuries, lineups, news or motivation.
 
-LANGUAGE AND STYLE:
-- Produce natural Romanian and English labels; English must contain no Romanian words.
-- Reasons should be useful, natural and concise: 18-35 words, maximum 2 sentences.
-- Avoid sterile phrases such as "balanced selection", "adds diversification", "conservative market" unless backed by a concrete supplied fact.`;
+NO EVIDENCE = NO COMMENT:
+- If evidence.usable is false, reason_ro MUST be "" and reason_en MUST be "".
+- Do not explain why data is missing.
+- Do not fill the space with generic betting commentary.
+
+MARKET-SPECIFIC RULES:
+- Goals Over/Under: primary evidence is average TOTAL goals per recent match for BOTH teams. When supplied, also use hit frequency versus the EXACT selected line. League position alone is not evidence for a goals market.
+- BTTS: use BTTS frequency for BOTH teams; minimum sample is 5 recent matches for both.
+- 1X2 / Double Chance: use recent W-D-L and/or standings. Recent form requires at least 3 matches for both teams; standings require at least 3 matches played.
+- Double Chance + Goals: justify BOTH components. If evidence for either component is missing, output no reason.
+- H2H is secondary and must never replace market-specific evidence.
+- Corners: comment only when historical corner statistics are explicitly supplied.
+- Cards: comment only when historical card statistics are explicitly supplied.
+
+QUALITY:
+- Every non-empty reason must contain at least one concrete number.
+- Prefer statistics for BOTH teams.
+- Explain how the numbers relate to the EXACT selected market.
+- Maximum 40 words and two sentences.
+
+NEVER WRITE phrases equivalent to:
+- "no data available"
+- "without form or H2H"
+- "based on market structure"
+- "the line is low"
+- "the threshold is moderate"
+- "balanced selection"
+- "conservative pick"
+
+GOOD OVER 1.5 EXAMPLE:
+"Annagh's last five matches averaged 2.8 total goals and Rathfriland's 2.4; Over 1.5 landed in 4/5 for both teams."
+
+GOOD DOUBLE CHANCE EXAMPLE:
+"Fenerbahce are unbeaten in 4 of their last 5 matches, while Sturm Graz lost 3 of 5; that supports the X2 protection."
+
+LANGUAGE:
+- label_ro/reason_ro: natural Romanian betting language.
+- label_en/reason_en: natural English betting language with no Romanian terminology.`;
   const r = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
@@ -386,11 +624,12 @@ function decorate(ticket, annotations) {
       const a = map.get(s.__sid) || {};
       const out = { ...s };
       delete out.__sid;
+      delete out.__analysisEvidence;
       out.ai = {
         label_ro: safe(a.label_ro) || safe(out.market_raw),
         label_en: safe(a.label_en) || fallbackEnglish(out.market_raw),
-        reason_ro: safe(a.reason_ro),
-        reason_en: safe(a.reason_en),
+        reason_ro: cleanReason(a.reason_ro, s.__analysisEvidence),
+        reason_en: cleanReason(a.reason_en, s.__analysisEvidence),
       };
       return out;
     })
@@ -421,6 +660,18 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
     let prematchContext = new Map();
     try {
       prematchContext = await collectPrematchContext(bundles);
+
+      for (const bundle of bundles) {
+        for (const ticket of [bundle.cota2, bundle.day]) {
+          for (const selection of ticket.selections) {
+            selection.__analysisEvidence = buildAnalysisEvidence(
+              selection,
+              prematchContext.get(selection.match_id) || null
+            );
+          }
+        }
+      }
+
       const ai = await askAI(bundles, prematchContext);
       if (ai) {
         const found = bundles.find(b => b.id === ai.bundle_id);
