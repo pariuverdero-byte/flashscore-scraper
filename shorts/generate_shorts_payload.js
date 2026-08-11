@@ -1533,36 +1533,32 @@ function buildVoiceScript(
       match,
       matchIndex
     ) => {
-      if (matchIndex > 0) {
+      if (
+        matchIndex > 0 &&
+        random() >= 0.45
+      ) {
         lines.push(
           pickRandom(
             phrases.transitions,
             random
           )
         );
-
-        lines.push("");
       }
 
-      lines.push(
-        `${spokenPickNumber(
-          match.index
-        )}.`
-      );
-
-      lines.push(
+      const teamsLine =
         buildTeamsVoiceLine(
           match
         )
-      );
+          .replace(/[.]$/, "");
 
-      lines.push("");
-
-      lines.push(
-        `${pickRandom(
+      const leadIn =
+        pickRandom(
           phrases.selectionLeadIns,
           random
-        )} ${match.spokenMarket}.`
+        );
+
+      lines.push(
+        `${spokenPickNumber(match.index)}: ${teamsLine}. ${leadIn} ${match.spokenMarket}.`
       );
 
       /*

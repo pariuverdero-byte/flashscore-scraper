@@ -421,6 +421,12 @@ const TTS_RATE =
     DEFAULT_CONFIG.ttsRate
   );
 
+const TTS_PITCH =
+  normalizeTtsPitch(
+    process.env.SHORTS_TTS_PITCH ||
+    "+0Hz"
+  );
+
 const YOUTUBE_PRIVACY_STATUS =
   process.env.YOUTUBE_PRIVACY_STATUS ||
   "public";
@@ -506,6 +512,35 @@ function normalizeTtsRate(
   );
 
   return "+0%";
+}
+
+
+function normalizeTtsPitch(value) {
+  const pitch = String(value ?? "").trim();
+
+  if (!pitch) {
+    return "+0Hz";
+  }
+
+  if (/^[+-]?\d+Hz$/i.test(pitch)) {
+    return (
+      pitch.startsWith("+") ||
+      pitch.startsWith("-")
+    )
+      ? pitch
+      : `+${pitch}`;
+  }
+
+  if (/^[+-]?\d+$/.test(pitch)) {
+    const numericPitch = Number(pitch);
+    return `${numericPitch >= 0 ? "+" : ""}${numericPitch}Hz`;
+  }
+
+  console.warn(
+    `[BUILD] Invalid TTS pitch "${pitch}". Using +0Hz.`
+  );
+
+  return "+0Hz";
 }
 
 /*
@@ -868,6 +903,10 @@ function generateVoice({
     `[BUILD] TTS rate: ${TTS_RATE}`
   );
 
+  console.log(
+    `[BUILD] TTS pitch: ${TTS_PITCH}`
+  );
+
   /*
    * Important:
    *
@@ -889,6 +928,8 @@ function generateVoice({
       TTS_VOICE,
 
       `--rate=${TTS_RATE}`,
+
+      `--pitch=${TTS_PITCH}`,
 
       "--volume=+0%",
 

@@ -51,13 +51,23 @@ jobs:
       # CONTENT ENGINE
       # ==================================================
       SHORTS_OUTPUT_ROOT: "output"
-      SHORTS_PRESENTER_FILE: "assets/presenters/ro_presenter_01.mp4"
+      SHORTS_PRESENTER_FILES: "assets/presenters/ro_presenter_01.mp4,assets/presenters/ro_presenter_02.mp4,assets/presenters/ro_presenter_03.mp4"
 
       SHORTS_TTS_VOICE: "ro-RO-EmilNeural"
-      SHORTS_TTS_RATE: "-5%"
+      SHORTS_TTS_RATE: "+1%"
+      SHORTS_TTS_PITCH: "+1Hz"
 
-      SHORTS_BACKGROUND_CHANGE_MIN_SECONDS: "4"
-      SHORTS_BACKGROUND_CHANGE_MAX_SECONDS: "7"
+      SHORTS_PRESENTER_SCALE_MIN: "0.88"
+      SHORTS_PRESENTER_SCALE_MAX: "1.02"
+      SHORTS_PRESENTER_OFFSET_X_MIN: "-110"
+      SHORTS_PRESENTER_OFFSET_X_MAX: "110"
+      SHORTS_PRESENTER_OFFSET_Y_MIN: "10"
+      SHORTS_PRESENTER_OFFSET_Y_MAX: "70"
+      SHORTS_PRESENTER_MIRROR_CHANCE: "0.35"
+
+      SHORTS_BACKGROUND_CHANGE_MIN_SECONDS: "3"
+      SHORTS_BACKGROUND_CHANGE_MAX_SECONDS: "6"
+      SHORTS_BACKGROUND_VARIANT_COUNT: "18"
 
       # ==================================================
       # DISTRIBUTION CONFIGURATION
