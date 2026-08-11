@@ -1,10 +1,13 @@
 import fs from "fs/promises";
 import { matchEventToFlashscore } from "./engine/matcher_core.js";
+import { fetchPrematchData } from "./live-betting/lib/prematch.js";
 
 const POOL_FILE = "master_pool.json";
 const MATCHES_FILE = "matches.json";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
+const AI_PREMATCH_MAX = Math.max(0, Number(process.env.AI_PREMATCH_MAX || 12));
+const AI_PREMATCH_CONCURRENCY = Math.max(1, Number(process.env.AI_PREMATCH_CONCURRENCY || 4));
 
 const COTA2 = {
   min: Number(process.env.PV_COTA2_MIN || 1.90),
@@ -172,6 +175,131 @@ function buildBundles(pool) {
   return bundles.slice(0, 80);
 }
 
+
+function splitCanonicalTeams(teams = "") {
+  const cleaned = safe(teams).replace(/\s+[–—−]\s+/g, " - ");
+  const parts = cleaned.split(/\s+-\s+/).map(x => safe(x)).filter(Boolean);
+  if (parts.length < 2) return { home: "", away: "" };
+  const strip = (v) => safe(v).replace(/\s*\([^)]{2,5}\)\s*$/g, "").trim();
+  return { home: strip(parts[0]), away: strip(parts.slice(1).join(" - ")) };
+}
+
+function formSummary(items = []) {
+  const list = Array.isArray(items) ? items.slice(0, 5) : [];
+  if (!list.length) return null;
+
+  const record = { W: 0, D: 0, L: 0 };
+  let over15 = 0;
+  let over25 = 0;
+  let btts = 0;
+
+  for (const item of list) {
+    if (record[item?.result] !== undefined) record[item.result] += 1;
+
+    const m = safe(item?.score).match(/(\d+)\s*[-:]\s*(\d+)/);
+    if (!m) continue;
+
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+
+    if (a + b >= 2) over15 += 1;
+    if (a + b >= 3) over25 += 1;
+    if (a > 0 && b > 0) btts += 1;
+  }
+
+  return {
+    matches: list.length,
+    wins: record.W,
+    draws: record.D,
+    losses: record.L,
+    over15,
+    over25,
+    btts,
+    scores: list.map(x => safe(x.score)).filter(Boolean)
+  };
+}
+
+function compactPrematch(data) {
+  if (!data) return null;
+
+  const out = {
+    standings: {
+      home_position: data?.standings?.home?.position ?? null,
+      home_played: data?.standings?.home?.played ?? null,
+      home_points: data?.standings?.home?.points ?? null,
+      away_position: data?.standings?.away?.position ?? null,
+      away_played: data?.standings?.away?.played ?? null,
+      away_points: data?.standings?.away?.points ?? null,
+    },
+    recent_form: {
+      home: formSummary(data?.form?.home),
+      away: formSummary(data?.form?.away),
+    },
+    h2h: data?.h2h ? {
+      meetings: data.h2h.meetings ?? 0,
+      home_wins: data.h2h.homeWins ?? 0,
+      draws: data.h2h.draws ?? 0,
+      away_wins: data.h2h.awayWins ?? 0,
+      scores: Array.isArray(data.h2h.items)
+        ? data.h2h.items.slice(0, 5).map(x => safe(x.score)).filter(Boolean)
+        : []
+    } : null,
+    market_odds: data?.odds || null,
+  };
+
+  const text = JSON.stringify(out);
+  return /[1-9]/.test(text) ? out : null;
+}
+
+async function collectPrematchContext(bundles) {
+  if (!OPENAI_API_KEY || AI_PREMATCH_MAX <= 0) return new Map();
+
+  const unique = new Map();
+
+  for (const b of bundles.slice(0, 30)) {
+    for (const t of [b.cota2, b.day]) {
+      for (const s of t.selections) {
+        if (unique.size >= AI_PREMATCH_MAX) break;
+        if (!unique.has(s.match_id)) unique.set(s.match_id, s);
+      }
+      if (unique.size >= AI_PREMATCH_MAX) break;
+    }
+    if (unique.size >= AI_PREMATCH_MAX) break;
+  }
+
+  const jobs = [...unique.values()];
+  const result = new Map();
+
+  for (let start = 0; start < jobs.length; start += AI_PREMATCH_CONCURRENCY) {
+    const batch = jobs.slice(start, start + AI_PREMATCH_CONCURRENCY);
+
+    const rows = await Promise.all(batch.map(async (s) => {
+      try {
+        const { home, away } = splitCanonicalTeams(s.teams);
+        if (!home || !away) return [s.match_id, null];
+
+        const data = await fetchPrematchData({
+          id: s.match_id,
+          home,
+          away
+        });
+
+        return [s.match_id, compactPrematch(data)];
+      } catch (e) {
+        console.warn(`[AI-STATS] ${s.teams}: ${e?.message || e}`);
+        return [s.match_id, null];
+      }
+    }));
+
+    for (const [id, context] of rows) {
+      if (context) result.set(id, context);
+    }
+  }
+
+  console.log(`[AI-STATS] enriched ${result.size}/${jobs.length} candidate matches`);
+  return result;
+}
+
 function fallbackEnglish(raw) {
   let x = safe(raw);
   const reps = [
@@ -190,12 +318,13 @@ function responseText(body) {
   return "";
 }
 
-async function askAI(bundles) {
+async function askAI(bundles, prematchContext = new Map()) {
   if (!OPENAI_API_KEY || !bundles.length) return null;
   const selectionMap = new Map();
   for (const b of bundles) for (const t of [b.cota2, b.day]) for (const s of t.selections) selectionMap.set(s.__sid, s);
   const selections = [...selectionMap.entries()].map(([selection_id, s]) => ({
-    selection_id, teams: s.teams, market: s.market_raw, odd: s.odd, source: s.source || "unknown", market_class: marketClass(s)
+    selection_id, teams: s.teams, market: s.market_raw, odd: s.odd, source: s.source || "unknown", market_class: marketClass(s),
+    prematch: prematchContext.get(s.match_id) || null
   }));
   const compactBundles = bundles.map(b => ({
     bundle_id: b.id,
@@ -215,7 +344,19 @@ async function askAI(bundles) {
       }}
     }, required: ["bundle_id", "annotations"]
   };
-  const instructions = `You are a conservative football-ticket curator. Choose exactly one supplied bundle. Never invent or modify event, market, odd, selection_id or bundle_id. Prefer sensible diversity when it already exists: double chance + goals, double chance, corners, cards, BTTS, totals, then plain 1X2. Keep Odds 2 conservative and the day ticket balanced. Produce natural Romanian and English labels; English must contain no Romanian words. Reasons must be max 16 words and may ONLY discuss the supplied market structure, odds and diversification. Do not invent form, standings, H2H, injuries, lineups, statistics, motivation, news or external facts.`;
+  const instructions = `You are a football betting analyst and conservative ticket curator. Choose exactly one supplied bundle. Never invent or modify event, market, odd, selection_id or bundle_id. Prefer sensible diversity when it already exists: double chance + goals, double chance, corners, cards, BTTS, totals, then plain 1X2. Keep Odds 2 conservative and the day ticket balanced.
+
+PREMATCH DATA:
+- Each selection may contain prematch data scraped from Flashscore: standings, recent results, H2H and market odds.
+- Use ONLY those supplied facts. Never invent statistics, injuries, lineups, motivation, news or form that is not present.
+- When prematch data exists, the reason MUST contain at least one concrete statistic (for example W-D-L record, goals pattern, standings position or H2H record) and connect it to the chosen market.
+- Prefer selections whose supplied statistics genuinely support the market; do not select a market merely because its class is preferred.
+- If prematch data is missing, keep the reason cautious and say the pick is based on market/odds structure only; do not fabricate evidence.
+
+LANGUAGE AND STYLE:
+- Produce natural Romanian and English labels; English must contain no Romanian words.
+- Reasons should be useful, natural and concise: 18-35 words, maximum 2 sentences.
+- Avoid sterile phrases such as "balanced selection", "adds diversification", "conservative market" unless backed by a concrete supplied fact.`;
   const r = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
@@ -277,8 +418,10 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
       return;
     }
     let chosen = bundles[0], annotations = [], aiUsed = false, aiError = null;
+    let prematchContext = new Map();
     try {
-      const ai = await askAI(bundles);
+      prematchContext = await collectPrematchContext(bundles);
+      const ai = await askAI(bundles, prematchContext);
       if (ai) {
         const found = bundles.find(b => b.id === ai.bundle_id);
         if (!found) throw new Error("AI selected unknown bundle");

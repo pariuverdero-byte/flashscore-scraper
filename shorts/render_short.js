@@ -304,6 +304,22 @@ function writeTextFile(
   return filePath;
 }
 
+
+function writeMultilineTextFile(
+  filename,
+  value
+) {
+  const filePath = path.join(TEMP_DIR, filename);
+  const text = String(value ?? "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map(line => cleanText(line))
+    .join("\n")
+    .trim();
+  fs.writeFileSync(filePath, `${text}\n`, "utf8");
+  return filePath;
+}
+
 /*
  * =========================================================
  * MEDIA HELPERS
@@ -418,25 +434,38 @@ function formatDate(
  * =========================================================
  */
 
+function compactTeamName(value) {
+  return cleanText(value)
+    .replace(/\s*\([^)]{2,5}\)\s*$/g, "")
+    .replace(/\b(?:FC|CF|SC|FK|SK)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function fitLine(value, maxLength) {
+  const text = cleanText(value);
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(1, maxLength - 1)).trim()}…`;
+}
+
 function createSelectionText(
   selection,
-  language
+  language,
+  maxLineLength = 48
 ) {
-  const separator =
-    language === "ro"
-      ? " - "
-      : " vs ";
+  const separator = language === "ro" ? " - " : " vs ";
+  const home = compactTeamName(selection.home);
+  const away = compactTeamName(selection.away);
+  const teams = home && away
+    ? `${home}${separator}${away}`
+    : compactTeamName(selection.teams);
 
-  const teams =
-    selection.home &&
-    selection.away
-      ? `${selection.home}${separator}${selection.away}`
-      : selection.teams;
-
-  return shorten(
-    `${teams} | ${selection.market} | ${selection.odds}`,
-    78
-  );
+  const market = cleanText(selection.market);
+  const odds = cleanText(selection.odds);
+  const line1 = fitLine(teams, maxLineLength);
+  const pickPrefix = language === "ro" ? "Pont" : "Pick";
+  const line2 = fitLine(`${pickPrefix}: ${market} | ${odds}`, maxLineLength + 8);
+  return `${line1}\n${line2}`;
 }
 
 /*
@@ -813,7 +842,7 @@ function getTicketLayout(
         1010,
 
       cardHeight:
-        435,
+        560,
 
       headlineY:
         63,
@@ -828,17 +857,17 @@ function getTicketLayout(
         33,
 
       selectionFontSize:
-        22,
+        21,
 
       selectionY: [
-        190,
-        245,
-        300,
-        355
+        180,
+        270,
+        360,
+        450
       ],
 
       selectionMaxLength:
-        82
+        54
     };
   }
 
@@ -858,7 +887,7 @@ function getTicketLayout(
       990,
 
     cardHeight:
-      365,
+      455,
 
     headlineY:
       70,
@@ -873,17 +902,17 @@ function getTicketLayout(
       36,
 
     selectionFontSize:
-      25,
+      23,
 
     selectionY: [
-      205,
-      260,
-      315,
-      370
+      190,
+      290,
+      390,
+      490
     ],
 
     selectionMaxLength:
-      72
+      52
   };
 }
 
@@ -1454,15 +1483,13 @@ function main() {
     index += 1
   ) {
     selectionFiles.push(
-      writeTextFile(
+      writeMultilineTextFile(
         `selection_${index + 1}.txt`,
 
         selections[index]
-          ? shorten(
-              createSelectionText(
-                selections[index],
-                language
-              ),
+          ? createSelectionText(
+              selections[index],
+              language,
               layout.selectionMaxLength
             )
           : ""
@@ -1640,7 +1667,8 @@ function main() {
           `textfile='${selectionPath}':` +
           "fontcolor=white:" +
           `fontsize=${layout.selectionFontSize}:` +
-          "x=(w-text_w)/2:" +
+          "line_spacing=5:" +
+          `x=${layout.cardX + 38}:` +
           `y=${layout.selectionY[index]}`
       )
       .join(",");

@@ -1276,6 +1276,13 @@ function selectionToPayload(
         market
       ),
 
+    analysisReason:
+      clean(
+        LANG === "en"
+          ? selection.ai?.reason_en
+          : selection.ai?.reason_ro
+      ),
+
     odds:
       displayOdd(
         selection.odd ??
@@ -1573,6 +1580,14 @@ function buildVoiceScript(
             phrases.oddsLeadIns,
             random
           )} ${match.spokenOdds}.`
+        );
+      }
+
+      if (match.analysisReason) {
+        lines.push(
+          match.analysisReason.endsWith(".")
+            ? match.analysisReason
+            : `${match.analysisReason}.`
         );
       }
 
