@@ -516,165 +516,48 @@ function isPending($cell) {
  * =========================================================
  */
 
-function parseBet(
-  text,
-  teams
-) {
-  const value =
-    normalize(text);
+function parseBet(text, teams) {
+  const value = normalize(text);
 
-  if (
-    value.includes("home win") ||
-    value.includes(
-      "victorie gazde"
-    )
-  ) {
-    return {
-      type: "1x2",
-      side: "1"
-    };
+  function resultBet() {
+    if (value.includes("home win") || value.includes("victorie gazde")) return { type:"1x2", side:"1" };
+    if (value.includes("away win") || value.includes("victorie oaspe")) return { type:"1x2", side:"2" };
+    if (value === "x" || value.includes("draw") || value.includes("egal")) return { type:"1x2", side:"x" };
+    if (/(^|\s)1x(\s|$)/.test(value)) return { type:"double", sides:["1","x"] };
+    if (/(^|\s)x2(\s|$)/.test(value)) return { type:"double", sides:["x","2"] };
+    if (/(^|\s)12(\s|$)/.test(value)) return { type:"double", sides:["1","2"] };
+    return null;
+  }
+  function thresholdBet(kind) {
+    let m=value.match(/(over|peste|minim|at least)\s*(\d+(?:\.\d+)?)/);
+    if (m) return { type:kind, over:true, val:Number(m[2]) };
+    m=value.match(/(under|sub)\s*(\d+(?:\.\d+)?)/);
+    if (m) return { type:kind, over:false, val:Number(m[2]) };
+    return null;
   }
 
-  if (
-    value.includes("away win") ||
-    value.includes(
-      "victorie oaspe"
-    )
-  ) {
-    return {
-      type: "1x2",
-      side: "2"
-    };
-  }
+  if (/corner|cornere/.test(value)) return thresholdBet("corners");
+  if (/cartonas|card/.test(value)) return thresholdBet("cards");
 
-  if (
-    value === "x" ||
-    value.includes("draw") ||
-    value.includes("egal")
-  ) {
-    return {
-      type: "1x2",
-      side: "x"
-    };
-  }
+  const res=resultBet();
+  const goal=thresholdBet("goals");
+  if (res && goal) return { type:"combo", parts:[res, goal] };
 
-  if (
-    value.includes("1x")
-  ) {
-    return {
-      type: "double",
-      sides: ["1", "x"]
-    };
-  }
-
-  if (
-    value.includes("x2")
-  ) {
-    return {
-      type: "double",
-      sides: ["x", "2"]
-    };
-  }
-
-  if (
-    value.includes(
-      "both teams"
-    ) ||
-    value.includes(
-      "ambele"
-    ) ||
-    value === "gg"
-  ) {
-    return {
-      type: "btts"
-    };
+  if (value.includes("both teams") || value.includes("ambele") || value === "gg") {
+    const btts={ type:"btts", yes: !/(\bno\b|\bnu\b)/.test(value) };
+    return goal ? { type:"combo", parts:[btts,goal] } : btts;
   }
 
   if (teams) {
-    const home =
-      normalize(
-        teams.home
-      );
-
-    const away =
-      normalize(
-        teams.away
-      );
-
-    const side =
-      home &&
-      value.includes(home)
-        ? "home"
-        : away &&
-            value.includes(away)
-          ? "away"
-          : null;
-
+    const home=normalize(teams.home), away=normalize(teams.away);
+    const side=home && value.includes(home) ? "home" : away && value.includes(away) ? "away" : null;
     if (side) {
-      let match =
-        value.match(
-          /(minim|min|at least|over|peste)\s*(\d+(?:\.\d+)?)/
-        );
-
-      if (match) {
-        return {
-          type: "team_goals",
-          side,
-          over: true,
-          val: Number(
-            match[2]
-          )
-        };
-      }
-
-      match =
-        value.match(
-          /(under|sub)\s*(\d+(?:\.\d+)?)/
-        );
-
-      if (match) {
-        return {
-          type: "team_goals",
-          side,
-          over: false,
-          val: Number(
-            match[2]
-          )
-        };
-      }
+      const tg=thresholdBet("team_goals");
+      if (tg) return { ...tg, side };
     }
   }
-
-  let match =
-    value.match(
-      /(over|peste|minim)\s*(\d+(?:\.\d+)?)/
-    );
-
-  if (match) {
-    return {
-      type: "goals",
-      over: true,
-      val: Number(
-        match[2]
-      )
-    };
-  }
-
-  match =
-    value.match(
-      /(under|sub)\s*(\d+(?:\.\d+)?)/
-    );
-
-  if (match) {
-    return {
-      type: "goals",
-      over: false,
-      val: Number(
-        match[2]
-      )
-    };
-  }
-
+  if (res) return res;
+  if (goal) return goal;
   return null;
 }
 
@@ -683,90 +566,46 @@ function parseBet(
  * =========================================================
  */
 
-async function fetchFlashscore(
-  matchId
-) {
-  const {
-    controller,
-    clear
-  } = createAbortController(
-    FS_TIMEOUT_MS
-  );
+function parseFinalStats(html) {
+  const $ = cheerio.load(html || "");
+  let corners=null, yellow=null, red=null, genericCards=null;
+  $("tr").each((_,tr)=>{
+    const tds=$(tr).find("td");
+    if (tds.length !== 3) return;
+    const left=Number($(tds[0]).text().trim().replace(",","."));
+    const label=normalize($(tds[1]).text());
+    const right=Number($(tds[2]).text().trim().replace(",","."));
+    if (!Number.isFinite(left) || !Number.isFinite(right)) return;
+    if (label.includes("corner kick") || label === "corners") corners=left+right;
+    else if (label.includes("yellow card")) yellow=left+right;
+    else if (label.includes("red card")) red=left+right;
+    else if (label === "cards" || label === "total cards") genericCards=left+right;
+  });
+  const cards = genericCards ?? ((yellow !== null || red !== null) ? ((yellow || 0) + (red || 0)) : null);
+  return { corners, cards, yellow, red };
+}
 
+async function fetchFlashscore(matchId) {
+  const { controller, clear } = createAbortController(FS_TIMEOUT_MS);
   try {
-    const url =
-      `${FS_BASE}${matchId}/?s=1&d=-1`;
-
-    const response =
-      await fetch(url, {
-        signal:
-          controller.signal,
-
-        headers: {
-          Accept:
-            "text/html,application/xhtml+xml",
-
-          "User-Agent":
-            "Mozilla/5.0 (compatible; PariuVerdeVerifier/1.1)"
-        }
-      });
-
-    if (!response.ok) {
-      console.warn(
-        `[FS] ${matchId}: HTTP ${response.status}`
-      );
-
-      return null;
-    }
-
-    const html =
-      await response.text();
-
-    const $ =
-      cheerio.load(html);
-
-    const body =
-      $("body").text();
-
-    if (
-      !/Finished|FT|AET|After Penalties|Final/i.test(
-        body
-      )
-    ) {
-      return null;
-    }
-
-    const ft =
-      parseScore(body);
-
-    if (!ft) {
-      return null;
-    }
-
-    return {
-      ft
-    };
+    const base=`${FS_BASE}${matchId}/`;
+    const scoreResponse=await fetch(`${base}?s=1&d=-1`, { signal:controller.signal, headers:{ Accept:"text/html,application/xhtml+xml", "User-Agent":"Mozilla/5.0 (compatible; PariuVerdeVerifier/1.2)" } });
+    if (!scoreResponse.ok) return null;
+    const html=await scoreResponse.text();
+    const $=cheerio.load(html); const body=$("body").text();
+    if (!/Finished|FT|AET|After Penalties|Final/i.test(body)) return null;
+    const ft=parseScore(body); if (!ft) return null;
+    let stats={ corners:null, cards:null, yellow:null, red:null };
+    try {
+      const statsResponse=await fetch(`${base}?s=2`, { headers:{ Accept:"text/html,application/xhtml+xml", "User-Agent":"Mozilla/5.0 (compatible; PariuVerdeVerifier/1.2)" } });
+      if (statsResponse.ok) stats=parseFinalStats(await statsResponse.text());
+    } catch (e) { console.warn(`[FS] ${matchId}: stats unavailable: ${e?.message || e}`); }
+    return { ft, ...stats };
   } catch (error) {
-    if (
-      error?.name ===
-      "AbortError"
-    ) {
-      console.warn(
-        `[FS] ${matchId}: request timed out`
-      );
-    } else {
-      console.warn(
-        `[FS] ${matchId}: ${
-          error?.message ||
-          String(error)
-        }`
-      );
-    }
-
+    if (error?.name === "AbortError") console.warn(`[FS] ${matchId}: request timed out`);
+    else console.warn(`[FS] ${matchId}: ${error?.message || error}`);
     return null;
-  } finally {
-    clear();
-  }
+  } finally { clear(); }
 }
 
 /* =========================================================
@@ -774,91 +613,38 @@ async function fetchFlashscore(
  * =========================================================
  */
 
-function evalBet(
-  bet,
-  data
-) {
-  const ft =
-    data.ft;
-
-  const total =
-    ft.h + ft.a;
-
-  if (
-    bet.type === "1x2"
-  ) {
-    const result =
-      ft.h > ft.a
-        ? "1"
-        : ft.h < ft.a
-          ? "2"
-          : "x";
-
-    return result === bet.side
-      ? WIN
-      : LOSS;
+function evalBet(bet, data) {
+  const ft=data.ft, total=ft.h+ft.a;
+  if (bet.type === "combo") {
+    const results=bet.parts.map(p=>evalBet(p,data));
+    if (results.some(r=>!r)) return null;
+    return results.every(r=>r===WIN) ? WIN : LOSS;
   }
-
-  if (
-    bet.type === "double"
-  ) {
-    const result =
-      ft.h > ft.a
-        ? "1"
-        : ft.h < ft.a
-          ? "2"
-          : "x";
-
-    return bet.sides.includes(
-      result
-    )
-      ? WIN
-      : LOSS;
+  if (bet.type === "1x2") {
+    const result=ft.h>ft.a ? "1" : ft.h<ft.a ? "2" : "x";
+    return result===bet.side ? WIN : LOSS;
   }
-
-  if (
-    bet.type === "btts"
-  ) {
-    return (
-      ft.h > 0 &&
-      ft.a > 0
-    )
-      ? WIN
-      : LOSS;
+  if (bet.type === "double") {
+    const result=ft.h>ft.a ? "1" : ft.h<ft.a ? "2" : "x";
+    return bet.sides.includes(result) ? WIN : LOSS;
   }
-
-  if (
-    bet.type ===
-    "team_goals"
-  ) {
-    const goals =
-      bet.side === "home"
-        ? ft.h
-        : ft.a;
-
-    return bet.over
-      ? goals >= bet.val
-        ? WIN
-        : LOSS
-      : goals < bet.val
-        ? WIN
-        : LOSS;
+  if (bet.type === "btts") {
+    const yes=ft.h>0 && ft.a>0;
+    return yes===bet.yes ? WIN : LOSS;
   }
-
-  if (
-    bet.type === "goals"
-  ) {
-    return bet.over
-      ? total >= Math.ceil(
-          bet.val
-        )
-        ? WIN
-        : LOSS
-      : total < bet.val
-        ? WIN
-        : LOSS;
+  if (bet.type === "team_goals") {
+    const goals=bet.side==="home" ? ft.h : ft.a;
+    return bet.over ? (goals > bet.val ? WIN : LOSS) : (goals < bet.val ? WIN : LOSS);
   }
-
+  if (bet.type === "goals") return bet.over ? (total > bet.val ? WIN : LOSS) : (total < bet.val ? WIN : LOSS);
+  if (bet.type === "corners") {
+    if (!Number.isFinite(data.corners)) return null;
+    return bet.over ? (data.corners > bet.val ? WIN : LOSS) : (data.corners < bet.val ? WIN : LOSS);
+  }
+  if (bet.type === "cards") {
+    if (!Number.isFinite(data.cards)) return null;
+    return bet.over ? (data.cards > bet.val ? WIN : LOSS) : (data.cards < bet.val ? WIN : LOSS);
+  }
   return null;
 }
 
@@ -971,11 +757,8 @@ async function processPost(
     const teams =
       extractTeams($row);
 
-    const bet =
-      parseBet(
-        cells.eq(3).text(),
-        teams
-      );
+    const betText = cells.eq(3).find("strong").first().text() || cells.eq(3).text();
+    const bet = parseBet(betText, teams);
 
     if (
       !matchId ||

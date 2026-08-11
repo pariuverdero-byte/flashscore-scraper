@@ -1220,6 +1220,7 @@ function selectionToPayload(
 
   const marketOriginal =
     clean(
+      (LANG === "en" ? selection.ai?.label_en : selection.ai?.label_ro) ||
       selection.market_raw ||
       selection.bet_text_ro ||
       selection.market ||

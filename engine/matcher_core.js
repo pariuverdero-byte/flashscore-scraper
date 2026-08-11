@@ -77,41 +77,21 @@ function similarity(a, b) {
 // ----------------------
 export function matchEventToFlashscore(eventTeams, matches) {
   const [homeRaw, awayRaw] = splitTeams(eventTeams);
-
   if (!homeRaw || !awayRaw) return null;
-
   const home = applyAlias(homeRaw);
   const away = applyAlias(awayRaw);
-
-  let bestMatch = null;
-  let bestScore = 0;
-
+  const ranked = [];
   for (const m of matches) {
-    const [mHomeRaw, mAwayRaw] = splitTeams(m.teams || "");
-
+    const [mHomeRaw, mAwayRaw] = splitTeams(m.teams || `${m.home || ""} - ${m.away || ""}`);
     if (!mHomeRaw || !mAwayRaw) continue;
-
-    const mHome = applyAlias(mHomeRaw);
-    const mAway = applyAlias(mAwayRaw);
-
-    const homeScore = similarity(home, mHome);
-    const awayScore = similarity(away, mAway);
-
-    const totalScore = (homeScore + awayScore) / 2;
-
-    if (totalScore > bestScore) {
-      bestScore = totalScore;
-      bestMatch = m;
-    }
+    const homeScore = similarity(home, applyAlias(mHomeRaw));
+    const awayScore = similarity(away, applyAlias(mAwayRaw));
+    const score = (homeScore + awayScore) / 2;
+    if (homeScore >= 0.60 && awayScore >= 0.60) ranked.push({ match: m, score, homeScore, awayScore });
   }
-
-  // threshold critic
-  if (bestScore >= 0.6) {
-    return {
-      match: bestMatch,
-      score: bestScore,
-    };
-  }
-
-  return null;
+  ranked.sort((a,b)=>b.score-a.score);
+  const best=ranked[0], second=ranked[1];
+  if (!best || best.score < 0.72) return null;
+  if (second && best.score-second.score < 0.08 && best.score < 0.90) return null;
+  return best;
 }

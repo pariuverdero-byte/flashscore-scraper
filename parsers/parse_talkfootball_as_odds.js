@@ -3,6 +3,7 @@
 // IMPORTANT: Claudiu selections are included ONLY if matched to Flashscore
 
 import fs from "fs/promises";
+import { matchEventToFlashscore } from "../engine/matcher_core.js";
 
 /* =========================
  * FILES
@@ -79,23 +80,7 @@ function buildFlashscoreUrl(match) {
 
 function matchClaudiuToFlashscore(sel, matches) {
   const arr = getMatchesArray(matches);
-
-  const { home, away } = splitTeams(sel.teams);
-  const nHome = normalizeTeam(home);
-  const nAway = normalizeTeam(away);
-
-  if (!nHome || !nAway) return null;
-
-  for (const m of arr) {
-    const mh = normalizeTeam(m.home || m.home_team || "");
-    const ma = normalizeTeam(m.away || m.away_team || "");
-
-    if (softEq(mh, nHome) && softEq(ma, nAway)) {
-      return m;
-    }
-  }
-
-  return null;
+  return matchEventToFlashscore(sel.teams, arr)?.match || null;
 }
 
 /* =========================
@@ -173,7 +158,7 @@ function normalizeClaudiuSelection(sel, matches) {
     id: flashscoreId,
     flashscore_url: flashscoreUrl,
     url: flashscoreUrl,
-    teams: safe(sel.teams),
+    teams: safe(flashscoreMatch.teams) || safe(sel.teams),
     time: safe(
       flashscoreMatch.time ||
       parseKickoffToTime(flashscoreMatch.kickoff || flashscoreMatch.flashscore_kickoff || "")

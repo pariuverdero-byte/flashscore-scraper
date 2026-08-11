@@ -4,6 +4,8 @@ const TICKETS_FILE = "tickets.json";
 const LANG = process.env.LANG || "ro";
 
 function translateBetText(sel) {
+  const aiLabel = LANG === "en" ? sel.ai?.label_en : sel.ai?.label_ro;
+  if (aiLabel) return aiLabel;
   const raw =
     sel.meta?.bet_text ||
     sel.meta?.market_text ||
@@ -100,6 +102,7 @@ function escapeHtml(value = "") {
 
 function renderRow(sel) {
   const betText = translateBetText(sel);
+  const reason = LANG === "en" ? sel.ai?.reason_en : sel.ai?.reason_ro;
   const link = resolveEventUrl(sel);
   const dataId = sel.id || sel.match_id || "";
 
@@ -119,7 +122,7 @@ function renderRow(sel) {
   <td>${eventCell}</td>
   <td>${escapeHtml(sel.country || "-")} / ${escapeHtml(sel.competition || "-")}</td>
   <td>${escapeHtml(sel.time || "-")}</td>
-  <td><strong>${escapeHtml(betText)}</strong></td>
+  <td><strong>${escapeHtml(betText)}</strong>${reason ? `<div class="pick-reason">${escapeHtml(reason)}</div>` : ""}</td>
   <td><strong>${escapeHtml(sel.odd ?? "-")}</strong></td>
   <td style="text-align:center;font-weight:bold;">⏳</td>
 </tr>`;
@@ -192,6 +195,7 @@ const STYLE = `
 .bilet-pariu th {
   background: #f4f4f4;
 }
+.pick-reason { margin-top:5px; font-size:12px; line-height:1.35; color:#666; font-weight:400; }
 </style>
 `;
 
