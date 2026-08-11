@@ -586,26 +586,152 @@ function parseFinalStats(html) {
 }
 
 async function fetchFlashscore(matchId) {
-  const { controller, clear } = createAbortController(FS_TIMEOUT_MS);
+  const {
+    controller,
+    clear
+  } =
+    createAbortController(
+      FS_TIMEOUT_MS
+    );
+
   try {
-    const base=`${FS_BASE}${matchId}/`;
-    const scoreResponse=await fetch(`${base}?s=1&d=-1`, { signal:controller.signal, headers:{ Accept:"text/html,application/xhtml+xml", "User-Agent":"Mozilla/5.0 (compatible; PariuVerdeVerifier/1.2)" } });
-    if (!scoreResponse.ok) return null;
-    const html=await scoreResponse.text();
-    const $=cheerio.load(html); const body=$("body").text();
-    if (!/Finished|FT|AET|After Penalties|Final/i.test(body)) return null;
-    const ft=parseScore(body); if (!ft) return null;
-    let stats={ corners:null, cards:null, yellow:null, red:null };
+    const base =
+      `${FS_BASE}${matchId}/`;
+
+    const scoreResponse =
+      await fetch(
+        `${base}?s=1`,
+        {
+          signal:
+            controller.signal,
+
+          headers: {
+            Accept:
+              "text/html,application/xhtml+xml",
+
+            "User-Agent":
+              "Mozilla/5.0 (compatible; PariuVerdeVerifier/1.3)"
+          }
+        }
+      );
+
+    if (!scoreResponse.ok) {
+      return null;
+    }
+
+    const html =
+      await scoreResponse.text();
+
+    const $ =
+      cheerio.load(html);
+
+    const originalBody =
+      $("body")
+        .text()
+        .replace(/\s+/g, " ")
+        .trim();
+
+    /*
+     * Remove aggregate / previous-leg score text.
+     * It must never be treated as the current match result.
+     */
+    const body =
+      originalBody
+        .replace(
+          /First leg result\s*:\s*\d+\s*[-:]\s*\d+/gi,
+          " "
+        )
+        .replace(
+          /Rezultatul primei manse\s*:\s*\d+\s*[-:]\s*\d+/gi,
+          " "
+        );
+
+    /*
+     * Only settle when the current match is explicitly finished.
+     */
+    if (
+      !/\bFinished\b|\bFT\b|\bAET\b|After Penalties|After Extra Time/i.test(
+        body
+      )
+    ) {
+      return null;
+    }
+
+    const ft =
+      parseScore(
+        body
+      );
+
+    if (!ft) {
+      console.warn(
+        `[FS] ${matchId}: finished status found, but score not found`
+      );
+
+      return null;
+    }
+
+    let stats = {
+      corners: null,
+      cards: null,
+      yellow: null,
+      red: null
+    };
+
     try {
-      const statsResponse=await fetch(`${base}?s=2`, { headers:{ Accept:"text/html,application/xhtml+xml", "User-Agent":"Mozilla/5.0 (compatible; PariuVerdeVerifier/1.2)" } });
-      if (statsResponse.ok) stats=parseFinalStats(await statsResponse.text());
-    } catch (e) { console.warn(`[FS] ${matchId}: stats unavailable: ${e?.message || e}`); }
-    return { ft, ...stats };
+      const statsResponse =
+        await fetch(
+          `${base}?s=2`,
+          {
+            headers: {
+              Accept:
+                "text/html,application/xhtml+xml",
+
+              "User-Agent":
+                "Mozilla/5.0 (compatible; PariuVerdeVerifier/1.3)"
+            }
+          }
+        );
+
+      if (statsResponse.ok) {
+        stats =
+          parseFinalStats(
+            await statsResponse.text()
+          );
+      }
+    } catch (e) {
+      console.warn(
+        `[FS] ${matchId}: stats unavailable: ${
+          e?.message || e
+        }`
+      );
+    }
+
+    return {
+      ft,
+      ...stats
+    };
+
   } catch (error) {
-    if (error?.name === "AbortError") console.warn(`[FS] ${matchId}: request timed out`);
-    else console.warn(`[FS] ${matchId}: ${error?.message || error}`);
+
+    if (
+      error?.name === "AbortError"
+    ) {
+      console.warn(
+        `[FS] ${matchId}: request timed out`
+      );
+    } else {
+      console.warn(
+        `[FS] ${matchId}: ${
+          error?.message || error
+        }`
+      );
+    }
+
     return null;
-  } finally { clear(); }
+
+  } finally {
+    clear();
+  }
 }
 
 /* =========================================================
