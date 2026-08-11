@@ -59,9 +59,6 @@ jobs:
       - name: Build live feed
         run: node live-betting/scripts/run-once.js
 
-      - name: Publish to both WordPress sites
-        run: node live-betting/scripts/publish-wordpress.js
-
       - name: Save live state
         if: always()
         uses: actions/cache/save@v4
