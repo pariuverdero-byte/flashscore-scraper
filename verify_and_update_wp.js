@@ -1,34 +1,39 @@
-// verify_and_update_wp.js
-// Node.js 18 / 20
-// Full WordPress ticket verifier for PariuVerde / GreenBetTips
-// - reads deterministic data-* attributes first
-// - falls back to displayed bet text for older posts
-// - detects finished Flashscore matches robustly
-// - tries multiple Flashscore pages for score/stats
-// - updates only the status cell in WordPress
-// - detailed diagnostics
-
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
-
-/* =========================================================
- * CONFIG
- * ========================================================= */
 
 const WP_BASE = String(process.env.WP_BASE || "").replace(/\/$/, "");
 const WP_USER = process.env.WP_USER || "";
 const WP_APP_PASS = process.env.WP_APP_PASS || "";
 
-const FS_BASE = "https://www.flashscore.mobi/match/";
+const RECHECK_ONCE = /^(1|true|yes)$/i.test(
+  process.env.RECHECK_ONCE || ""
+);
 
-const RECHECK_ONCE = /^(1|true|yes)$/i.test(process.env.RECHECK_ONCE || "");
-const RECHECK_LAST_N = Math.max(1, Number(process.env.RECHECK_LAST_N || 30));
-const MAX_ROWS_PER_POST = Math.max(1, Number(process.env.MAX_ROWS_PER_POST || 10));
+const RECHECK_LAST_N = Math.max(
+  1,
+  Number(process.env.RECHECK_LAST_N || 30)
+);
 
-const WP_TIMEOUT_MS = Math.max(3000, Number(process.env.WP_TIMEOUT_MS || 15000));
-const FS_TIMEOUT_MS = Math.max(3000, Number(process.env.FS_TIMEOUT_MS || 12000));
+const MAX_ROWS_PER_POST = Math.max(
+  1,
+  Number(process.env.MAX_ROWS_PER_POST || 10)
+);
 
-const WP_RETRIES = Math.max(0, Number(process.env.WP_RETRIES || 2));
+const WP_TIMEOUT_MS = Math.max(
+  3000,
+  Number(process.env.WP_TIMEOUT_MS || 15000)
+);
+
+const FS_TIMEOUT_MS = Math.max(
+  3000,
+  Number(process.env.FS_TIMEOUT_MS || 12000)
+);
+
+const WP_RETRIES = Math.max(
+  0,
+  Number(process.env.WP_RETRIES || 2)
+);
+
 const WP_RETRY_DELAY_MS = Math.max(
   500,
   Number(process.env.WP_RETRY_DELAY_MS || 3000)
@@ -41,15 +46,32 @@ const NON_BLOCKING = !/^(0|false|no)$/i.test(
 const WIN = "win";
 const LOSS = "loss";
 
+/*
+ * IMPORTANT:
+ * Flashscore can return different HTML depending on domain/region.
+ * We try several mobile hosts automatically.
+ */
+const FS_HOSTS = [
+  "https://www.flashscore.mobi",
+  "https://m.flashscore.co.uk",
+  "https://m.flashscore.com.ng",
+  "https://m.flashscore.co.za",
+  "https://m.flashscore.com.au",
+  "https://m.flashscore.info",
+];
+
 const FS_HEADERS = {
-  Accept: "text/html,application/xhtml+xml",
-  "Accept-Language": "en-US,en;q=0.9,ro;q=0.8",
+  Accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-GB,en;q=0.9",
+  "Cache-Control": "no-cache",
+  Pragma: "no-cache",
   "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36",
 };
 
 /* =========================================================
- * CONFIG VALIDATION
+ * CONFIG
  * ========================================================= */
 
 function validateConfiguration() {
@@ -67,12 +89,11 @@ function validateConfiguration() {
 }
 
 /* =========================================================
- * GENERIC HELPERS
+ * HELPERS
  * ========================================================= */
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+const sleep = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 function normalize(value) {
   return String(value || "")
@@ -84,31 +105,31 @@ function normalize(value) {
     .trim();
 }
 
-function truncate(value, maxLength = 280) {
-  const text = String(value || "")
+function truncate(value, max = 240) {
+  const s = String(value || "")
     .replace(/\s+/g, " ")
     .trim();
 
-  return text.length <= maxLength
-    ? text
-    : `${text.slice(0, maxLength - 3)}...`;
+  return s.length <= max
+    ? s
+    : `${s.slice(0, max - 3)}...`;
 }
 
-function createAbortController(timeoutMs) {
+function abortAfter(ms) {
   const controller = new AbortController();
 
-  const timeout = setTimeout(
+  const timer = setTimeout(
     () => controller.abort(),
-    timeoutMs
+    ms
   );
 
   return {
     controller,
-    clear: () => clearTimeout(timeout),
+    done: () => clearTimeout(timer),
   };
 }
 
-function numberValue(value) {
+function num(value) {
   if (
     value === undefined ||
     value === null ||
@@ -126,109 +147,88 @@ function numberValue(value) {
     : null;
 }
 
-function parseScore(text) {
-  const match = String(text || "").match(
-    /(\d+)\s*[:\-]\s*(\d+)/
-  );
-
-  if (!match) {
-    return null;
-  }
-
-  return {
-    h: Number(match[1]),
-    a: Number(match[2]),
-  };
-}
-
 /* =========================================================
  * WORDPRESS
  * ========================================================= */
 
-const auth =
+const wpAuth =
   "Basic " +
   Buffer.from(
     `${WP_USER}:${WP_APP_PASS}`
   ).toString("base64");
 
-const WP_HEADERS = {
-  Authorization: auth,
-  Accept: "application/json",
-  "User-Agent":
-    "PariuVerde-WordPress-Verifier/3.0",
-  "Cache-Control": "no-cache",
-  Pragma: "no-cache",
-};
-
-function isCaptchaHtml(text) {
-  const value = String(text || "").toLowerCase();
-
-  return (
-    value.includes("sgcaptcha") ||
-    value.includes("challenge-platform") ||
-    value.includes("cf-chl-") ||
-    value.includes("captcha")
-  );
-}
-
-async function wordpressRequest(
+async function wpRequest(
   url,
   {
     method = "GET",
-    body = undefined,
-    retries = WP_RETRIES,
+    body,
   } = {}
 ) {
-  let lastError = null;
+  let lastError;
 
   for (
     let attempt = 0;
-    attempt <= retries;
-    attempt += 1
+    attempt <= WP_RETRIES;
+    attempt++
   ) {
     const {
       controller,
-      clear,
-    } = createAbortController(
+      done,
+    } = abortAfter(
       WP_TIMEOUT_MS
     );
 
     try {
       console.log(
         `[WP] ${method} ${url} ` +
-        `(attempt ${attempt + 1}/${retries + 1})`
+        `(attempt ${attempt + 1}/${WP_RETRIES + 1})`
       );
 
-      const response = await fetch(
-        url,
-        {
-          method,
-          signal: controller.signal,
+      const res =
+        await fetch(
+          url,
+          {
+            method,
 
-          headers: {
-            ...WP_HEADERS,
+            signal:
+              controller.signal,
 
-            ...(body !== undefined
-              ? {
-                  "Content-Type":
-                    "application/json",
-                }
-              : {}),
-          },
+            headers: {
+              Authorization:
+                wpAuth,
 
-          body:
-            body !== undefined
-              ? JSON.stringify(body)
-              : undefined,
-        }
-      );
+              Accept:
+                "application/json",
+
+              "User-Agent":
+                "PariuVerde-WordPress-Verifier/4.0",
+
+              "Cache-Control":
+                "no-cache",
+
+              ...(body !== undefined
+                ? {
+                    "Content-Type":
+                      "application/json",
+                  }
+                : {}),
+            },
+
+            body:
+              body !== undefined
+                ? JSON.stringify(
+                    body
+                  )
+                : undefined,
+          }
+        );
 
       const text =
-        await response.text();
+        await res.text();
 
-      if (!response.ok) {
+      if (!res.ok) {
         throw new Error(
-          `WordPress HTTP ${response.status}: ${truncate(text)}`
+          `WordPress HTTP ${res.status}: ${truncate(text)}`
         );
       }
 
@@ -236,86 +236,54 @@ async function wordpressRequest(
         return null;
       }
 
-      try {
-        return JSON.parse(text);
-      } catch {
-        if (
-          isCaptchaHtml(text)
-        ) {
-          throw new Error(
-            "WordPress REST API blocked by CAPTCHA/security layer."
-          );
-        }
-
-        throw new Error(
-          `WordPress returned invalid JSON: ${truncate(text)}`
-        );
-      }
-    } catch (error) {
+      return JSON.parse(
+        text
+      );
+    } catch (e) {
       lastError =
-        error?.name === "AbortError"
+        e?.name ===
+        "AbortError"
           ? new Error(
-              `WordPress request timed out after ${WP_TIMEOUT_MS} ms`
+              `WordPress timeout after ${WP_TIMEOUT_MS} ms`
             )
-          : error;
+          : e;
 
       console.warn(
         `[WP] Request failed: ${lastError.message}`
       );
 
       if (
-        attempt < retries
+        attempt <
+        WP_RETRIES
       ) {
-        const delay =
+        await sleep(
           WP_RETRY_DELAY_MS *
-          (attempt + 1);
-
-        console.log(
-          `[WP] Retrying in ${delay} ms...`
+            (attempt + 1)
         );
-
-        await sleep(delay);
       }
     } finally {
-      clear();
+      done();
     }
   }
 
   throw lastError;
 }
 
-function wordpressGet(url) {
-  return wordpressRequest(url);
-}
-
-function wordpressPut(
-  url,
-  body
-) {
-  return wordpressRequest(
-    url,
-    {
-      method: "PUT",
-      body,
-    }
-  );
-}
-
 /* =========================================================
  * WORDPRESS ROW HELPERS
  * ========================================================= */
 
-function getMatchId($row) {
-  /*
-   * Current source:
-   * data-id saved in HTML.
-   */
-
-  const direct = String(
-    $row.attr("data-id") ||
-    $row.attr("data-match-id") ||
-    ""
-  ).trim();
+function getMatchId(
+  $row
+) {
+  const direct =
+    String(
+      $row.attr("data-id") ||
+      $row.attr(
+        "data-match-id"
+      ) ||
+      ""
+    ).trim();
 
   if (
     /^[A-Za-z0-9]+$/.test(
@@ -325,32 +293,34 @@ function getMatchId($row) {
     return direct;
   }
 
-  /*
-   * Old posts fallback.
-   */
-
   const href =
     $row
       .find(
         "a[href*='flashscore']"
       )
       .first()
-      .attr("href") || "";
+      .attr("href") ||
+    "";
 
-  const match =
+  return (
     href.match(
       /\/match\/([A-Za-z0-9]+)/i
-    );
-
-  return match
-    ? match[1]
-    : null;
+    )?.[1] ||
+    href.match(
+      /\/meci\/([A-Za-z0-9]+)/i
+    )?.[1] ||
+    null
+  );
 }
 
-function isPending($cell) {
-  const text = String(
-    $cell.text() || ""
-  ).trim();
+function isPending(
+  $cell
+) {
+  const text =
+    String(
+      $cell.text() ||
+      ""
+    );
 
   return (
     !text.includes("✅") &&
@@ -358,15 +328,19 @@ function isPending($cell) {
   );
 }
 
-function extractTeams($row) {
-  const raw = String(
-    $row
-      .find("td")
-      .eq(0)
-      .text() || ""
-  )
-    .replace(/\s+/g, " ")
-    .trim();
+function extractTeams(
+  $row
+) {
+  const raw =
+    String(
+      $row
+        .find("td")
+        .eq(0)
+        .text() ||
+      ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
 
   const parts =
     raw.split(
@@ -392,41 +366,45 @@ function extractTeams($row) {
 }
 
 /* =========================================================
- * STRUCTURAL BET PARSER
+ * BET PARSER
  * ========================================================= */
 
 function parseStructuralBet(
   $row
 ) {
-  const originalMarket =
+  const rawMarket =
     String(
-      $row.attr("data-market") ||
+      $row.attr(
+        "data-market"
+      ) ||
       ""
     ).trim();
 
   const market =
-    originalMarket.toUpperCase();
+    rawMarket.toUpperCase();
 
   const stat =
     normalize(
-      $row.attr("data-stat") ||
+      $row.attr(
+        "data-stat"
+      ) ||
       ""
     );
 
   const side =
     normalize(
-      $row.attr("data-side") ||
+      $row.attr(
+        "data-side"
+      ) ||
       ""
     );
 
   const threshold =
-    numberValue(
-      $row.attr("data-threshold")
+    num(
+      $row.attr(
+        "data-threshold"
+      )
     );
-
-  /* =====================
-   * 1X2
-   * ===================== */
 
   if (
     [
@@ -466,10 +444,6 @@ function parseStructuralBet(
     };
   }
 
-  /* =====================
-   * DOUBLE CHANCE
-   * ===================== */
-
   if (
     [
       "1X",
@@ -478,7 +452,10 @@ function parseStructuralBet(
   ) {
     return {
       type: "double",
-      sides: ["1", "x"],
+      sides: [
+        "1",
+        "x",
+      ],
     };
   }
 
@@ -490,7 +467,10 @@ function parseStructuralBet(
   ) {
     return {
       type: "double",
-      sides: ["x", "2"],
+      sides: [
+        "x",
+        "2",
+      ],
     };
   }
 
@@ -502,121 +482,12 @@ function parseStructuralBet(
   ) {
     return {
       type: "double",
-      sides: ["1", "2"],
+      sides: [
+        "1",
+        "2",
+      ],
     };
   }
-
-  /* =====================
-   * O2.5 / U2.5
-   * ===================== */
-
-  let m =
-    market.match(
-      /^O(\d+(?:\.\d+)?)$/
-    );
-
-  if (m) {
-    return {
-      type: "goals",
-      over: true,
-      val: Number(m[1]),
-    };
-  }
-
-  m =
-    market.match(
-      /^U(\d+(?:\.\d+)?)$/
-    );
-
-  if (m) {
-    return {
-      type: "goals",
-      over: false,
-      val: Number(m[1]),
-    };
-  }
-
-  /* =====================
-   * OVER_2_5 / UNDER_2_5
-   * ===================== */
-
-  m =
-    market.match(
-      /^OVER[_\s-]?(\d+)[_.](\d+)$/
-    );
-
-  if (m) {
-    return {
-      type: "goals",
-      over: true,
-      val: Number(
-        `${m[1]}.${m[2]}`
-      ),
-    };
-  }
-
-  m =
-    market.match(
-      /^UNDER[_\s-]?(\d+)[_.](\d+)$/
-    );
-
-  if (m) {
-    return {
-      type: "goals",
-      over: false,
-      val: Number(
-        `${m[1]}.${m[2]}`
-      ),
-    };
-  }
-
-  /* =====================
-   * HUMAN-READABLE MARKET
-   * ===================== */
-
-  m =
-    normalize(
-      originalMarket
-    ).match(
-      /\b(over|peste)\s*(\d+(?:[.,]\d+)?)\b/
-    );
-
-  if (
-    m &&
-    !stat
-  ) {
-    return {
-      type: "goals",
-      over: true,
-      val: Number(
-        m[2].replace(",", ".")
-      ),
-    };
-  }
-
-  m =
-    normalize(
-      originalMarket
-    ).match(
-      /\b(under|sub)\s*(\d+(?:[.,]\d+)?)\b/
-    );
-
-  if (
-    m &&
-    !stat
-  ) {
-    return {
-      type: "goals",
-      over: false,
-      val: Number(
-        m[2].replace(",", ".")
-      ),
-    };
-  }
-
-  /* =====================
-   * BTTS
-   * ===================== */
 
   if (
     [
@@ -644,166 +515,223 @@ function parseStructuralBet(
     };
   }
 
-  /* =====================
-   * CORNERS
-   * ===================== */
+  let m =
+    market.match(
+      /^O(\d+(?:\.\d+)?)$/
+    );
 
-  if (
-    stat.includes("corner") ||
-    market.includes("CORNER")
-  ) {
-    if (
-      threshold === null
-    ) {
-      const mm =
-        normalize(
-          originalMarket
-        ).match(
-          /(over|under|peste|sub)\s*(\d+(?:[.,]\d+)?)/
-        );
+  if (m) {
+    return {
+      type: "goals",
+      over: true,
+      val: Number(
+        m[1]
+      ),
+    };
+  }
 
-      if (!mm) {
-        return null;
-      }
+  m =
+    market.match(
+      /^U(\d+(?:\.\d+)?)$/
+    );
 
-      return {
-        type: "corners",
+  if (m) {
+    return {
+      type: "goals",
+      over: false,
+      val: Number(
+        m[1]
+      ),
+    };
+  }
 
-        over:
-          [
-            "over",
-            "peste",
-          ].includes(
-            mm[1]
-          ),
+  m =
+    market.match(
+      /^OVER[_\s-]?(\d+)[_.](\d+)$/
+    );
 
-        val: Number(
-          mm[2].replace(",", ".")
+  if (m) {
+    return {
+      type: "goals",
+      over: true,
+
+      val:
+        Number(
+          `${m[1]}.${m[2]}`
         ),
-      };
-    }
+    };
+  }
 
+  m =
+    market.match(
+      /^UNDER[_\s-]?(\d+)[_.](\d+)$/
+    );
+
+  if (m) {
+    return {
+      type: "goals",
+      over: false,
+
+      val:
+        Number(
+          `${m[1]}.${m[2]}`
+        ),
+    };
+  }
+
+  /*
+   * Current generated market.
+   */
+  if (
+    market ===
+      "GOALS_OU" &&
+    threshold !== null
+  ) {
     const over =
-      !(
-        market.includes("UNDER") ||
-        market.startsWith("U") ||
-        stat.includes("under") ||
-        stat.includes("sub")
-      );
+      !side.includes(
+        "under"
+      ) &&
+      !side.includes(
+        "sub"
+      ) &&
+      side !== "u";
 
     return {
-      type: "corners",
+      type: "goals",
       over,
       val: threshold,
     };
   }
 
-  /* =====================
-   * CARDS
-   * ===================== */
-
+  /*
+   * Structured stats.
+   */
   if (
-    stat.includes("card") ||
-    stat.includes("cartonas") ||
-    market.includes("CARD") ||
-    market.includes("CARTON")
+    market === "STAT" ||
+    stat ||
+    market.includes(
+      "CORNER"
+    ) ||
+    market.includes(
+      "CARD"
+    )
   ) {
+    const statText =
+      `${stat} ${normalize(rawMarket)}`;
+
     if (
-      threshold === null
+      (
+        statText.includes(
+          "corner"
+        ) ||
+        statText.includes(
+          "cornere"
+        )
+      ) &&
+      threshold !== null
     ) {
-      const mm =
-        normalize(
-          originalMarket
-        ).match(
-          /(over|under|peste|sub)\s*(\d+(?:[.,]\d+)?)/
-        );
+      return {
+        type:
+          "corners",
 
-      if (!mm) {
-        return null;
-      }
+        over:
+          !(
+            side.includes(
+              "under"
+            ) ||
+            side.includes(
+              "sub"
+            ) ||
+            side === "u"
+          ),
 
+        val:
+          threshold,
+      };
+    }
+
+    if (
+      (
+        statText.includes(
+          "card"
+        ) ||
+        statText.includes(
+          "cartonas"
+        )
+      ) &&
+      threshold !== null
+    ) {
       return {
         type: "cards",
 
         over:
-          [
-            "over",
-            "peste",
-          ].includes(
-            mm[1]
+          !(
+            side.includes(
+              "under"
+            ) ||
+            side.includes(
+              "sub"
+            ) ||
+            side === "u"
           ),
 
-        val: Number(
-          mm[2].replace(",", ".")
-        ),
+        val:
+          threshold,
       };
     }
-
-    const over =
-      !(
-        market.includes("UNDER") ||
-        market.startsWith("U") ||
-        stat.includes("under") ||
-        stat.includes("sub")
-      );
-
-    return {
-      type: "cards",
-      over,
-      val: threshold,
-    };
   }
-
-  /* =====================
-   * TEAM GOALS
-   * ===================== */
 
   if (
     threshold !== null &&
     (
-      stat.includes("goal") ||
-      stat.includes("gol")
+      stat.includes(
+        "goal"
+      ) ||
+      stat.includes(
+        "gol"
+      )
     ) &&
     side
   ) {
-    let teamSide =
-      null;
-
-    if (
+    const teamSide =
       [
         "home",
         "gazde",
         "1",
       ].includes(side)
-    ) {
-      teamSide =
-        "home";
-    }
+        ? "home"
 
-    if (
-      [
-        "away",
-        "oaspeti",
-        "2",
-      ].includes(side)
-    ) {
-      teamSide =
-        "away";
-    }
+        : [
+            "away",
+            "oaspeti",
+            "2",
+          ].includes(side)
+          ? "away"
+          : null;
 
     if (teamSide) {
-      const over =
-        !(
-          market.includes("UNDER") ||
-          stat.includes("under") ||
-          stat.includes("sub")
-        );
-
       return {
-        type: "team_goals",
-        side: teamSide,
-        over,
-        val: threshold,
+        type:
+          "team_goals",
+
+        side:
+          teamSide,
+
+        over:
+          !(
+            market.includes(
+              "UNDER"
+            ) ||
+            stat.includes(
+              "under"
+            ) ||
+            stat.includes(
+              "sub"
+            )
+          ),
+
+        val:
+          threshold,
       };
     }
   }
@@ -812,24 +740,28 @@ function parseStructuralBet(
 }
 
 /* =========================================================
- * FALLBACK TEXT BET PARSER
+ * TEXT FALLBACK PARSER
  * ========================================================= */
 
 function parseBetText(
   text,
   teams = null
 ) {
-  const value =
+  const v =
     normalize(text);
 
-  if (!value) {
+  if (!v) {
     return null;
   }
 
   if (
-    value === "1" ||
-    value.includes("home win") ||
-    value.includes("victorie gazde")
+    v === "1" ||
+    v.includes(
+      "home win"
+    ) ||
+    v.includes(
+      "victorie gazde"
+    )
   ) {
     return {
       type: "1x2",
@@ -838,9 +770,13 @@ function parseBetText(
   }
 
   if (
-    value === "2" ||
-    value.includes("away win") ||
-    value.includes("victorie oaspeti")
+    v === "2" ||
+    v.includes(
+      "away win"
+    ) ||
+    v.includes(
+      "victorie oaspeti"
+    )
   ) {
     return {
       type: "1x2",
@@ -849,9 +785,13 @@ function parseBetText(
   }
 
   if (
-    value === "x" ||
-    value.includes("draw") ||
-    value.includes("egal")
+    v === "x" ||
+    v.includes(
+      "draw"
+    ) ||
+    v.includes(
+      "egal"
+    )
   ) {
     return {
       type: "1x2",
@@ -860,160 +800,190 @@ function parseBetText(
   }
 
   if (
-    /(^|\s)1x(\s|$)/i.test(
-      value
+    /(^|\s)1x(\s|$)/.test(
+      v
     )
   ) {
     return {
-      type: "double",
-      sides: ["1", "x"],
+      type:
+        "double",
+
+      sides:
+        [
+          "1",
+          "x",
+        ],
     };
   }
 
   if (
-    /(^|\s)x2(\s|$)/i.test(
-      value
+    /(^|\s)x2(\s|$)/.test(
+      v
     )
   ) {
     return {
-      type: "double",
-      sides: ["x", "2"],
+      type:
+        "double",
+
+      sides:
+        [
+          "x",
+          "2",
+        ],
     };
   }
 
   if (
-    /(^|\s)12(\s|$)/i.test(
-      value
+    /(^|\s)12(\s|$)/.test(
+      v
     )
   ) {
     return {
-      type: "double",
-      sides: ["1", "2"],
+      type:
+        "double",
+
+      sides:
+        [
+          "1",
+          "2",
+        ],
     };
   }
 
   if (
-    value.includes("both teams") ||
-    value.includes("ambele") ||
-    value.includes("btts") ||
-    value === "gg"
+    v.includes(
+      "both teams"
+    ) ||
+    v.includes(
+      "ambele"
+    ) ||
+    v.includes(
+      "btts"
+    ) ||
+    v === "gg"
   ) {
     return {
-      type: "btts",
+      type:
+        "btts",
+
       yes:
-        !/\b(no|nu|ng)\b/i.test(
-          value
+        !/\b(no|nu|ng)\b/.test(
+          v
         ),
     };
   }
 
   let m =
-    value.match(
+    v.match(
       /\b(over|peste|minim|at least)\s*(\d+(?:[.,]\d+)?)/
     );
 
   if (m) {
     const val =
       Number(
-        m[2].replace(",", ".")
+        m[2].replace(
+          ",",
+          "."
+        )
       );
 
     if (
       /corner|cornere/.test(
-        value
+        v
       )
     ) {
       return {
-        type: "corners",
-        over: true,
+        type:
+          "corners",
+
+        over:
+          true,
+
         val,
       };
     }
 
     if (
       /card|cartonas/.test(
-        value
+        v
       )
     ) {
       return {
-        type: "cards",
-        over: true,
+        type:
+          "cards",
+
+        over:
+          true,
+
         val,
       };
     }
 
     return {
-      type: "goals",
-      over: true,
+      type:
+        "goals",
+
+      over:
+        true,
+
       val,
     };
   }
 
   m =
-    value.match(
+    v.match(
       /\b(under|sub)\s*(\d+(?:[.,]\d+)?)/
     );
 
   if (m) {
     const val =
       Number(
-        m[2].replace(",", ".")
+        m[2].replace(
+          ",",
+          "."
+        )
       );
 
     if (
       /corner|cornere/.test(
-        value
+        v
       )
     ) {
       return {
-        type: "corners",
-        over: false,
+        type:
+          "corners",
+
+        over:
+          false,
+
         val,
       };
     }
 
     if (
       /card|cartonas/.test(
-        value
+        v
       )
     ) {
       return {
-        type: "cards",
-        over: false,
+        type:
+          "cards",
+
+        over:
+          false,
+
         val,
       };
     }
 
     return {
-      type: "goals",
-      over: false,
+      type:
+        "goals",
+
+      over:
+        false,
+
       val,
-    };
-  }
-
-  m =
-    value.match(
-      /\bo\s*(\d+(?:\.\d+)?)\b/i
-    );
-
-  if (m) {
-    return {
-      type: "goals",
-      over: true,
-      val: Number(m[1]),
-    };
-  }
-
-  m =
-    value.match(
-      /\bu\s*(\d+(?:\.\d+)?)\b/i
-    );
-
-  if (m) {
-    return {
-      type: "goals",
-      over: false,
-      val: Number(m[1]),
     };
   }
 
@@ -1028,34 +998,26 @@ function parseBetText(
         teams.away
       );
 
-    let teamSide =
-      null;
-
-    if (
+    const teamSide =
       home &&
-      value.includes(home)
-    ) {
-      teamSide =
-        "home";
-    }
+      v.includes(home)
+        ? "home"
 
-    if (
-      away &&
-      value.includes(away)
-    ) {
-      teamSide =
-        "away";
-    }
+        : away &&
+          v.includes(away)
+          ? "away"
+          : null;
 
     if (teamSide) {
-      const tm =
-        value.match(
+      m =
+        v.match(
           /\b(over|peste|under|sub)\s*(\d+(?:[.,]\d+)?)/
         );
 
-      if (tm) {
+      if (m) {
         return {
-          type: "team_goals",
+          type:
+            "team_goals",
 
           side:
             teamSide,
@@ -1065,12 +1027,12 @@ function parseBetText(
               "over",
               "peste",
             ].includes(
-              tm[1]
+              m[1]
             ),
 
           val:
             Number(
-              tm[2].replace(
+              m[2].replace(
                 ",",
                 "."
               )
@@ -1084,21 +1046,21 @@ function parseBetText(
 }
 
 /* =========================================================
- * FLASHSCORE FETCH
+ * FLASHSCORE HTTP
  * ========================================================= */
 
-async function fetchHtml(
+async function fetchHtmlDetailed(
   url
 ) {
   const {
     controller,
-    clear,
-  } = createAbortController(
+    done,
+  } = abortAfter(
     FS_TIMEOUT_MS
   );
 
   try {
-    const response =
+    const res =
       await fetch(
         url,
         {
@@ -1113,97 +1075,104 @@ async function fetchHtml(
         }
       );
 
-    if (!response.ok) {
+    const html =
+      await res.text();
+
+    if (!res.ok) {
       throw new Error(
-        `HTTP ${response.status}`
+        `HTTP ${res.status}`
       );
     }
 
-    return await response.text();
+    return {
+      html,
+
+      finalUrl:
+        res.url,
+
+      status:
+        res.status,
+    };
   } finally {
-    clear();
+    done();
   }
 }
 
-function cleanPageText($) {
-  $(
-    "script, style, noscript"
-  ).remove();
-
-  return $("body")
-    .text()
-    .replace(/\u00a0/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function isFinishedStatus(
-  text
-) {
-  const t =
-    normalize(text);
-
-  return (
-    /\bfinished\b/.test(t) ||
-    /\bfull time\b/.test(t) ||
-    /\bfinal\b/.test(t) ||
-    /\bafter penalties\b/.test(t) ||
-    /\bafter extra time\b/.test(t) ||
-    /\baet\b/.test(t) ||
-    /\bpenalties\b/.test(t) ||
-    /^ft\b/.test(t) ||
-    /\bft$/.test(t)
-  );
-}
-
-function extractFinishedScore(
+function pageText(
   html
 ) {
   const $ =
     cheerio.load(
-      html || "",
-      {
-        decodeEntities:
-          false,
-      }
+      html || ""
     );
 
-  const pageText =
-    cleanPageText($);
+  $(
+    "script,style,noscript,svg"
+  ).remove();
 
-  const statusCandidates =
-    [
-      $("span.mstat")
-        .first()
-        .text(),
+  return $("body")
+    .text()
+    .replace(
+      /\u00a0/g,
+      " "
+    )
+    .replace(
+      /\s+/g,
+      " "
+    )
+    .trim();
+}
 
-      $(".mstat")
-        .first()
-        .text(),
+function looksLikeMatchPage(
+  html,
+  matchId
+) {
+  const text =
+    pageText(html);
 
-      $(".detailScore__status")
-        .first()
-        .text(),
+  if (
+    !text ||
+    text.length < 40
+  ) {
+    return false;
+  }
 
-      $("[class*='status']")
-        .first()
-        .text(),
-    ]
-      .filter(Boolean)
-      .join(" ");
+  const bad =
+    /access denied|captcha|cloudflare|checking your browser|enable javascript|robot|forbidden/i.test(
+      text
+    );
 
-  const hasFinishedClass =
-    $("a.fin").length > 0 ||
-    $(".fin").length > 0 ||
-    $("[class~='fin']").length > 0;
+  if (bad) {
+    return false;
+  }
+
+  return (
+    /finished|scheduled|live|half|odds|summary|standings|h2h|1st half|2nd half|football/i.test(
+      text
+    ) ||
+    String(html).includes(
+      matchId
+    )
+  );
+}
+
+/* =========================================================
+ * SCORE PARSER
+ * ========================================================= */
+
+function extractFinishedScore(
+  html
+) {
+  const text =
+    pageText(html);
+
+  if (!text) {
+    return null;
+  }
 
   const finished =
-    hasFinishedClass ||
-    isFinishedStatus(
-      statusCandidates
-    ) ||
-    isFinishedStatus(
-      pageText
+    /\bFinished\b|\bFull Time\b|\bFinal\b|\bFT\b|After Penalties|After Extra Time|\bAET\b/i.test(
+      text
     );
 
   if (!finished) {
@@ -1211,111 +1180,131 @@ function extractFinishedScore(
   }
 
   /*
-   * Preferred isolated score elements.
+   * Actual Flashscore mobile format:
+   *
+   * 4-2 (3-0,1-2) Finished
    */
+  let m =
+    text.match(
+      /(\d{1,2})\s*[-:]\s*(\d{1,2})(?:\s*\([^)]*\))?\s*(?:Finished|Full Time|Final|FT|AET)/i
+    );
 
-  const selectors = [
-    ".detailScore__wrapper",
-    ".detailScore__score",
-    ".detailScore__matchInfo",
-    ".score",
-    "h1",
-    "h2",
-    "h3",
-    "strong",
-    "b",
-  ];
+  if (m) {
+    return {
+      h:
+        Number(
+          m[1]
+        ),
 
-  for (
-    const selector
-    of selectors
-  ) {
-    const elements =
-      $(selector).toArray();
-
-    for (
-      const el
-      of elements
-    ) {
-      const text =
-        $(el)
-          .text()
-          .replace(
-            /\s+/g,
-            " "
-          )
-          .trim();
-
-      const m =
-        text.match(
-          /(?:^|\s)(\d{1,2})\s*[-:]\s*(\d{1,2})(?:\s|$|\()/
-        );
-
-      if (m) {
-        return {
-          h: Number(m[1]),
-          a: Number(m[2]),
-        };
-      }
-    }
+      a:
+        Number(
+          m[2]
+        ),
+    };
   }
 
   /*
-   * Score around status.
+   * Status before score.
    */
+  m =
+    text.match(
+      /(?:Finished|Full Time|Final|FT|AET)[^0-9]{0,120}(\d{1,2})\s*[-:]\s*(\d{1,2})/i
+    );
 
-  const patterns = [
-    /(?:Finished|Full Time|Final|FT|AET)[^0-9]{0,80}(\d{1,2})\s*[-:]\s*(\d{1,2})/i,
+  if (m) {
+    return {
+      h:
+        Number(
+          m[1]
+        ),
 
-    /(\d{1,2})\s*[-:]\s*(\d{1,2})[^A-Za-z]{0,80}(?:Finished|Full Time|Final|FT|AET)/i,
-  ];
+      a:
+        Number(
+          m[2]
+        ),
+    };
+  }
 
-  for (
-    const pattern
-    of patterns
+  /*
+   * Strong signature:
+   *
+   * SCORE (HT,2H)
+   */
+  m =
+    text.match(
+      /(?:^|\s)(\d{1,2})\s*[-:]\s*(\d{1,2})\s*\(\s*\d{1,2}\s*[-:]\s*\d{1,2}\s*[,;]\s*\d{1,2}\s*[-:]\s*\d{1,2}\s*\)/
+    );
+
+  if (m) {
+    return {
+      h:
+        Number(
+          m[1]
+        ),
+
+      a:
+        Number(
+          m[2]
+        ),
+    };
+  }
+
+  /*
+   * Last fallback:
+   * inspect only the area around "Finished".
+   */
+  const index =
+    text.search(
+      /Finished|Full Time|Final|\bFT\b|AET/i
+    );
+
+  if (
+    index >= 0
   ) {
-    const m =
-      pageText.match(
-        pattern
+    const around =
+      text.slice(
+        Math.max(
+          0,
+          index - 180
+        ),
+
+        index + 180
       );
 
-    if (m) {
-      return {
-        h: Number(m[1]),
-        a: Number(m[2]),
-      };
-    }
-  }
-
-  /*
-   * Conservative fallback.
-   */
-
-  const all =
-    [
-      ...pageText.matchAll(
-        /(?:^|\s)(\d{1,2})\s*[-:]\s*(\d{1,2})(?=\s|$|\()/g
-      ),
-    ];
-
-  for (
-    const m
-    of all
-  ) {
-    const h =
-      Number(m[1]);
-
-    const a =
-      Number(m[2]);
+    const scores =
+      [
+        ...around.matchAll(
+          /(?:^|\s)(\d{1,2})\s*[-:]\s*(\d{1,2})(?=\s|$|\()/g
+        ),
+      ];
 
     if (
-      h <= 20 &&
-      a <= 20
+      scores.length
     ) {
-      return {
-        h,
-        a,
-      };
+      const last =
+        scores[
+          scores.length - 1
+        ];
+
+      const h =
+        Number(
+          last[1]
+        );
+
+      const a =
+        Number(
+          last[2]
+        );
+
+      if (
+        h <= 20 &&
+        a <= 20
+      ) {
+        return {
+          h,
+          a,
+        };
+      }
     }
   }
 
@@ -1323,27 +1312,28 @@ function extractFinishedScore(
 }
 
 /* =========================================================
- * FLASHSCORE STATS
+ * STATISTICS PARSER
  * ========================================================= */
 
-function parseNumericStat(
+function parseNumeric(
   value
 ) {
-  const text =
+  const m =
     String(
       value || ""
     )
-      .replace("%", "")
-      .replace(",", ".")
-      .trim();
-
-  const m =
-    text.match(
-      /-?\d+(?:\.\d+)?/
-    );
+      .replace(
+        ",",
+        "."
+      )
+      .match(
+        /-?\d+(?:\.\d+)?/
+      );
 
   return m
-    ? Number(m[0])
+    ? Number(
+        m[0]
+      )
     : null;
 }
 
@@ -1352,96 +1342,79 @@ function parseFinalStats(
 ) {
   const $ =
     cheerio.load(
-      html || "",
-      {
-        decodeEntities:
-          false,
-      }
+      html || ""
     );
 
-  let homeCorners =
-    null;
+  let hc = null;
+  let ac = null;
 
-  let awayCorners =
-    null;
+  let hy = null;
+  let ay = null;
 
-  let homeYellow =
-    null;
+  let hr = null;
+  let ar = null;
 
-  let awayYellow =
-    null;
-
-  let homeRed =
-    null;
-
-  let awayRed =
-    null;
-
-  let homeCards =
-    null;
-
-  let awayCards =
-    null;
+  let hcards = null;
+  let acards = null;
 
   /*
-   * Classic mobile format:
-   * HOME | LABEL | AWAY
+   * Table layout.
    */
-
   $("tr").each(
     (
       _,
       tr
     ) => {
-      const tds =
-        $(tr).find("td");
+      const cells =
+        $(tr).find(
+          "td"
+        );
 
       if (
-        tds.length < 3
+        cells.length < 3
       ) {
         return;
       }
 
       const left =
-        parseNumericStat(
-          $(tds[0]).text()
+        parseNumeric(
+          $(
+            cells[0]
+          ).text()
         );
 
       const label =
         normalize(
-          $(tds[1]).text()
+          $(
+            cells[1]
+          ).text()
         );
 
       const right =
-        parseNumericStat(
+        parseNumeric(
           $(
-            tds[
-              tds.length - 1
+            cells[
+              cells.length - 1
             ]
           ).text()
         );
 
       if (
         left === null ||
-        right === null ||
-        !label
+        right === null
       ) {
         return;
       }
 
       if (
         label.includes(
-          "corner kick"
-        ) ||
-        label === "corners" ||
-        label.includes(
-          "cornere"
+          "corner"
         )
       ) {
-        homeCorners =
+        hc =
           left;
 
-        awayCorners =
+        ac =
           right;
       }
 
@@ -1453,10 +1426,10 @@ function parseFinalStats(
           "cartonase galbene"
         )
       ) {
-        homeYellow =
+        hy =
           left;
 
-        awayYellow =
+        ay =
           right;
       }
 
@@ -1468,204 +1441,167 @@ function parseFinalStats(
           "cartonase rosii"
         )
       ) {
-        homeRed =
+        hr =
           left;
 
-        awayRed =
+        ar =
           right;
       }
 
       else if (
-        label === "cards" ||
+        label ===
+          "cards" ||
         label.includes(
           "total cards"
         ) ||
-        label === "cartonase"
+        label ===
+          "cartonase"
       ) {
-        homeCards =
+        hcards =
           left;
 
-        awayCards =
+        acards =
           right;
       }
     }
   );
 
   /*
-   * Generic fallback.
+   * Linear mobile layout:
+   *
+   * 5 Corner Kicks 3
    */
+  const text =
+    pageText(html);
 
-  if (
-    homeCorners === null ||
-    homeYellow === null
+  const patterns = [
+    {
+      re:
+        /(\d+)\s+(?:Corner Kicks|Corners|Cornere)\s+(\d+)/i,
+
+      key:
+        "corners",
+    },
+
+    {
+      re:
+        /(\d+)\s+(?:Yellow Cards|Cartonase galbene)\s+(\d+)/i,
+
+      key:
+        "yellow",
+    },
+
+    {
+      re:
+        /(\d+)\s+(?:Red Cards|Cartonase rosii)\s+(\d+)/i,
+
+      key:
+        "red",
+    },
+
+    {
+      re:
+        /(\d+)\s+(?:Total Cards|Cards|Cartonase)\s+(\d+)/i,
+
+      key:
+        "cards",
+    },
+  ];
+
+  for (
+    const p
+    of patterns
   ) {
-    $(
-      "div, li, section"
-    ).each(
-      (
-        _,
-        el
-      ) => {
-        const text =
-          $(el)
-            .text()
-            .replace(
-              /\s+/g,
-              " "
-            )
-            .trim();
+    const m =
+      text.match(
+        p.re
+      );
 
-        const n =
-          normalize(text);
+    if (!m) {
+      continue;
+    }
 
-        if (
-          !text ||
-          text.length > 180
-        ) {
-          return;
-        }
+    const left =
+      Number(
+        m[1]
+      );
 
-        const nums =
-          [
-            ...text.matchAll(
-              /\b\d+(?:[.,]\d+)?\b/g
-            ),
-          ].map(
-            (
-              match
-            ) =>
-              Number(
-                match[0].replace(
-                  ",",
-                  "."
-                )
-              )
-          );
+    const right =
+      Number(
+        m[2]
+      );
 
-        if (
-          nums.length < 2
-        ) {
-          return;
-        }
+    if (
+      p.key ===
+        "corners" &&
+      hc === null
+    ) {
+      hc =
+        left;
 
-        const left =
-          nums[0];
+      ac =
+        right;
+    }
 
-        const right =
-          nums[
-            nums.length - 1
-          ];
+    if (
+      p.key ===
+        "yellow" &&
+      hy === null
+    ) {
+      hy =
+        left;
 
-        if (
-          homeCorners === null &&
-          (
-            n.includes(
-              "corner kicks"
-            ) ||
-            n.includes(
-              "corners"
-            ) ||
-            n.includes(
-              "cornere"
-            )
-          )
-        ) {
-          homeCorners =
-            left;
+      ay =
+        right;
+    }
 
-          awayCorners =
-            right;
-        }
+    if (
+      p.key ===
+        "red" &&
+      hr === null
+    ) {
+      hr =
+        left;
 
-        if (
-          homeYellow === null &&
-          (
-            n.includes(
-              "yellow cards"
-            ) ||
-            n.includes(
-              "cartonase galbene"
-            )
-          )
-        ) {
-          homeYellow =
-            left;
+      ar =
+        right;
+    }
 
-          awayYellow =
-            right;
-        }
+    if (
+      p.key ===
+        "cards" &&
+      hcards === null
+    ) {
+      hcards =
+        left;
 
-        if (
-          homeRed === null &&
-          (
-            n.includes(
-              "red cards"
-            ) ||
-            n.includes(
-              "cartonase rosii"
-            )
-          )
-        ) {
-          homeRed =
-            left;
-
-          awayRed =
-            right;
-        }
-
-        if (
-          homeCards === null &&
-          (
-            n.includes(
-              "total cards"
-            ) ||
-            n === "cards" ||
-            n.includes(
-              "cartonase total"
-            )
-          )
-        ) {
-          homeCards =
-            left;
-
-          awayCards =
-            right;
-        }
-      }
-    );
+      acards =
+        right;
+    }
   }
 
   const corners =
-    homeCorners !== null &&
-    awayCorners !== null
-      ? homeCorners +
-        awayCorners
+    hc !== null &&
+    ac !== null
+      ? hc + ac
       : null;
 
   const yellow =
-    homeYellow !== null &&
-    awayYellow !== null
-      ? homeYellow +
-        awayYellow
+    hy !== null &&
+    ay !== null
+      ? hy + ay
       : null;
 
   const red =
-    homeRed !== null &&
-    awayRed !== null
-      ? homeRed +
-        awayRed
-      : null;
-
-  const explicitCards =
-    homeCards !== null &&
-    awayCards !== null
-      ? homeCards +
-        awayCards
+    hr !== null &&
+    ar !== null
+      ? hr + ar
       : null;
 
   const cards =
-    explicitCards !== null
-      ? explicitCards
+    hcards !== null &&
+    acards !== null
+      ? hcards + acards
 
       : (
           yellow !== null ||
@@ -1677,202 +1613,256 @@ function parseFinalStats(
           (
             red || 0
           )
-
         : null;
 
   return {
     corners,
-    cards,
     yellow,
     red,
+    cards,
   };
 }
 
 /* =========================================================
- * FLASHSCORE RESULT FETCHER
+ * URL FALLBACKS
  * ========================================================= */
 
-async function fetchFirstUsefulPage(
-  urls,
-  parser,
-  description,
+function scoreUrls(
   matchId
 ) {
-  let lastError =
-    null;
+  const urls = [];
 
   for (
-    const url
-    of urls
+    const host
+    of FS_HOSTS
   ) {
-    try {
-      const html =
-        await fetchHtml(
-          url
-        );
+    const base =
+      `${host}/match/${matchId}/`;
 
-      const parsed =
-        parser(html);
+    urls.push(
+      base
+    );
 
-      if (parsed) {
-        console.log(
-          `[FS] ${matchId}: ${description} detected via ${url}`
-        );
+    urls.push(
+      `${base}?s=1`
+    );
 
-        return {
-          parsed,
-          html,
-          url,
-        };
-      }
-    } catch (error) {
-      lastError =
-        error;
-
-      console.warn(
-        `[FS] ${matchId}: ${description} page failed ${url}: ${error.message}`
-      );
-    }
-  }
-
-  if (lastError) {
-    console.warn(
-      `[FS] ${matchId}: no usable ${description} page found`
+    urls.push(
+      `${base}?d=-1`
     );
   }
 
-  return null;
+  return [
+    ...new Set(
+      urls
+    ),
+  ];
 }
+
+function statsUrls(
+  matchId
+) {
+  const urls = [];
+
+  for (
+    const host
+    of FS_HOSTS
+  ) {
+    const base =
+      `${host}/match/${matchId}/`;
+
+    urls.push(
+      `${base}?s=2`
+    );
+
+    urls.push(
+      `${base}?t=stats`
+    );
+  }
+
+  return [
+    ...new Set(
+      urls
+    ),
+  ];
+}
+
+/* =========================================================
+ * FLASHSCORE FETCHER
+ * ========================================================= */
 
 async function fetchFlashscore(
   matchId
 ) {
-  const base =
-    `${FS_BASE}${matchId}/`;
+  let bestDiagnostic =
+    null;
 
-  try {
-    /*
-     * Try both main page
-     * and score tab.
-     */
-
-    const scoreResult =
-      await fetchFirstUsefulPage(
-        [
-          base,
-          `${base}?s=1`,
-        ],
-
-        extractFinishedScore,
-
-        "finished score",
-
-        matchId
-      );
-
-    if (!scoreResult) {
-      console.log(
-        `[FS] ${matchId}: not finished OR final score not detected`
-      );
-
-      return null;
-    }
-
-    const ft =
-      scoreResult.parsed;
-
-    let stats = {
-      corners: null,
-      cards: null,
-      yellow: null,
-      red: null,
-    };
-
-    /*
-     * Try both stats formats.
-     * Stats failure does NOT block
-     * goals / BTTS / 1X2.
-     */
-
-    for (
-      const statsUrl
-      of [
-        `${base}?s=2`,
-        `${base}?t=stats`,
-      ]
-    ) {
-      try {
-        const statsHtml =
-          await fetchHtml(
-            statsUrl
-          );
-
-        const parsed =
-          parseFinalStats(
-            statsHtml
-          );
-
-        if (
-          parsed.corners !== null ||
-          parsed.cards !== null ||
-          parsed.yellow !== null ||
-          parsed.red !== null
-        ) {
-          stats =
-            parsed;
-
-          console.log(
-            `[FS] ${matchId}: stats detected via ${statsUrl}`
-          );
-
-          break;
-        }
-      } catch (error) {
-        console.warn(
-          `[FS] ${matchId}: stats page failed ${statsUrl}: ${error.message}`
+  for (
+    const url
+    of scoreUrls(
+      matchId
+    )
+  ) {
+    try {
+      const {
+        html,
+        finalUrl,
+        status,
+      } =
+        await fetchHtmlDetailed(
+          url
         );
-      }
-    }
 
-    console.log(
-      `[FS] ${matchId}: FINISHED ${ft.h}-${ft.a}` +
+      const text =
+        pageText(
+          html
+        );
 
-      (
-        stats.corners !== null
-          ? ` | corners=${stats.corners}`
-          : ""
-      ) +
+      const valid =
+        looksLikeMatchPage(
+          html,
+          matchId
+        );
 
-      (
-        stats.cards !== null
-          ? ` | cards=${stats.cards}`
-          : ""
-      )
-    );
+      const ft =
+        valid
+          ? extractFinishedScore(
+              html
+            )
+          : null;
 
-    return {
-      ft,
-      ...stats,
-    };
-  } catch (error) {
-    if (
-      error?.name ===
-      "AbortError"
-    ) {
-      console.warn(
-        `[FS] ${matchId}: request timed out`
+      console.log(
+        `[FS] ${matchId}: GET ${url}` +
+        ` -> ${status}` +
+        ` | final=${finalUrl}` +
+        ` | bytes=${html.length}` +
+        ` | match_page=${valid}` +
+        ` | finished=${Boolean(ft)}`
       );
-    } else {
+
+      if (
+        !bestDiagnostic ||
+        text.length >
+          bestDiagnostic
+            .text.length
+      ) {
+        bestDiagnostic = {
+          url,
+          finalUrl,
+          text,
+        };
+      }
+
+      if (!ft) {
+        continue;
+      }
+
+      let stats = {
+        corners:
+          null,
+
+        cards:
+          null,
+
+        yellow:
+          null,
+
+        red:
+          null,
+      };
+
+      for (
+        const statsUrl
+        of statsUrls(
+          matchId
+        )
+      ) {
+        try {
+          const statRes =
+            await fetchHtmlDetailed(
+              statsUrl
+            );
+
+          const parsed =
+            parseFinalStats(
+              statRes.html
+            );
+
+          if (
+            parsed.corners !==
+              null ||
+            parsed.cards !==
+              null ||
+            parsed.yellow !==
+              null ||
+            parsed.red !==
+              null
+          ) {
+            stats =
+              parsed;
+
+            console.log(
+              `[FS] ${matchId}: stats detected via ${statsUrl}`
+            );
+
+            break;
+          }
+        } catch (e) {
+          console.warn(
+            `[FS] ${matchId}: stats request failed ${statsUrl}: ${e.message}`
+          );
+        }
+      }
+
+      console.log(
+        `[FS] ${matchId}: FINISHED ${ft.h}-${ft.a}` +
+
+        (
+          stats.corners !==
+          null
+            ? ` | corners=${stats.corners}`
+            : ""
+        ) +
+
+        (
+          stats.cards !==
+          null
+            ? ` | cards=${stats.cards}`
+            : ""
+        )
+      );
+
+      return {
+        ft,
+        ...stats,
+      };
+    } catch (e) {
       console.warn(
-        `[FS] ${matchId}: ${
-          error?.message ||
-          error
+        `[FS] ${matchId}: request failed ${url}: ${
+          e?.name ===
+          "AbortError"
+            ? "timeout"
+            : e.message
         }`
       );
     }
-
-    return null;
   }
+
+  if (
+    bestDiagnostic
+  ) {
+    console.warn(
+      `[FS] ${matchId}: no finished score detected.` +
+      ` Best response: ${bestDiagnostic.finalUrl}` +
+      ` | text="${truncate(bestDiagnostic.text, 320)}"`
+    );
+  } else {
+    console.warn(
+      `[FS] ${matchId}: no usable Flashscore response received from any fallback host.`
+    );
+  }
+
+  return null;
 }
 
 /* =========================================================
@@ -1883,13 +1873,17 @@ function evalThreshold(
   actual,
   bet
 ) {
-  if (bet.over) {
-    return actual > bet.val
+  if (
+    bet.over
+  ) {
+    return actual >
+      bet.val
       ? WIN
       : LOSS;
   }
 
-  return actual < bet.val
+  return actual <
+    bet.val
     ? WIN
     : LOSS;
 }
@@ -1905,37 +1899,40 @@ function evalBet(
     return null;
   }
 
-  const ft =
+  const {
+    h,
+    a,
+  } =
     data.ft;
 
-  const totalGoals =
-    ft.h + ft.a;
-
   if (
-    bet.type === "1x2"
+    bet.type ===
+    "1x2"
   ) {
     const result =
-      ft.h > ft.a
+      h > a
         ? "1"
 
-        : ft.h < ft.a
+        : h < a
           ? "2"
 
           : "x";
 
-    return result === bet.side
+    return result ===
+      bet.side
       ? WIN
       : LOSS;
   }
 
   if (
-    bet.type === "double"
+    bet.type ===
+    "double"
   ) {
     const result =
-      ft.h > ft.a
+      h > a
         ? "1"
 
-        : ft.h < ft.a
+        : h < a
           ? "2"
 
           : "x";
@@ -1948,114 +1945,100 @@ function evalBet(
   }
 
   if (
-    bet.type === "btts"
+    bet.type ===
+    "btts"
   ) {
     const yes =
-      ft.h > 0 &&
-      ft.a > 0;
+      h > 0 &&
+      a > 0;
 
-    return yes === bet.yes
+    return yes ===
+      bet.yes
       ? WIN
       : LOSS;
   }
 
   if (
-    bet.type === "goals"
+    bet.type ===
+    "goals"
   ) {
     return evalThreshold(
-      totalGoals,
+      h + a,
       bet
     );
   }
 
   if (
-    bet.type === "team_goals"
+    bet.type ===
+    "team_goals"
   ) {
-    const goals =
-      bet.side === "home"
-        ? ft.h
-        : ft.a;
-
     return evalThreshold(
-      goals,
+      bet.side ===
+        "home"
+        ? h
+        : a,
+
       bet
     );
   }
 
   if (
-    bet.type === "corners"
+    bet.type ===
+    "corners"
   ) {
-    if (
-      !Number.isFinite(
-        data.corners
-      )
-    ) {
-      return null;
-    }
-
-    return evalThreshold(
-      data.corners,
-      bet
-    );
-  }
-
-  if (
-    bet.type === "cards"
-  ) {
-    if (
-      !Number.isFinite(
-        data.cards
-      )
-    ) {
-      return null;
-    }
-
-    return evalThreshold(
-      data.cards,
-      bet
-    );
-  }
-
-  if (
-    bet.type === "combo"
-  ) {
-    const results =
-      bet.parts.map(
-        (
-          part
-        ) =>
-          evalBet(
-            part,
-            data
-          )
-      );
-
-    if (
-      results.some(
-        (
-          result
-        ) =>
-          !result
-      )
-    ) {
-      return null;
-    }
-
-    return results.every(
-      (
-        result
-      ) =>
-        result === WIN
+    return Number.isFinite(
+      data.corners
     )
-      ? WIN
-      : LOSS;
+      ? evalThreshold(
+          data.corners,
+          bet
+        )
+      : null;
+  }
+
+  if (
+    bet.type ===
+    "cards"
+  ) {
+    return Number.isFinite(
+      data.cards
+    )
+      ? evalThreshold(
+          data.cards,
+          bet
+        )
+      : null;
   }
 
   return null;
 }
 
 /* =========================================================
- * PROCESS ONE POST
+ * EMPTY RESULT
+ * ========================================================= */
+
+function emptyResult(
+  postId,
+  status
+) {
+  return {
+    postId,
+    status,
+
+    rowsFound: 0,
+    pendingRows: 0,
+    parsedRows: 0,
+    finishedRows: 0,
+    evaluated: 0,
+
+    noMatchId: 0,
+    unsupported: 0,
+    statsUnavailable: 0,
+  };
+}
+
+/* =========================================================
+ * PROCESS POST
  * ========================================================= */
 
 async function processPost(
@@ -2064,35 +2047,22 @@ async function processPost(
   const postId =
     postSummary.id;
 
-  const postUrl =
-    `${WP_BASE}/wp-json/wp/v2/posts/${postId}?context=edit`;
-
   let post;
 
   try {
     post =
-      await wordpressGet(
-        postUrl
+      await wpRequest(
+        `${WP_BASE}/wp-json/wp/v2/posts/${postId}?context=edit`
       );
-  } catch (error) {
+  } catch (e) {
     console.warn(
-      `[POST ${postId}] Read failed: ${error.message}`
+      `[POST ${postId}] Read failed: ${e.message}`
     );
 
-    return {
+    return emptyResult(
       postId,
-      status:
-        "read_failed",
-
-      rowsFound: 0,
-      pendingRows: 0,
-      parsedRows: 0,
-      finishedRows: 0,
-      evaluated: 0,
-      noMatchId: 0,
-      unsupported: 0,
-      statsUnavailable: 0,
-    };
+      "read_failed"
+    );
   }
 
   const content =
@@ -2101,26 +2071,11 @@ async function processPost(
     "";
 
   if (!content) {
-    return {
+    return emptyResult(
       postId,
-      status: "empty",
-
-      rowsFound: 0,
-      pendingRows: 0,
-      parsedRows: 0,
-      finishedRows: 0,
-      evaluated: 0,
-      noMatchId: 0,
-      unsupported: 0,
-      statsUnavailable: 0,
-    };
+      "empty"
+    );
   }
-
-  /*
-   * HTML fragment mode.
-   * Prevents <html><body> being added
-   * to WordPress content.
-   */
 
   const $ =
     cheerio.load(
@@ -2138,39 +2093,38 @@ async function processPost(
     !rows.length
   ) {
     rows =
-      $("tr[data-id]")
-        .toArray();
+      $(
+        "tr[data-id]"
+      ).toArray();
   }
 
   if (
     !rows.length
   ) {
-    return {
+    return emptyResult(
       postId,
-      status:
-        "no_ticket",
-
-      rowsFound: 0,
-      pendingRows: 0,
-      parsedRows: 0,
-      finishedRows: 0,
-      evaluated: 0,
-      noMatchId: 0,
-      unsupported: 0,
-      statsUnavailable: 0,
-    };
+      "no_ticket"
+    );
   }
 
   let pendingRows = 0;
   let parsedRows = 0;
   let finishedRows = 0;
   let evaluated = 0;
+
   let noMatchId = 0;
   let unsupported = 0;
   let statsUnavailable = 0;
 
   let checked = 0;
   let changed = false;
+
+  /*
+   * Avoid requesting same match twice
+   * inside same post.
+   */
+  const matchCache =
+    new Map();
 
   for (
     const row
@@ -2187,7 +2141,9 @@ async function processPost(
       $(row);
 
     const cells =
-      $row.find("td");
+      $row.find(
+        "td"
+      );
 
     if (
       cells.length < 2
@@ -2195,21 +2151,19 @@ async function processPost(
       continue;
     }
 
-    /*
-     * Status is last column.
-     */
-
     const $status =
       cells.last();
 
     if (
       !RECHECK_ONCE &&
-      !isPending($status)
+      !isPending(
+        $status
+      )
     ) {
       continue;
     }
 
-    pendingRows += 1;
+    pendingRows++;
 
     const matchId =
       getMatchId(
@@ -2217,7 +2171,7 @@ async function processPost(
       );
 
     if (!matchId) {
-      noMatchId += 1;
+      noMatchId++;
 
       console.warn(
         `[POST ${postId}] Row skipped: no Flashscore match ID`
@@ -2226,20 +2180,10 @@ async function processPost(
       continue;
     }
 
-    /*
-     * Primary:
-     * data-market etc.
-     */
-
     let bet =
       parseStructuralBet(
         $row
       );
-
-    /*
-     * Fallback:
-     * old post text.
-     */
 
     if (!bet) {
       const teams =
@@ -2260,7 +2204,9 @@ async function processPost(
 
       const betText =
         betCell
-          .find("strong")
+          .find(
+            "strong"
+          )
           .first()
           .text() ||
         betCell.text();
@@ -2273,68 +2219,57 @@ async function processPost(
     }
 
     if (!bet) {
-      unsupported += 1;
+      unsupported++;
 
       console.warn(
         `[POST ${postId}] Unsupported bet` +
-
         ` | match=${matchId}` +
-
-        ` | market=${
-          $row.attr(
-            "data-market"
-          ) || "-"
-        }` +
-
-        ` | stat=${
-          $row.attr(
-            "data-stat"
-          ) || "-"
-        }` +
-
-        ` | side=${
-          $row.attr(
-            "data-side"
-          ) || "-"
-        }` +
-
-        ` | threshold=${
-          $row.attr(
-            "data-threshold"
-          ) || "-"
-        }`
+        ` | market=${$row.attr("data-market") || "-"}` +
+        ` | stat=${$row.attr("data-stat") || "-"}` +
+        ` | side=${$row.attr("data-side") || "-"}` +
+        ` | threshold=${$row.attr("data-threshold") || "-"}`
       );
 
       continue;
     }
 
-    parsedRows += 1;
-    checked += 1;
+    parsedRows++;
+    checked++;
 
     console.log(
       `[POST ${postId}] Checking ${matchId}` +
-
-      ` | market=${
-        $row.attr(
-          "data-market"
-        ) || "-"
-      }` +
-
-      ` | parsed=${JSON.stringify(
-        bet
-      )}`
+      ` | market=${$row.attr("data-market") || "-"}` +
+      ` | parsed=${JSON.stringify(bet)}`
     );
 
-    const data =
-      await fetchFlashscore(
+    let data;
+
+    if (
+      matchCache.has(
         matchId
+      )
+    ) {
+      data =
+        matchCache.get(
+          matchId
+        );
+    } else {
+      data =
+        await fetchFlashscore(
+          matchId
+        );
+
+      matchCache.set(
+        matchId,
+        data
       );
+    }
 
     if (!data) {
       continue;
     }
 
-    finishedRows += 1;
+    finishedRows++;
 
     const result =
       evalBet(
@@ -2346,7 +2281,7 @@ async function processPost(
       if (
         (
           bet.type ===
-          "corners" &&
+            "corners" &&
           !Number.isFinite(
             data.corners
           )
@@ -2354,22 +2289,18 @@ async function processPost(
 
         (
           bet.type ===
-          "cards" &&
+            "cards" &&
           !Number.isFinite(
             data.cards
           )
         )
       ) {
-        statsUnavailable += 1;
-
-        console.warn(
-          `[POST ${postId}] ${matchId}: match finished, but required ${bet.type} stats are unavailable`
-        );
-      } else {
-        console.warn(
-          `[POST ${postId}] ${matchId}: finished but bet could not be evaluated`
-        );
+        statsUnavailable++;
       }
+
+      console.warn(
+        `[POST ${postId}] ${matchId}: finished but required data for ${bet.type} is unavailable`
+      );
 
       continue;
     }
@@ -2391,7 +2322,7 @@ async function processPost(
     changed =
       true;
 
-    evaluated += 1;
+    evaluated++;
 
     console.log(
       `[POST ${postId}] ${matchId} => ${
@@ -2404,50 +2335,52 @@ async function processPost(
 
   console.log(
     `[POST ${postId}]` +
-
     ` rows=${rows.length}` +
-
     ` pending=${pendingRows}` +
-
     ` parsed=${parsedRows}` +
-
     ` finished=${finishedRows}` +
-
     ` evaluated=${evaluated}` +
-
     ` no_id=${noMatchId}` +
-
     ` unsupported=${unsupported}` +
-
     ` stats_unavailable=${statsUnavailable}`
   );
 
+  const resultBase = {
+    postId,
+
+    rowsFound:
+      rows.length,
+
+    pendingRows,
+    parsedRows,
+    finishedRows,
+    evaluated,
+
+    noMatchId,
+    unsupported,
+    statsUnavailable,
+  };
+
   if (!changed) {
     return {
-      postId,
+      ...resultBase,
       status:
         "no_changes",
-
-      rowsFound:
-        rows.length,
-
-      pendingRows,
-      parsedRows,
-      finishedRows,
-      evaluated,
-      noMatchId,
-      unsupported,
-      statsUnavailable,
     };
   }
 
   try {
-    await wordpressPut(
+    await wpRequest(
       `${WP_BASE}/wp-json/wp/v2/posts/${postId}`,
 
       {
-        content:
-          $.html(),
+        method:
+          "PUT",
+
+        body: {
+          content:
+            $.html(),
+        },
       }
     );
 
@@ -2456,41 +2389,19 @@ async function processPost(
     );
 
     return {
-      postId,
+      ...resultBase,
       status:
         "updated",
-
-      rowsFound:
-        rows.length,
-
-      pendingRows,
-      parsedRows,
-      finishedRows,
-      evaluated,
-      noMatchId,
-      unsupported,
-      statsUnavailable,
     };
-  } catch (error) {
+  } catch (e) {
     console.warn(
-      `[POST ${postId}] WordPress update failed: ${error.message}`
+      `[POST ${postId}] WordPress update failed: ${e.message}`
     );
 
     return {
-      postId,
+      ...resultBase,
       status:
         "update_failed",
-
-      rowsFound:
-        rows.length,
-
-      pendingRows,
-      parsedRows,
-      finishedRows,
-      evaluated,
-      noMatchId,
-      unsupported,
-      statsUnavailable,
     };
   }
 }
@@ -2502,17 +2413,8 @@ async function processPost(
 async function main() {
   validateConfiguration();
 
-  console.log("");
   console.log(
-    "=========================================="
-  );
-
-  console.log(
-    "WORDPRESS TICKET VERIFICATION"
-  );
-
-  console.log(
-    "=========================================="
+    "\n# WORDPRESS TICKET VERIFICATION\n"
   );
 
   console.log(
@@ -2533,46 +2435,40 @@ async function main() {
 
   const postsUrl =
     `${WP_BASE}/wp-json/wp/v2/posts` +
-
-    `?per_page=${Math.min(
-      RECHECK_LAST_N,
-      100
-    )}` +
-
+    `?per_page=${Math.min(RECHECK_LAST_N, 100)}` +
     `&orderby=date&order=desc`;
 
   let posts;
 
   try {
     posts =
-      await wordpressGet(
+      await wpRequest(
         postsUrl
       );
-  } catch (error) {
+  } catch (e) {
     console.error(
-      `[VERIFY] Cannot load WordPress posts: ${error.message}`
+      `[VERIFY] Cannot load WordPress posts: ${e.message}`
     );
 
     if (
       NON_BLOCKING
     ) {
-      console.warn(
-        "[VERIFY] Non-blocking mode enabled."
-      );
-
       return {
         status:
           "wordpress_error",
 
-        processed: 0,
+        processed:
+          0,
       };
     }
 
-    throw error;
+    throw e;
   }
 
   if (
-    !Array.isArray(posts)
+    !Array.isArray(
+      posts
+    )
   ) {
     throw new Error(
       "WordPress posts endpoint did not return an array."
@@ -2583,7 +2479,8 @@ async function main() {
     `[WP] Posts loaded: ${posts.length}`
   );
 
-  const results = [];
+  const results =
+    [];
 
   for (
     const post
@@ -2595,27 +2492,20 @@ async function main() {
           post
         )
       );
-    } catch (error) {
+    } catch (e) {
       console.error(
-        `[POST ${post?.id}] Unexpected error: ${error.message}`
+        `[POST ${post?.id}] Unexpected error: ${
+          e.stack ||
+          e.message
+        }`
       );
 
-      results.push({
-        postId:
+      results.push(
+        emptyResult(
           post?.id,
-
-        status:
-          "error",
-
-        rowsFound: 0,
-        pendingRows: 0,
-        parsedRows: 0,
-        finishedRows: 0,
-        evaluated: 0,
-        noMatchId: 0,
-        unsupported: 0,
-        statsUnavailable: 0,
-      });
+          "error"
+        )
+      );
     }
   }
 
@@ -2626,11 +2516,12 @@ async function main() {
       results.reduce(
         (
           total,
-          item
+          row
         ) =>
           total +
           Number(
-            item[key] || 0
+            row[key] ||
+            0
           ),
         0
       );
@@ -2638,23 +2529,23 @@ async function main() {
   const updated =
     results.filter(
       (
-        r
+        row
       ) =>
-        r.status ===
+        row.status ===
         "updated"
     ).length;
 
   const errors =
     results.filter(
       (
-        r
+        row
       ) =>
         [
           "read_failed",
           "update_failed",
           "error",
         ].includes(
-          r.status
+          row.status
         )
     ).length;
 
@@ -2698,17 +2589,8 @@ async function main() {
       "statsUnavailable"
     );
 
-  console.log("");
   console.log(
-    "=========================================="
-  );
-
-  console.log(
-    "VERIFICATION SUMMARY"
-  );
-
-  console.log(
-    "=========================================="
+    "\n# VERIFICATION SUMMARY\n"
   );
 
   console.log(
@@ -2755,8 +2637,8 @@ async function main() {
     `Post errors: ${errors}`
   );
 
-  let finalStatus =
-    errors > 0
+  let status =
+    errors
       ? "completed_with_errors"
       : "success";
 
@@ -2765,12 +2647,8 @@ async function main() {
     pendingRows > 0 &&
     parsedRows === 0
   ) {
-    finalStatus =
+    status =
       "warning_no_parsed_bets";
-
-    console.warn(
-      "[VERIFY WARNING] Ticket rows exist, but none could be parsed."
-    );
   }
 
   else if (
@@ -2778,12 +2656,8 @@ async function main() {
     parsedRows > 0 &&
     finishedRows === 0
   ) {
-    finalStatus =
-      "success_waiting_for_finished_matches";
-
-    console.log(
-      "[VERIFY] Bets parsed correctly, but no checked match was detected as finished."
-    );
+    status =
+      "warning_flashscore_no_finished_matches_detected";
   }
 
   else if (
@@ -2791,29 +2665,20 @@ async function main() {
     evaluated === 0 &&
     statsUnavailable > 0
   ) {
-    finalStatus =
+    status =
       "warning_stats_unavailable";
-
-    console.warn(
-      "[VERIFY WARNING] Finished matches were found, but required market statistics were unavailable."
-    );
   }
 
   else if (
     finishedRows > 0 &&
     evaluated === 0
   ) {
-    finalStatus =
+    status =
       "warning_finished_not_evaluated";
-
-    console.warn(
-      "[VERIFY WARNING] Finished matches were found but no market could be evaluated."
-    );
   }
 
   return {
-    status:
-      finalStatus,
+    status,
 
     processed:
       results.length,
@@ -2848,15 +2713,12 @@ main()
       );
     }
   )
-
   .catch(
     (
       error
     ) => {
-      console.error("");
-
       console.error(
-        "[VERIFY] Fatal error:"
+        "\n[VERIFY] Fatal error:"
       );
 
       console.error(
