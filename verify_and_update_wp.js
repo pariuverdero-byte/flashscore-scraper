@@ -5,74 +5,34 @@ const WP_BASE = String(process.env.WP_BASE || "").replace(/\/$/, "");
 const WP_USER = process.env.WP_USER || "";
 const WP_APP_PASS = process.env.WP_APP_PASS || "";
 
-const RECHECK_ONCE = /^(1|true|yes)$/i.test(
-  process.env.RECHECK_ONCE || ""
-);
+const RECHECK_ONCE = /^(1|true|yes)$/i.test(process.env.RECHECK_ONCE || "");
+const RECHECK_LAST_N = Math.max(1, Number(process.env.RECHECK_LAST_N || 30));
+const MAX_ROWS_PER_POST = Math.max(1, Number(process.env.MAX_ROWS_PER_POST || 10));
 
-const RECHECK_LAST_N = Math.max(
-  1,
-  Number(process.env.RECHECK_LAST_N || 30)
-);
-
-const MAX_ROWS_PER_POST = Math.max(
-  1,
-  Number(process.env.MAX_ROWS_PER_POST || 10)
-);
-
-const WP_TIMEOUT_MS = Math.max(
-  3000,
-  Number(process.env.WP_TIMEOUT_MS || 15000)
-);
-
-const FS_TIMEOUT_MS = Math.max(
-  3000,
-  Number(process.env.FS_TIMEOUT_MS || 12000)
-);
-
-const WP_RETRIES = Math.max(
-  0,
-  Number(process.env.WP_RETRIES || 2)
-);
-
-const WP_RETRY_DELAY_MS = Math.max(
-  500,
-  Number(process.env.WP_RETRY_DELAY_MS || 3000)
-);
-
-const NON_BLOCKING = !/^(0|false|no)$/i.test(
-  process.env.VERIFY_NON_BLOCKING || "true"
-);
+const WP_TIMEOUT_MS = Math.max(3000, Number(process.env.WP_TIMEOUT_MS || 15000));
+const FS_TIMEOUT_MS = Math.max(3000, Number(process.env.FS_TIMEOUT_MS || 12000));
+const WP_RETRIES = Math.max(0, Number(process.env.WP_RETRIES || 2));
+const WP_RETRY_DELAY_MS = Math.max(500, Number(process.env.WP_RETRY_DELAY_MS || 3000));
+const NON_BLOCKING = !/^(0|false|no)$/i.test(process.env.VERIFY_NON_BLOCKING || "true");
 
 const WIN = "win";
 const LOSS = "loss";
 
-/*
- * IMPORTANT:
- * Flashscore can return different HTML depending on domain/region.
- * We try several mobile hosts automatically.
- */
 const FS_HOSTS = [
+  "https://m.flashscore.com.au",
   "https://www.flashscore.mobi",
   "https://m.flashscore.co.uk",
-  "https://m.flashscore.com.ng",
-  "https://m.flashscore.co.za",
-  "https://m.flashscore.com.au",
   "https://m.flashscore.info",
 ];
 
 const FS_HEADERS = {
-  Accept:
-    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
   "Accept-Language": "en-GB,en;q=0.9",
   "Cache-Control": "no-cache",
   Pragma: "no-cache",
   "User-Agent":
     "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36",
 };
-
-/* =========================================================
- * CONFIG
- * ========================================================= */
 
 function validateConfiguration() {
   const missing = [];
@@ -88,10 +48,6 @@ function validateConfiguration() {
   }
 }
 
-/* =========================================================
- * HELPERS
- * ========================================================= */
-
 const sleep = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -105,7 +61,7 @@ function normalize(value) {
     .trim();
 }
 
-function truncate(value, max = 240) {
+function truncate(value, max = 300) {
   const s = String(value || "")
     .replace(/\s+/g, " ")
     .trim();
@@ -189,7 +145,6 @@ async function wpRequest(
           url,
           {
             method,
-
             signal:
               controller.signal,
 
@@ -201,7 +156,7 @@ async function wpRequest(
                 "application/json",
 
               "User-Agent":
-                "PariuVerde-WordPress-Verifier/4.0",
+                "PariuVerde-WordPress-Verifier/5.0",
 
               "Cache-Control":
                 "no-cache",
@@ -258,7 +213,7 @@ async function wpRequest(
       ) {
         await sleep(
           WP_RETRY_DELAY_MS *
-            (attempt + 1)
+          (attempt + 1)
         );
       }
     } finally {
@@ -365,12 +320,244 @@ function extractTeams(
   };
 }
 
+function getBetText(
+  $row
+) {
+  const cells =
+    $row.find(
+      "td"
+    );
+
+  if (
+    !cells.length
+  ) {
+    return "";
+  }
+
+  const betCell =
+    cells.length >= 4
+      ? cells.eq(3)
+
+      : cells.eq(
+          Math.max(
+            0,
+            cells.length - 2
+          )
+        );
+
+  return (
+    betCell
+      .find("strong")
+      .first()
+      .text() ||
+
+    betCell
+      .clone()
+      .find(".pick-reason")
+      .remove()
+      .end()
+      .text() ||
+
+    ""
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /* =========================================================
- * BET PARSER
+ * BET PARSING HELPERS
+ * ========================================================= */
+
+function inferOverUnder(
+  text,
+  fallback = true
+) {
+  const v =
+    normalize(text);
+
+  if (
+    /\b(under|sub|mai putin de|maximum|maxim)\b/.test(v) ||
+    /\bu\s*\d/.test(v)
+  ) {
+    return false;
+  }
+
+  if (
+    /\b(over|peste|cel putin|minim|minimum|at least)\b/.test(v) ||
+    /\bo\s*\d/.test(v)
+  ) {
+    return true;
+  }
+
+  return fallback;
+}
+
+function firstThreshold(
+  text
+) {
+  const v =
+    normalize(text);
+
+  const m =
+    v.match(
+      /\b(?:over|under|peste|sub|minim|maxim|minimum|maximum|at least)\s*(\d+(?:[.,]\d+)?)\b/
+    ) ||
+
+    v.match(
+      /\b[ou]\s*(\d+(?:[.,]\d+)?)\b/
+    ) ||
+
+    v.match(
+      /\b(\d+(?:[.,]\d+)?)\b/
+    );
+
+  return m
+    ? Number(
+        m[1].replace(
+          ",",
+          "."
+        )
+      )
+    : null;
+}
+
+function parse1x2FromText(
+  text,
+  teams = null
+) {
+  const v =
+    normalize(text);
+
+  if (!v) {
+    return null;
+  }
+
+  if (
+    v === "1" ||
+    /\b(home win|victorie gazde|gazdele castiga|gazde castiga|victorie acasa)\b/.test(v)
+  ) {
+    return {
+      type: "1x2",
+      side: "1",
+    };
+  }
+
+  if (
+    v === "x" ||
+    /\b(draw|egal|remiza)\b/.test(v)
+  ) {
+    return {
+      type: "1x2",
+      side: "x",
+    };
+  }
+
+  if (
+    v === "2" ||
+    /\b(away win|victorie oaspeti|oaspetii castiga|oaspeti castiga|victorie in deplasare)\b/.test(v)
+  ) {
+    return {
+      type: "1x2",
+      side: "2",
+    };
+  }
+
+  if (teams) {
+    const home =
+      normalize(
+        teams.home
+      );
+
+    const away =
+      normalize(
+        teams.away
+      );
+
+    const winWords =
+      /\b(win|wins|to win|castiga|victorie)\b/;
+
+    if (
+      home &&
+      v.includes(home) &&
+      winWords.test(v)
+    ) {
+      return {
+        type: "1x2",
+        side: "1",
+      };
+    }
+
+    if (
+      away &&
+      v.includes(away) &&
+      winWords.test(v)
+    ) {
+      return {
+        type: "1x2",
+        side: "2",
+      };
+    }
+  }
+
+  return null;
+}
+
+function parseStatFromText(
+  text
+) {
+  const v =
+    normalize(text);
+
+  if (!v) {
+    return null;
+  }
+
+  const threshold =
+    firstThreshold(v);
+
+  if (
+    threshold === null
+  ) {
+    return null;
+  }
+
+  const over =
+    inferOverUnder(
+      v,
+      true
+    );
+
+  if (
+    /\b(corner|corners|cornere)\b/.test(v)
+  ) {
+    return {
+      type: "corners",
+      over,
+      val: threshold,
+    };
+  }
+
+  if (
+    /\b(card|cards|cartonas|cartonase)\b/.test(v)
+  ) {
+    return {
+      type: "cards",
+      over,
+      val: threshold,
+    };
+  }
+
+  return null;
+}
+
+/* =========================================================
+ * STRUCTURAL BET PARSER
  * ========================================================= */
 
 function parseStructuralBet(
-  $row
+  $row,
+  betText,
+  teams
 ) {
   const rawMarket =
     String(
@@ -442,6 +629,84 @@ function parseStructuralBet(
       type: "1x2",
       side: "2",
     };
+  }
+
+  /*
+   * Current generic market=1x2.
+   */
+  if (
+    market === "1X2"
+  ) {
+    const attrChoice =
+      normalize(
+        $row.attr(
+          "data-selection"
+        ) ||
+
+        $row.attr(
+          "data-pick"
+        ) ||
+
+        $row.attr(
+          "data-outcome"
+        ) ||
+
+        $row.attr(
+          "data-value"
+        ) ||
+
+        side
+      );
+
+    if (
+      [
+        "1",
+        "home",
+        "gazde",
+      ].includes(
+        attrChoice
+      )
+    ) {
+      return {
+        type: "1x2",
+        side: "1",
+      };
+    }
+
+    if (
+      [
+        "x",
+        "draw",
+        "egal",
+      ].includes(
+        attrChoice
+      )
+    ) {
+      return {
+        type: "1x2",
+        side: "x",
+      };
+    }
+
+    if (
+      [
+        "2",
+        "away",
+        "oaspeti",
+      ].includes(
+        attrChoice
+      )
+    ) {
+      return {
+        type: "1x2",
+        side: "2",
+      };
+    }
+
+    return parse1x2FromText(
+      betText,
+      teams
+    );
   }
 
   if (
@@ -524,9 +789,10 @@ function parseStructuralBet(
     return {
       type: "goals",
       over: true,
-      val: Number(
-        m[1]
-      ),
+      val:
+        Number(
+          m[1]
+        ),
     };
   }
 
@@ -539,9 +805,10 @@ function parseStructuralBet(
     return {
       type: "goals",
       over: false,
-      val: Number(
-        m[1]
-      ),
+      val:
+        Number(
+          m[1]
+        ),
     };
   }
 
@@ -580,107 +847,117 @@ function parseStructuralBet(
   }
 
   /*
-   * Current generated market.
+   * Current GOALS_OU structure.
    */
   if (
     market ===
       "GOALS_OU" &&
     threshold !== null
   ) {
-    const over =
-      !side.includes(
-        "under"
-      ) &&
-      !side.includes(
-        "sub"
-      ) &&
-      side !== "u";
-
     return {
       type: "goals",
-      over,
-      val: threshold,
+
+      over:
+        inferOverUnder(
+          `${side} ${betText}`,
+          true
+        ),
+
+      val:
+        threshold,
     };
   }
 
   /*
-   * Structured stats.
+   * Structured corners.
    */
   if (
-    market === "STAT" ||
-    stat ||
-    market.includes(
-      "CORNER"
+    stat.includes(
+      "corner"
     ) ||
     market.includes(
-      "CARD"
+      "CORNER"
     )
   ) {
-    const statText =
-      `${stat} ${normalize(rawMarket)}`;
+    const val =
+      threshold ??
+      firstThreshold(
+        betText
+      );
 
     if (
-      (
-        statText.includes(
-          "corner"
-        ) ||
-        statText.includes(
-          "cornere"
-        )
-      ) &&
-      threshold !== null
+      val !== null
     ) {
       return {
         type:
           "corners",
 
         over:
-          !(
-            side.includes(
-              "under"
-            ) ||
-            side.includes(
-              "sub"
-            ) ||
-            side === "u"
+          inferOverUnder(
+            `${side} ${stat} ${rawMarket} ${betText}`,
+            true
           ),
 
-        val:
-          threshold,
-      };
-    }
-
-    if (
-      (
-        statText.includes(
-          "card"
-        ) ||
-        statText.includes(
-          "cartonas"
-        )
-      ) &&
-      threshold !== null
-    ) {
-      return {
-        type: "cards",
-
-        over:
-          !(
-            side.includes(
-              "under"
-            ) ||
-            side.includes(
-              "sub"
-            ) ||
-            side === "u"
-          ),
-
-        val:
-          threshold,
+        val,
       };
     }
   }
 
+  /*
+   * Structured cards.
+   */
+  if (
+    stat.includes(
+      "card"
+    ) ||
+    stat.includes(
+      "cartonas"
+    ) ||
+    market.includes(
+      "CARD"
+    ) ||
+    market.includes(
+      "CARTON"
+    )
+  ) {
+    const val =
+      threshold ??
+      firstThreshold(
+        betText
+      );
+
+    if (
+      val !== null
+    ) {
+      return {
+        type:
+          "cards",
+
+        over:
+          inferOverUnder(
+            `${side} ${stat} ${rawMarket} ${betText}`,
+            true
+          ),
+
+        val,
+      };
+    }
+  }
+
+  /*
+   * Generic STAT fallback.
+   */
+  if (
+    market === "STAT"
+  ) {
+    return parseStatFromText(
+      betText
+    );
+  }
+
+  /*
+   * Team goals.
+   */
   if (
     threshold !== null &&
     (
@@ -707,6 +984,7 @@ function parseStructuralBet(
             "2",
           ].includes(side)
           ? "away"
+
           : null;
 
     if (teamSide) {
@@ -718,16 +996,9 @@ function parseStructuralBet(
           teamSide,
 
         over:
-          !(
-            market.includes(
-              "UNDER"
-            ) ||
-            stat.includes(
-              "under"
-            ) ||
-            stat.includes(
-              "sub"
-            )
+          inferOverUnder(
+            `${rawMarket} ${stat} ${betText}`,
+            true
           ),
 
         val:
@@ -752,51 +1023,6 @@ function parseBetText(
 
   if (!v) {
     return null;
-  }
-
-  if (
-    v === "1" ||
-    v.includes(
-      "home win"
-    ) ||
-    v.includes(
-      "victorie gazde"
-    )
-  ) {
-    return {
-      type: "1x2",
-      side: "1",
-    };
-  }
-
-  if (
-    v === "2" ||
-    v.includes(
-      "away win"
-    ) ||
-    v.includes(
-      "victorie oaspeti"
-    )
-  ) {
-    return {
-      type: "1x2",
-      side: "2",
-    };
-  }
-
-  if (
-    v === "x" ||
-    v.includes(
-      "draw"
-    ) ||
-    v.includes(
-      "egal"
-    )
-  ) {
-    return {
-      type: "1x2",
-      side: "x",
-    };
   }
 
   if (
@@ -855,7 +1081,7 @@ function parseBetText(
       "both teams"
     ) ||
     v.includes(
-      "ambele"
+      "ambele echipe"
     ) ||
     v.includes(
       "btts"
@@ -873,173 +1099,113 @@ function parseBetText(
     };
   }
 
-  let m =
-    v.match(
-      /\b(over|peste|minim|at least)\s*(\d+(?:[.,]\d+)?)/
+  const statBet =
+    parseStatFromText(
+      v
     );
 
-  if (m) {
-    const val =
-      Number(
-        m[2].replace(
-          ",",
-          "."
-        )
-      );
-
-    if (
-      /corner|cornere/.test(
-        v
-      )
-    ) {
-      return {
-        type:
-          "corners",
-
-        over:
-          true,
-
-        val,
-      };
-    }
-
-    if (
-      /card|cartonas/.test(
-        v
-      )
-    ) {
-      return {
-        type:
-          "cards",
-
-        over:
-          true,
-
-        val,
-      };
-    }
-
-    return {
-      type:
-        "goals",
-
-      over:
-        true,
-
-      val,
-    };
+  if (
+    statBet
+  ) {
+    return statBet;
   }
 
-  m =
-    v.match(
-      /\b(under|sub)\s*(\d+(?:[.,]\d+)?)/
+  const oneXTwo =
+    parse1x2FromText(
+      v,
+      teams
     );
 
-  if (m) {
-    const val =
-      Number(
-        m[2].replace(
-          ",",
-          "."
-        )
-      );
-
-    if (
-      /corner|cornere/.test(
-        v
-      )
-    ) {
-      return {
-        type:
-          "corners",
-
-        over:
-          false,
-
-        val,
-      };
-    }
-
-    if (
-      /card|cartonas/.test(
-        v
-      )
-    ) {
-      return {
-        type:
-          "cards",
-
-        over:
-          false,
-
-        val,
-      };
-    }
-
-    return {
-      type:
-        "goals",
-
-      over:
-        false,
-
-      val,
-    };
+  if (
+    oneXTwo
+  ) {
+    return oneXTwo;
   }
 
-  if (teams) {
-    const home =
-      normalize(
-        teams.home
-      );
+  const threshold =
+    firstThreshold(
+      v
+    );
 
-    const away =
-      normalize(
-        teams.away
-      );
-
-    const teamSide =
-      home &&
-      v.includes(home)
-        ? "home"
-
-        : away &&
-          v.includes(away)
-          ? "away"
-          : null;
-
-    if (teamSide) {
-      m =
-        v.match(
-          /\b(over|peste|under|sub)\s*(\d+(?:[.,]\d+)?)/
+  if (
+    threshold !== null &&
+    /\b(goal|goals|gol|goluri|over|under|peste|sub)\b/.test(
+      v
+    )
+  ) {
+    if (teams) {
+      const home =
+        normalize(
+          teams.home
         );
 
-      if (m) {
+      const away =
+        normalize(
+          teams.away
+        );
+
+      if (
+        home &&
+        v.includes(
+          home
+        )
+      ) {
         return {
           type:
             "team_goals",
 
           side:
-            teamSide,
+            "home",
 
           over:
-            [
-              "over",
-              "peste",
-            ].includes(
-              m[1]
+            inferOverUnder(
+              v,
+              true
             ),
 
           val:
-            Number(
-              m[2].replace(
-                ",",
-                "."
-              )
+            threshold,
+        };
+      }
+
+      if (
+        away &&
+        v.includes(
+          away
+        )
+      ) {
+        return {
+          type:
+            "team_goals",
+
+          side:
+            "away",
+
+          over:
+            inferOverUnder(
+              v,
+              true
             ),
+
+          val:
+            threshold,
         };
       }
     }
+
+    return {
+      type:
+        "goals",
+
+      over:
+        inferOverUnder(
+          v,
+          true
+        ),
+
+      val:
+        threshold,
+    };
   }
 
   return null;
@@ -1055,9 +1221,10 @@ async function fetchHtmlDetailed(
   const {
     controller,
     done,
-  } = abortAfter(
-    FS_TIMEOUT_MS
-  );
+  } =
+    abortAfter(
+      FS_TIMEOUT_MS
+    );
 
   try {
     const res =
@@ -1078,7 +1245,9 @@ async function fetchHtmlDetailed(
     const html =
       await res.text();
 
-    if (!res.ok) {
+    if (
+      !res.ok
+    ) {
       throw new Error(
         `HTTP ${res.status}`
       );
@@ -1128,7 +1297,9 @@ function looksLikeMatchPage(
   matchId
 ) {
   const text =
-    pageText(html);
+    pageText(
+      html
+    );
 
   if (
     !text ||
@@ -1137,144 +1308,124 @@ function looksLikeMatchPage(
     return false;
   }
 
-  const bad =
+  if (
     /access denied|captcha|cloudflare|checking your browser|enable javascript|robot|forbidden/i.test(
       text
-    );
-
-  if (bad) {
+    )
+  ) {
     return false;
   }
 
   return (
-    /finished|scheduled|live|half|odds|summary|standings|h2h|1st half|2nd half|football/i.test(
+    /finished|scheduled|live|half|odds|summary|standings|h2h|football/i.test(
       text
     ) ||
-    String(html).includes(
+
+    String(
+      html
+    ).includes(
       matchId
     )
   );
 }
 
 /* =========================================================
- * SCORE PARSER
+ * FINISHED SCORE PARSER
  * ========================================================= */
 
 function extractFinishedScore(
   html
 ) {
   const text =
-    pageText(html);
-
-  if (!text) {
-    return null;
-  }
-
-  const finished =
-    /\bFinished\b|\bFull Time\b|\bFinal\b|\bFT\b|After Penalties|After Extra Time|\bAET\b/i.test(
-      text
-    );
-
-  if (!finished) {
-    return null;
-  }
-
-  /*
-   * Actual Flashscore mobile format:
-   *
-   * 4-2 (3-0,1-2) Finished
-   */
-  let m =
-    text.match(
-      /(\d{1,2})\s*[-:]\s*(\d{1,2})(?:\s*\([^)]*\))?\s*(?:Finished|Full Time|Final|FT|AET)/i
-    );
-
-  if (m) {
-    return {
-      h:
-        Number(
-          m[1]
-        ),
-
-      a:
-        Number(
-          m[2]
-        ),
-    };
-  }
-
-  /*
-   * Status before score.
-   */
-  m =
-    text.match(
-      /(?:Finished|Full Time|Final|FT|AET)[^0-9]{0,120}(\d{1,2})\s*[-:]\s*(\d{1,2})/i
-    );
-
-  if (m) {
-    return {
-      h:
-        Number(
-          m[1]
-        ),
-
-      a:
-        Number(
-          m[2]
-        ),
-    };
-  }
-
-  /*
-   * Strong signature:
-   *
-   * SCORE (HT,2H)
-   */
-  m =
-    text.match(
-      /(?:^|\s)(\d{1,2})\s*[-:]\s*(\d{1,2})\s*\(\s*\d{1,2}\s*[-:]\s*\d{1,2}\s*[,;]\s*\d{1,2}\s*[-:]\s*\d{1,2}\s*\)/
-    );
-
-  if (m) {
-    return {
-      h:
-        Number(
-          m[1]
-        ),
-
-      a:
-        Number(
-          m[2]
-        ),
-    };
-  }
-
-  /*
-   * Last fallback:
-   * inspect only the area around "Finished".
-   */
-  const index =
-    text.search(
-      /Finished|Full Time|Final|\bFT\b|AET/i
+    pageText(
+      html
     );
 
   if (
-    index >= 0
+    !text
   ) {
-    const around =
+    return null;
+  }
+
+  /*
+   * KEY FIX
+   *
+   * Flashscore mobile currently returns examples such as:
+   *
+   * 4-2 (3-0,1-2)Finished12.08.2026
+   * 3-1 (3-0,0-1)Finished12.08.2026
+   *
+   * "Finished" is glued directly to the date.
+   */
+
+  let m =
+    text.match(
+      /(\d{1,2})\s*[-:]\s*(\d{1,2})(?:\s*\([^)]*\))?\s*(?:Finished|Full Time|Final|FT|AET)(?=\d|\s|$)/i
+    );
+
+  if (m) {
+    return {
+      h:
+        Number(
+          m[1]
+        ),
+
+      a:
+        Number(
+          m[2]
+        ),
+    };
+  }
+
+  /*
+   * Status before score fallback.
+   */
+
+  m =
+    text.match(
+      /(?:Finished|Full Time|Final|FT|AET)(?=\d|\s|$)[^0-9]{0,120}(\d{1,2})\s*[-:]\s*(\d{1,2})/i
+    );
+
+  if (m) {
+    return {
+      h:
+        Number(
+          m[1]
+        ),
+
+      a:
+        Number(
+          m[2]
+        ),
+    };
+  }
+
+  /*
+   * Search score immediately before Finished.
+   */
+
+  const statusIndex =
+    text.search(
+      /(?:Finished|Full Time|Final|FT|AET)(?=\d|\s|$)/i
+    );
+
+  if (
+    statusIndex >= 0
+  ) {
+    const before =
       text.slice(
         Math.max(
           0,
-          index - 180
+          statusIndex - 120
         ),
 
-        index + 180
+        statusIndex
       );
 
     const scores =
       [
-        ...around.matchAll(
-          /(?:^|\s)(\d{1,2})\s*[-:]\s*(\d{1,2})(?=\s|$|\()/g
+        ...before.matchAll(
+          /(\d{1,2})\s*[-:]\s*(\d{1,2})(?:\s*\([^)]*\))?/g
         ),
       ];
 
@@ -1312,7 +1463,7 @@ function extractFinishedScore(
 }
 
 /* =========================================================
- * STATISTICS PARSER
+ * STATISTICS
  * ========================================================= */
 
 function parseNumeric(
@@ -1358,8 +1509,9 @@ function parseFinalStats(
   let acards = null;
 
   /*
-   * Table layout.
+   * Table format.
    */
+
   $("tr").each(
     (
       _,
@@ -1467,12 +1619,13 @@ function parseFinalStats(
   );
 
   /*
-   * Linear mobile layout:
-   *
-   * 5 Corner Kicks 3
+   * Linear mobile layout.
    */
+
   const text =
-    pageText(html);
+    pageText(
+      html
+    );
 
   const patterns = [
     {
@@ -1613,6 +1766,7 @@ function parseFinalStats(
           (
             red || 0
           )
+
         : null;
 
   return {
@@ -1624,13 +1778,14 @@ function parseFinalStats(
 }
 
 /* =========================================================
- * URL FALLBACKS
+ * FLASHSCORE URLS
  * ========================================================= */
 
 function scoreUrls(
   matchId
 ) {
-  const urls = [];
+  const urls =
+    [];
 
   for (
     const host
@@ -1646,10 +1801,6 @@ function scoreUrls(
     urls.push(
       `${base}?s=1`
     );
-
-    urls.push(
-      `${base}?d=-1`
-    );
   }
 
   return [
@@ -1660,9 +1811,40 @@ function scoreUrls(
 }
 
 function statsUrls(
-  matchId
+  matchId,
+  successfulHostUrl = null
 ) {
-  const urls = [];
+  const urls =
+    [];
+
+  /*
+   * First try same host which
+   * successfully returned the score.
+   */
+
+  if (
+    successfulHostUrl
+  ) {
+    try {
+      const u =
+        new URL(
+          successfulHostUrl
+        );
+
+      const base =
+        `${u.origin}/match/${matchId}/`;
+
+      urls.push(
+        `${base}?s=2`
+      );
+
+      urls.push(
+        `${base}?t=stats`
+      );
+    } catch {
+      // ignore
+    }
+  }
 
   for (
     const host
@@ -1688,7 +1870,7 @@ function statsUrls(
 }
 
 /* =========================================================
- * FLASHSCORE FETCHER
+ * FLASHSCORE FETCH
  * ========================================================= */
 
 async function fetchFlashscore(
@@ -1733,10 +1915,15 @@ async function fetchFlashscore(
 
       console.log(
         `[FS] ${matchId}: GET ${url}` +
+
         ` -> ${status}` +
+
         ` | final=${finalUrl}` +
+
         ` | bytes=${html.length}` +
+
         ` | match_page=${valid}` +
+
         ` | finished=${Boolean(ft)}`
       );
 
@@ -1747,7 +1934,6 @@ async function fetchFlashscore(
             .text.length
       ) {
         bestDiagnostic = {
-          url,
           finalUrl,
           text,
         };
@@ -1774,7 +1960,8 @@ async function fetchFlashscore(
       for (
         const statsUrl
         of statsUrls(
-          matchId
+          matchId,
+          finalUrl
         )
       ) {
         try {
@@ -1853,12 +2040,14 @@ async function fetchFlashscore(
   ) {
     console.warn(
       `[FS] ${matchId}: no finished score detected.` +
+
       ` Best response: ${bestDiagnostic.finalUrl}` +
+
       ` | text="${truncate(bestDiagnostic.text, 320)}"`
     );
   } else {
     console.warn(
-      `[FS] ${matchId}: no usable Flashscore response received from any fallback host.`
+      `[FS] ${matchId}: no usable Flashscore response received.`
     );
   }
 
@@ -2014,7 +2203,7 @@ function evalBet(
 }
 
 /* =========================================================
- * EMPTY RESULT
+ * RESULT HELPERS
  * ========================================================= */
 
 function emptyResult(
@@ -2042,7 +2231,8 @@ function emptyResult(
  * ========================================================= */
 
 async function processPost(
-  postSummary
+  postSummary,
+  globalMatchCache
 ) {
   const postId =
     postSummary.id;
@@ -2070,7 +2260,9 @@ async function processPost(
     post?.content?.rendered ||
     "";
 
-  if (!content) {
+  if (
+    !content
+  ) {
     return emptyResult(
       postId,
       "empty"
@@ -2118,13 +2310,6 @@ async function processPost(
 
   let checked = 0;
   let changed = false;
-
-  /*
-   * Avoid requesting same match twice
-   * inside same post.
-   */
-  const matchCache =
-    new Map();
 
   for (
     const row
@@ -2180,37 +2365,24 @@ async function processPost(
       continue;
     }
 
-    let bet =
-      parseStructuralBet(
+    const teams =
+      extractTeams(
         $row
       );
 
+    const betText =
+      getBetText(
+        $row
+      );
+
+    let bet =
+      parseStructuralBet(
+        $row,
+        betText,
+        teams
+      );
+
     if (!bet) {
-      const teams =
-        extractTeams(
-          $row
-        );
-
-      const betCell =
-        cells.length >= 4
-          ? cells.eq(3)
-
-          : cells.eq(
-              Math.max(
-                0,
-                cells.length - 2
-              )
-            );
-
-      const betText =
-        betCell
-          .find(
-            "strong"
-          )
-          .first()
-          .text() ||
-        betCell.text();
-
       bet =
         parseBetText(
           betText,
@@ -2223,11 +2395,18 @@ async function processPost(
 
       console.warn(
         `[POST ${postId}] Unsupported bet` +
+
         ` | match=${matchId}` +
+
         ` | market=${$row.attr("data-market") || "-"}` +
+
         ` | stat=${$row.attr("data-stat") || "-"}` +
+
         ` | side=${$row.attr("data-side") || "-"}` +
-        ` | threshold=${$row.attr("data-threshold") || "-"}`
+
+        ` | threshold=${$row.attr("data-threshold") || "-"}` +
+
+        ` | bet="${truncate(betText, 160)}"`
       );
 
       continue;
@@ -2238,28 +2417,36 @@ async function processPost(
 
     console.log(
       `[POST ${postId}] Checking ${matchId}` +
+
       ` | market=${$row.attr("data-market") || "-"}` +
+
+      ` | bet="${truncate(betText, 120)}"` +
+
       ` | parsed=${JSON.stringify(bet)}`
     );
 
     let data;
 
     if (
-      matchCache.has(
+      globalMatchCache.has(
         matchId
       )
     ) {
       data =
-        matchCache.get(
+        globalMatchCache.get(
           matchId
         );
+
+      console.log(
+        `[FS] ${matchId}: using cached result`
+      );
     } else {
       data =
         await fetchFlashscore(
           matchId
         );
 
-      matchCache.set(
+      globalMatchCache.set(
         matchId,
         data
       );
@@ -2335,13 +2522,21 @@ async function processPost(
 
   console.log(
     `[POST ${postId}]` +
+
     ` rows=${rows.length}` +
+
     ` pending=${pendingRows}` +
+
     ` parsed=${parsedRows}` +
+
     ` finished=${finishedRows}` +
+
     ` evaluated=${evaluated}` +
+
     ` no_id=${noMatchId}` +
+
     ` unsupported=${unsupported}` +
+
     ` stats_unavailable=${statsUnavailable}`
   );
 
@@ -2361,9 +2556,12 @@ async function processPost(
     statsUnavailable,
   };
 
-  if (!changed) {
+  if (
+    !changed
+  ) {
     return {
       ...resultBase,
+
       status:
         "no_changes",
     };
@@ -2390,6 +2588,7 @@ async function processPost(
 
     return {
       ...resultBase,
+
       status:
         "updated",
     };
@@ -2400,6 +2599,7 @@ async function processPost(
 
     return {
       ...resultBase,
+
       status:
         "update_failed",
     };
@@ -2435,7 +2635,12 @@ async function main() {
 
   const postsUrl =
     `${WP_BASE}/wp-json/wp/v2/posts` +
-    `?per_page=${Math.min(RECHECK_LAST_N, 100)}` +
+
+    `?per_page=${Math.min(
+      RECHECK_LAST_N,
+      100
+    )}` +
+
     `&orderby=date&order=desc`;
 
   let posts;
@@ -2482,6 +2687,16 @@ async function main() {
   const results =
     [];
 
+  /*
+   * Cache across ALL posts.
+   *
+   * Same match often appears in multiple
+   * article versions / ticket posts.
+   */
+
+  const globalMatchCache =
+    new Map();
+
   for (
     const post
     of posts
@@ -2489,7 +2704,8 @@ async function main() {
     try {
       results.push(
         await processPost(
-          post
+          post,
+          globalMatchCache
         )
       );
     } catch (e) {
@@ -2713,6 +2929,7 @@ main()
       );
     }
   )
+
   .catch(
     (
       error
