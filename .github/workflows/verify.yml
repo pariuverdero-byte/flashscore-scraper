@@ -1,6 +1,10 @@
 name: Verify tickets & update WP
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/verify.yml"
   workflow_dispatch:
     inputs:
       recheck:
@@ -15,12 +19,87 @@ on:
     - cron: "0 0-2 * * *"
     - cron: "0 5 * * *"
 
+permissions:
+  contents: write
+
 jobs:
   verify:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply complete verifier repair
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('verify_and_update_wp.js')
+          s = p.read_text(encoding='utf-8')
+
+          old = '''    const home =\n      normalize(\n        teams.home\n      );\n\n    const away =\n      normalize(\n        teams.away\n      );'''
+          new = '''    const cleanTeamName = (name) =>\n      normalize(name)\n        .replace(/\\s*\\([^)]{2,12}\\)\\s*$/g, "")\n        .trim();\n\n    const home =\n      cleanTeamName(\n        teams.home\n      );\n\n    const away =\n      cleanTeamName(\n        teams.away\n      );'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('Named-team 1X2 patch target not found')
+
+          marker = '''  if (\n    /(^|\\s)1x(\\s|$)/.test(\n      v\n    )\n  ) {'''
+          insert = '''  let specialMatch =\n    v.match(\n      /(?:scor corect.*(?:prima repriza|prima jumatate)|(?:prima repriza|prima jumatate).*scor corect).*?(\\d{1,2})\\s*[-:]\\s*(\\d{1,2})/i\n    ) ||\n    v.match(\n      /(?:correct score.*(?:first half|1st half)|(?:first half|1st half).*correct score).*?(\\d{1,2})\\s*[-:]\\s*(\\d{1,2})/i\n    );\n\n  if (specialMatch) {\n    return {\n      type: "half_correct_score",\n      half: 1,\n      h: Number(specialMatch[1]),\n      a: Number(specialMatch[2]),\n    };\n  }\n\n  if (\n    /\\b(gol marcat in ambele reprize|gol in ambele reprize|goal scored in both halves|goal in both halves)\\b/.test(v)\n  ) {\n    return {\n      type: "goal_both_halves",\n    };\n  }\n\n  specialMatch =\n    v.match(\n      /(?:minim|minimum|at least)\\s*(\\d+(?:[.,]\\d+)?)\\s*(?:gol|goluri|goal|goals).*?(?:repriza secunda|a doua repriza|second half|2nd half)/i\n    ) ||\n    v.match(\n      /(?:repriza secunda|a doua repriza|second half|2nd half).*?(?:minim|minimum|at least)\\s*(\\d+(?:[.,]\\d+)?)\\s*(?:gol|goluri|goal|goals)/i\n    );\n\n  if (specialMatch) {\n    return {\n      type: "half_goals_min",\n      half: 2,\n      min: Number(String(specialMatch[1]).replace(",", ".")),\n    };\n  }\n\n'''
+          if insert not in s:
+              if marker not in s:
+                  raise SystemExit('Special bet parser insertion target not found')
+              s = s.replace(marker, insert + marker, 1)
+
+          old_score = '''  let m =\n    text.match(\n      /(\\d{1,2})\\s*[-:]\\s*(\\d{1,2})(?:\\s*\\([^)]*\\))?\\s*(?:Finished|Full Time|Final\\b|AET\\b|FT\\b)/i\n    );\n\n  if (m) {\n    return {\n      h:\n        Number(\n          m[1]\n        ),\n\n      a:\n        Number(\n          m[2]\n        ),\n    };\n  }'''
+          new_score = '''  let m =\n    text.match(\n      /(\\d{1,2})\\s*[-:]\\s*(\\d{1,2})(?:\\s*\\(([^)]*)\\))?\\s*(?:Finished|Full Time|After Extra Time|Final\\b|AET\\b|FT\\b)/i\n    );\n\n  if (m) {\n    const periods = String(m[3] || "")\n      .split(",")\n      .map((part) => part.trim())\n      .map((part) => {\n        const pm = part.match(/^(\\d{1,2})\\s*[-:]\\s*(\\d{1,2})$/);\n        return pm ? { h: Number(pm[1]), a: Number(pm[2]) } : null;\n      })\n      .filter(Boolean);\n\n    return {\n      h:\n        Number(\n          m[1]\n        ),\n\n      a:\n        Number(\n          m[2]\n        ),\n\n      periods,\n    };\n  }'''
+          if old_score in s:
+              s = s.replace(old_score, new_score, 1)
+          elif new_score not in s:
+              raise SystemExit('Finished score primary parser target not found')
+
+          s = s.replace(
+              '(?:Finished|Full Time|Final\\b|AET\\b|FT\\b)[^0-9]{0,120}',
+              '(?:Finished|Full Time|After Extra Time|Final\\b|AET\\b|FT\\b)[^0-9]{0,120}',
+              1,
+          )
+          s = s.replace(
+              '/(?:Finished|Full Time|Final\\b|AET\\b|FT\\b)/i',
+              '/(?:Finished|Full Time|After Extra Time|Final\\b|AET\\b|FT\\b)/i',
+              1,
+          )
+
+          eval_marker = '''  if (\n    bet.type ===\n    "1x2"\n  ) {'''
+          eval_insert = '''  if (\n    bet.type ===\n    "half_correct_score"\n  ) {\n    const period =\n      data.ft.periods?.[\n        Math.max(0, Number(bet.half || 1) - 1)\n      ];\n\n    if (!period) {\n      return null;\n    }\n\n    return (\n      period.h === bet.h &&\n      period.a === bet.a\n    )\n      ? WIN\n      : LOSS;\n  }\n\n  if (\n    bet.type ===\n    "goal_both_halves"\n  ) {\n    const first = data.ft.periods?.[0];\n    const second = data.ft.periods?.[1];\n\n    if (!first || !second) {\n      return null;\n    }\n\n    return (\n      first.h + first.a > 0 &&\n      second.h + second.a > 0\n    )\n      ? WIN\n      : LOSS;\n  }\n\n  if (\n    bet.type ===\n    "half_goals_min"\n  ) {\n    const period =\n      data.ft.periods?.[\n        Math.max(0, Number(bet.half || 1) - 1)\n      ];\n\n    if (!period) {\n      return null;\n    }\n\n    return (period.h + period.a) >= bet.min\n      ? WIN\n      : LOSS;\n  }\n\n'''
+          if eval_insert not in s:
+              if eval_marker not in s:
+                  raise SystemExit('Special evaluator insertion target not found')
+              s = s.replace(eval_marker, eval_insert + eval_marker, 1)
+
+          p.write_text(s, encoding='utf-8')
+          PY
+
+          node --check verify_and_update_wp.js
+          git diff -- verify_and_update_wp.js
+
+      - name: Commit verifier repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add verify_and_update_wp.js
+          if git diff --cached --quiet; then
+            echo "Verifier already contains all fixes."
+          else
+            git commit -m "Complete verifier support for named and half-specific bets"
+            git push origin main
+          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -38,34 +117,26 @@ jobs:
         run: |
           npm install cheerio@^1.0.0-rc.12 node-fetch@^3 --no-fund --no-audit --prefer-offline
 
-      # -------------------------------
-      # VERIFY – PARIUVERDE.RO (RO)
-      # -------------------------------
       - name: Verify tickets (pariuverde.ro)
-        if: success()
         env:
           LANG: "ro"
           WP_BASE: https://pariuverde.ro
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
-          HOMEPAGE_ID: "11"
-          MAX_POSTS_PER_CAT: "8"
-          RECHECK_ONCE: ${{ inputs.recheck && '1' || '0' }}
-          RECHECK_LAST_N: ${{ inputs.recheck_last_n }}
+          RECHECK_ONCE: "1"
+          RECHECK_LAST_N: "30"
+          MAX_ROWS_PER_POST: "10"
+          VERIFY_NON_BLOCKING: "false"
         run: node verify_and_update_wp.js
 
-      # -------------------------------
-      # VERIFY – GREENBETTIPS.COM (EN)
-      # -------------------------------
       - name: Verify tickets (greenbettips.com)
-        if: success()
         env:
           LANG: "en"
           WP_BASE: https://greenbettips.com
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
-          HOMEPAGE_ID: "2"
-          MAX_POSTS_PER_CAT: "8"
-          RECHECK_ONCE: ${{ inputs.recheck && '1' || '0' }}
-          RECHECK_LAST_N: ${{ inputs.recheck_last_n }}
+          RECHECK_ONCE: "1"
+          RECHECK_LAST_N: "30"
+          MAX_ROWS_PER_POST: "10"
+          VERIFY_NON_BLOCKING: "true"
         run: node verify_and_update_wp.js
