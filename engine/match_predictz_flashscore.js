@@ -1,7 +1,10 @@
 // engine/match_predictz_flashscore.js
 
 import fs from "fs";
-import { matchEventToFlashscore } from "./matcher_core.js";
+import {
+  matchEventToFlashscore,
+  eventDateGuard
+} from "./matcher_core.js";
 
 function safeReadJson(path, fallback) {
   try {
@@ -45,7 +48,28 @@ for (const pick of pzSelections) {
     continue;
   }
 
-  const res = matchEventToFlashscore(pick.teams, matches);
+  const dateGuard =
+    eventDateGuard(pick);
+
+  if (!dateGuard.ok) {
+    dropped.push({
+      ...pick,
+      drop_reason:
+        "date_mismatch",
+      source_date:
+        dateGuard.sourceDate,
+      target_date:
+        dateGuard.targetDate,
+    });
+
+    continue;
+  }
+
+  const res =
+    matchEventToFlashscore(
+      pick,
+      matches
+    );
 
   if (res) {
     matched.push({

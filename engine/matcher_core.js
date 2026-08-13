@@ -53,6 +53,9 @@ const CONFIG = {
 
   // Time tolerance when time is supplied by source.
   TIME_TOLERANCE_MINUTES: 45,
+
+  // Reject source events that explicitly belong to another date.
+  DATE_GUARD_ENABLED: true,
 };
 
 // ============================================================
@@ -788,6 +791,269 @@ function timeSimilarity(
 }
 
 // ============================================================
+// DATE GUARD
+// ============================================================
+//
+// If a source gives us an explicit date/kickoff date, do not even
+// attempt fuzzy matching against Flashscore fixtures from another day.
+//
+// Examples:
+//   TalkFootball kickoff: "08/14 17:00"
+//   DAY_OFFSET=-1 on 2026-08-14 -> target date 2026-08-13
+//
+// Result:
+//   date_mismatch -> reject BEFORE team matching.
+
+function bucharestDateFromOffset(offset = 0) {
+  const date =
+    new Date(
+      Date.now() +
+      Number(offset || 0) * 86400000
+    );
+
+  const parts =
+    new Intl.DateTimeFormat(
+      "en-CA",
+      {
+        timeZone:
+          "Europe/Bucharest",
+        year:
+          "numeric",
+        month:
+          "2-digit",
+        day:
+          "2-digit",
+      }
+    ).formatToParts(date);
+
+  const get =
+    type =>
+      parts.find(
+        part =>
+          part.type === type
+      )?.value || "";
+
+  return (
+    `${get("year")}-` +
+    `${get("month")}-` +
+    `${get("day")}`
+  );
+}
+
+function normalizeIsoDate(
+  year,
+  month,
+  day
+) {
+  const y =
+    Number(year);
+
+  const m =
+    Number(month);
+
+  const d =
+    Number(day);
+
+  if (
+    !Number.isInteger(y) ||
+    !Number.isInteger(m) ||
+    !Number.isInteger(d) ||
+    y < 2000 ||
+    y > 2100 ||
+    m < 1 ||
+    m > 12 ||
+    d < 1 ||
+    d > 31
+  ) {
+    return null;
+  }
+
+  return (
+    `${String(y).padStart(4, "0")}-` +
+    `${String(m).padStart(2, "0")}-` +
+    `${String(d).padStart(2, "0")}`
+  );
+}
+
+function parseSourceDate(
+  value,
+  targetDate = ""
+) {
+  const text =
+    safe(value);
+
+  if (!text) {
+    return null;
+  }
+
+  let match;
+
+  // YYYY-MM-DD
+  match =
+    text.match(
+      /\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/
+    );
+
+  if (match) {
+    return normalizeIsoDate(
+      match[1],
+      match[2],
+      match[3]
+    );
+  }
+
+  // DD.MM.YYYY / DD-MM-YYYY / DD/MM/YYYY
+  match =
+    text.match(
+      /\b(\d{1,2})[.\-\/](\d{1,2})[.\-\/](20\d{2})\b/
+    );
+
+  if (match) {
+    return normalizeIsoDate(
+      match[3],
+      match[2],
+      match[1]
+    );
+  }
+
+  // TalkFootball format:
+  // MM/DD HH:mm
+  //
+  // Example:
+  // 08/14 17:30
+  match =
+    text.match(
+      /\b(\d{1,2})\/(\d{1,2})\s+\d{1,2}:\d{2}\b/
+    );
+
+  if (match) {
+    const targetYear =
+      Number(
+        safe(targetDate).slice(0, 4)
+      ) ||
+      new Date().getUTCFullYear();
+
+    return normalizeIsoDate(
+      targetYear,
+      match[1],
+      match[2]
+    );
+  }
+
+  return null;
+}
+
+function sourceDateValue(
+  eventInput,
+  context = {}
+) {
+  if (
+    eventInput &&
+    typeof eventInput === "object"
+  ) {
+    return safe(
+      eventInput.date ||
+      eventInput.match_date ||
+      eventInput.matchDate ||
+      eventInput.target_date ||
+      eventInput.kickoff ||
+      eventInput.datetime ||
+      eventInput.start_time ||
+      eventInput.startTime
+    );
+  }
+
+  return safe(
+    context.date ||
+    context.match_date ||
+    context.matchDate ||
+    context.kickoff
+  );
+}
+
+function resolveTargetDate(
+  context = {}
+) {
+  const explicit =
+    safe(
+      context.targetDate ||
+      context.target_date
+    );
+
+  if (explicit) {
+    const parsed =
+      parseSourceDate(
+        explicit,
+        explicit
+      );
+
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  return bucharestDateFromOffset(
+    process.env.DAY_OFFSET || 0
+  );
+}
+
+export function eventDateGuard(
+  eventInput,
+  context = {}
+) {
+  const targetDate =
+    resolveTargetDate(
+      context
+    );
+
+  const rawSourceDate =
+    sourceDateValue(
+      eventInput,
+      context
+    );
+
+  const sourceDate =
+    parseSourceDate(
+      rawSourceDate,
+      targetDate
+    );
+
+  // Source has no usable date -> do NOT reject.
+  // Matching continues normally.
+  if (!sourceDate) {
+    return {
+      ok: true,
+      reason:
+        "source_date_unknown",
+      sourceDate:
+        null,
+      targetDate,
+    };
+  }
+
+  if (
+    CONFIG.DATE_GUARD_ENABLED &&
+    sourceDate !== targetDate
+  ) {
+    return {
+      ok: false,
+      reason:
+        "date_mismatch",
+      sourceDate,
+      targetDate,
+    };
+  }
+
+  return {
+    ok: true,
+    reason:
+      "date_match",
+    sourceDate,
+    targetDate,
+  };
+}
+
+// ============================================================
 // TEXT CONTEXT SIMILARITY
 // ============================================================
 
@@ -1393,6 +1659,16 @@ export function matchEventToFlashscore(
   matches = [],
   context = {}
 ) {
+  const dateGuard =
+    eventDateGuard(
+      eventInput,
+      context
+    );
+
+  if (!dateGuard.ok) {
+    return null;
+  }
+
   const input =
     normalizeInput(
       eventInput,

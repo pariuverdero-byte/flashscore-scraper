@@ -80,7 +80,16 @@ function buildFlashscoreUrl(match) {
 
 function matchClaudiuToFlashscore(sel, matches) {
   const arr = getMatchesArray(matches);
-  return matchEventToFlashscore(sel.teams, arr)?.match || null;
+  return (
+    matchEventToFlashscore(
+      {
+        ...sel,
+        teams: sel.teams
+      },
+      arr
+    )?.match ||
+    null
+  );
 }
 
 /* =========================
