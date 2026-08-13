@@ -2,7 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import { pathToFileURL } from "url";
 
-const corePath = path.resolve("verify_and_update_wp_core.js");
+const corePath = path.resolve("verify_and_update_wp.js");
 const runtimePath = path.resolve(".verify_and_update_wp_runtime.mjs");
 
 let source = await fs.readFile(corePath, "utf8");
