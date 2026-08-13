@@ -1,18 +1,19 @@
 name: Verify tickets & update WP
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/verify.yml"
   workflow_dispatch:
+    inputs:
+      recheck:
+        description: 'Re-check already decided rows on the newest posts?'
+        type: boolean
+        default: false
+      recheck_last_n:
+        description: 'How many newest posts to re-scan'
+        default: '15'
   schedule:
     - cron: "0 18-23 * * *"
     - cron: "0 0-2 * * *"
     - cron: "0 5 * * *"
-
-permissions:
-  contents: write
 
 jobs:
   verify:
@@ -20,78 +21,51 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Fix named-team normalization
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('verify_and_update_wp.js')
-          s = p.read_text(encoding='utf-8')
-          old = '''    const cleanTeamName = (name) =>
-      normalize(name)
-        .replace(/\\s*\\([^)]{2,12}\\)\\s*$/g, "")
-        .trim();'''
-          new = '''    const cleanTeamName = (name) =>
-      normalize(
-        String(name || "")
-          .replace(/\\s*\\([^)]{2,12}\\)\\s*$/g, "")
-      )
-        .trim();'''
-          if old not in s:
-              if new in s:
-                  print('Named-team normalization already fixed.')
-              else:
-                  raise SystemExit('Named-team normalization target not found')
-          else:
-              s = s.replace(old, new, 1)
-              p.write_text(s, encoding='utf-8')
-              print('Named-team normalization fixed.')
-          PY
-          node --check verify_and_update_wp.js
-
-      - name: Commit named-team fix
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add verify_and_update_wp.js
-          if ! git diff --cached --quiet; then
-            git commit -m "Fix named-team winner normalization"
-            git push origin main
-          fi
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install deps
-        run: npm install cheerio@^1.0.0-rc.12 node-fetch@^3 --no-fund --no-audit --prefer-offline
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-verify
+          restore-keys: |
+            ${{ runner.os }}-npm-
 
-      - name: Verify newest PariuVerde ticket
+      - name: Install deps
+        run: |
+          npm install cheerio@^1.0.0-rc.12 node-fetch@^3 --no-fund --no-audit --prefer-offline
+
+      # -------------------------------
+      # VERIFY – PARIUVERDE.RO (RO)
+      # -------------------------------
+      - name: Verify tickets (pariuverde.ro)
+        if: success()
         env:
           LANG: "ro"
           WP_BASE: https://pariuverde.ro
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
-          RECHECK_ONCE: "1"
-          RECHECK_LAST_N: "1"
-          MAX_ROWS_PER_POST: "10"
-          VERIFY_NON_BLOCKING: "false"
+          HOMEPAGE_ID: "11"
+          MAX_POSTS_PER_CAT: "8"
+          RECHECK_ONCE: ${{ inputs.recheck && '1' || '0' }}
+          RECHECK_LAST_N: ${{ inputs.recheck_last_n }}
         run: node verify_and_update_wp.js
 
-      - name: Verify newest GreenBetTips ticket
+      # -------------------------------
+      # VERIFY – GREENBETTIPS.COM (EN)
+      # -------------------------------
+      - name: Verify tickets (greenbettips.com)
+        if: success()
         env:
           LANG: "en"
           WP_BASE: https://greenbettips.com
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
-          RECHECK_ONCE: "1"
-          RECHECK_LAST_N: "1"
-          MAX_ROWS_PER_POST: "10"
-          VERIFY_NON_BLOCKING: "false"
+          HOMEPAGE_ID: "2"
+          MAX_POSTS_PER_CAT: "8"
+          RECHECK_ONCE: ${{ inputs.recheck && '1' || '0' }}
+          RECHECK_LAST_N: ${{ inputs.recheck_last_n }}
         run: node verify_and_update_wp.js
