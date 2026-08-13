@@ -24,6 +24,34 @@ const TEAM_ALIASES = {
   "psg": "paris saint germain",
   "az": "az alkmaar",
   "cfr cluj": "cfr 1907 cluj",
+
+  // Romanian / European naming variants
+  "universitatea craiova": "univ craiova",
+  "univ craiova": "univ craiova",
+
+  "kuopio palloseura": "kups",
+  "kups": "kups",
+
+  "dinamo minsk": "din minsk",
+  "din minsk": "din minsk",
+
+  "sporting braga": "braga",
+  "sc sporting braga": "braga",
+  "braga": "braga",
+
+  // Romanian / European naming variants
+  "universitatea craiova": "univ craiova",
+  "univ craiova": "univ craiova",
+
+  "kuopio palloseura": "kups",
+  "kups": "kups",
+
+  "dinamo minsk": "din minsk",
+  "din minsk": "din minsk",
+
+  "sporting braga": "braga",
+  "sc sporting braga": "braga",
+  "braga": "braga",
   "kr reykjavik": "kr",
   "ath madrid": "atletico madrid",
   "real sociedad": "real sociedad",
