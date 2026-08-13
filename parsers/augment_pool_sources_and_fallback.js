@@ -5,8 +5,6 @@
 import fs from "fs/promises";
 import * as cheerio from "cheerio";
 import { matchEventToFlashscore } from "../engine/matcher_core.js";
-import { fetchPrematchData } from "../live-betting/lib/prematch.js";
-
 const DAY_OFFSET = Number(process.env.DAY_OFFSET || 0);
 const MASTER_FILE = "master_pool.json";
 const MATCHES_FILE = "matches.json";
@@ -177,19 +175,6 @@ function splitTeams(value) {
 
 function validOdd(v, min, max) { const n = Number(v); return Number.isFinite(n) && n >= min && n <= max; }
 
-function fallbackSelections(match, data) {
-  const odds = data?.odds || {};
-  const id = safe(match.id);
-  if (!id) return [];
-  const base = { id, match_id: id, flashscore_url: safe(match.url) || `https://www.flashscore.mobi/match/${id}/`, url: safe(match.url) || `https://www.flashscore.mobi/match/${id}/`, teams: safe(match.teams), time: safe(match.time), country: safe(match.country), competition: safe(match.competition || match.league), source: "flashscore_odds_fallback", fallback_level: 3 };
-  const out = [];
-  const add = (market_raw, odd, bet_type) => out.push({ ...base, market_raw, odd: Number(Number(odd).toFixed(3)), bet_type, meta: { bet_text: market_raw, source: "flashscore_odds_fallback", fallback_level: 3, odds_origin: "flashscore_prematch" } });
-  if (validOdd(odds.home, 1.22, 1.90)) add("Victorie gazde", odds.home, "1x2");
-  if (validOdd(odds.away, 1.22, 1.90)) add("Victorie oaspeti", odds.away, "1x2");
-  if (validOdd(odds.over25, 1.30, 1.95)) add("Peste 2.5 goluri", odds.over25, "goals_ou");
-  if (validOdd(odds.under25, 1.30, 1.95)) add("Sub 2.5 goluri", odds.under25, "goals_ou");
-  return out.sort((a,b) => Math.abs(a.odd - 1.55) - Math.abs(b.odd - 1.55)).slice(0,2);
-}
 
 async function addExtraSources(master, matches, iso) {
   const raw = [], errors = [];
@@ -218,31 +203,17 @@ async function addExtraSources(master, matches, iso) {
 }
 
 async function addFallback(master, matches) {
-  const existing = master.selections || [];
-  if (existing.length >= MIN_POOL) {
-    await fs.writeFile(FALLBACK_ARTIFACT, JSON.stringify({ used: false, reason: "pool_already_sufficient", existing_pool_size: existing.length, added: 0 }, null, 2));
-    return { master, added: 0 };
-  }
-  const usable = matches.filter((m) => safe(m.id) && safe(m.teams) && safe(m.status || "sched") !== "fin").slice(0, MAX_FS_MATCHES);
-  const fallback = [], errors = [];
-  for (let i = 0; i < usable.length; i += CONCURRENCY) {
-    const batch = usable.slice(i, i + CONCURRENCY);
-    const rows = await Promise.all(batch.map(async (m) => {
-      try {
-        const { home, away } = splitTeams(m.teams);
-        if (!home || !away) return [];
-        const data = await fetchPrematchData({ id: m.id, home, away });
-        return fallbackSelections(m, data);
-      } catch (e) { errors.push(`${safe(m.teams)}: ${e.message}`); return []; }
-    }));
-    fallback.push(...rows.flat());
-    if (dedupe([...existing, ...fallback]).length >= TARGET_POOL) break;
-  }
-  const combined = dedupe([...existing, ...fallback]);
-  const existingKeys = new Set(existing.map((x) => `${safe(x.match_id)}|${norm(x.market_raw)}`));
-  const added = combined.filter((x) => !existingKeys.has(`${safe(x.match_id)}|${norm(x.market_raw)}`));
-  await fs.writeFile(FALLBACK_ARTIFACT, JSON.stringify({ used: added.length > 0, existing_pool_size: existing.length, added: added.length, final_pool_size: combined.length, selections: added, errors }, null, 2));
-  return { master: { ...master, source_mode: added.length ? `${master.source_mode || "existing"}_plus_flashscore_odds_fallback` : (master.source_mode || "existing"), sources_used: [...new Set([...(master.sources_used || []), ...(added.length ? ["flashscore_odds_fallback"] : [])])], fallback: { used: added.length > 0, level: added.length ? 3 : null, added: added.length, internal_only: true }, selections: combined }, added: added.length };
+  // Legacy per-match Flashscore prematch fallback disabled.
+  // The single official fallback now runs in:
+  // parsers/flashscore_odds_list_fallback.js
+  //
+  // Keep this function only so the augmentation flow remains
+  // backward-compatible and non-blocking.
+
+  return {
+    master,
+    added: 0
+  };
 }
 
 (async () => {

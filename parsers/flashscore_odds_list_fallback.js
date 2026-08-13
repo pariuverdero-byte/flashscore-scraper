@@ -1,43 +1,65 @@
 // parsers/flashscore_odds_list_fallback.js
-// Last-resort pool fallback using Flashscore's Odds LIST page.
-// Internal metadata only; visitor-facing output remains unchanged.
+// FINAL — Flashscore mobile Odds-list fallback
+//
+// Source:
+//   https://www.flashscore.mobi/?d=<DAY_OFFSET>&s=5
+//
+// Reads real 1X2 odds from:
+//   <span>19:00</span>
+//   Team A - Team B
+//   <a href="/match/XXXX/?s=5&d=-1">score</a>
+//   <span class="mobi-odds">[ <a>1</a> | <a>X</a> | <a>2</a> ]</span>
+//
+// Safety:
+// - selection enters pool ONLY if exact Flashscore match_id exists in matches.json
+// - fallback metadata remains internal
+// - production accepts only scheduled matches
+// - historical DAY_OFFSET < 0 can use finished matches for testing
 
 import fs from "fs/promises";
 import * as cheerio from "cheerio";
 
-const DAY_OFFSET = Number(process.env.DAY_OFFSET || 0);
+const DAY_OFFSET = Number(process.env.DAY_OFFSET || "0");
+
 const MIN_POOL = Math.max(
   4,
-  Number(process.env.FLASHSCORE_FALLBACK_MIN_POOL || 8)
+  Number(process.env.FLASHSCORE_FALLBACK_MIN_POOL || "8")
 );
+
 const TARGET_POOL = Math.max(
   MIN_POOL,
-  Number(process.env.FLASHSCORE_FALLBACK_TARGET_POOL || 12)
+  Number(process.env.FLASHSCORE_FALLBACK_TARGET_POOL || "12")
 );
 
 const BASE = "https://www.flashscore.mobi";
+
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36";
 
-const safe = v =>
-  String(v ?? "")
+function clean(value = "") {
+  return String(value ?? "")
     .replace(/\u00a0/g, " ")
+    .replace(/[–—−]/g, "-")
     .replace(/\s+/g, " ")
     .trim();
+}
 
-const norm = v =>
-  safe(v)
+function normalize(value = "") {
+  return clean(value)
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
 
 async function readJson(path, fallback) {
   try {
-    return JSON.parse(await fs.readFile(path, "utf8"));
+    return JSON.parse(
+      await fs.readFile(path, "utf8")
+    );
   } catch {
     return fallback;
   }
@@ -48,283 +70,570 @@ function getMatches(raw) {
   if (Array.isArray(raw?.matches)) return raw.matches;
   if (Array.isArray(raw?.fixtures)) return raw.fixtures;
   if (Array.isArray(raw?.data)) return raw.data;
+
   return [];
 }
 
-function extractId(href = "") {
-  const m =
-    /\/match\/([^/?#]+)\//i.exec(href) ||
-    /\/match\/([^/?#]+)/i.exec(href);
-
-  return m ? m[1] : "";
+function matchIdOf(match) {
+  return clean(
+    match?.id ||
+    match?.match_id ||
+    match?.flashscore_id ||
+    ""
+  );
 }
 
-function splitCompetition(raw = "") {
-  const t = safe(raw)
-    .replace(/\bStandings\b/i, "")
-    .trim();
+function extractMatchId(href = "") {
+  const match =
+    String(href).match(
+      /\/match\/([^/?#]+)(?:\/|\?|$)/i
+    );
 
-  const parts = t.split(":");
+  return match?.[1] || "";
+}
 
-  if (parts.length >= 2) {
+function isTime(value = "") {
+  return /^\d{1,2}:\d{2}$/.test(
+    clean(value)
+  );
+}
+
+function validOdd(
+  value,
+  min = 1.22,
+  max = 1.90
+) {
+  const odd = Number(value);
+
+  return (
+    Number.isFinite(odd) &&
+    odd >= min &&
+    odd <= max
+  );
+}
+
+async function fetchOddsPage() {
+  const url =
+    `${BASE}/?d=${DAY_OFFSET}&s=5`;
+
+  const response = await fetch(url, {
+    redirect: "follow",
+
+    headers: {
+      "User-Agent": UA,
+      "Accept-Language":
+        "en-US,en;q=0.9,ro;q=0.8",
+      Accept:
+        "text/html,application/xhtml+xml"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `HTTP ${response.status} for ${url}`
+    );
+  }
+
+  return {
+    url,
+    html: await response.text()
+  };
+}
+
+function getCompetitionText($, node) {
+  let previous =
+    node.previousSibling;
+
+  while (previous) {
+    if (
+      previous.type === "tag" &&
+      previous.name === "h4"
+    ) {
+      return clean(
+        $(previous)
+          .clone()
+          .children()
+          .remove()
+          .end()
+          .text()
+      );
+    }
+
+    previous =
+      previous.previousSibling;
+  }
+
+  return "";
+}
+
+function splitCompetition(text = "") {
+  const value =
+    clean(text)
+      .replace(/\bStandings\b/gi, "")
+      .trim();
+
+  const colon =
+    value.indexOf(":");
+
+  if (colon < 0) {
     return {
-      country: safe(parts[0]),
-      competition: safe(parts.slice(1).join(":"))
+      country: "",
+      competition: value
     };
   }
 
   return {
-    country: "",
-    competition: t
+    country:
+      clean(
+        value.slice(0, colon)
+      ),
+
+    competition:
+      clean(
+        value.slice(colon + 1)
+      )
   };
 }
 
-function validOdd(v, min = 1.22, max = 1.90) {
-  const n = Number(v);
-  return Number.isFinite(n) && n >= min && n <= max;
-}
+function collectTeamsBetween(
+  $,
+  timeNode,
+  matchAnchor
+) {
+  let node =
+    timeNode.nextSibling;
 
-async function fetchOddsPage() {
-  const url = `${BASE}/?d=${DAY_OFFSET}&s=5`;
+  let text = "";
 
-  const r = await fetch(url, {
-    redirect: "follow",
-    headers: {
-      "User-Agent": UA,
-      "Accept-Language": "en-US,en;q=0.9,ro;q=0.8"
+  while (
+    node &&
+    node !== matchAnchor
+  ) {
+    if (node.type === "text") {
+      text +=
+        ` ${node.data || ""}`;
+    } else if (
+      node.type === "tag" &&
+      node.name === "img"
+    ) {
+      // Ignore red-card icons etc.
+    } else if (
+      node.type === "tag"
+    ) {
+      text +=
+        ` ${$(node).text()}`;
     }
-  });
 
-  if (!r.ok) {
-    throw new Error(`HTTP ${r.status} for ${url}`);
+    node =
+      node.nextSibling;
   }
 
-  return {
-    url,
-    html: await r.text()
-  };
+  return clean(text);
 }
 
-function parseOddsList(html) {
-  const $ = cheerio.load(html, {
-    decodeEntities: false
-  });
+function findNextMatchAnchor(
+  $,
+  timeNode
+) {
+  let node =
+    timeNode.nextSibling;
 
-  const root = $("#score-data");
-  const out = [];
+  while (node) {
+    if (
+      node.type === "tag" &&
+      (
+        node.name === "br" ||
+        node.name === "h4" ||
+        node.name === "span"
+      )
+    ) {
+      /*
+       * A normal time is followed by team text
+       * and then the score anchor before the
+       * next BR/span.
+       *
+       * We intentionally stop if a new structural
+       * block starts before finding the match.
+       */
+      if (
+        node.name === "span"
+      ) {
+        const cls =
+          $(node).attr("class") || "";
 
-  if (!root.length) {
-    return out;
-  }
+        if (
+          cls.includes("mobi-odds")
+        ) {
+          node =
+            node.nextSibling;
 
-  let competitionText = "";
+          continue;
+        }
+      }
 
-  const nodes = root.contents().toArray();
-
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i];
+      break;
+    }
 
     if (
       node.type === "tag" &&
-      node.name === "h4"
+      node.name === "a"
     ) {
-      competitionText = safe($(node).text());
-      continue;
+      const href =
+        $(node).attr("href") || "";
+
+      if (
+        /^\/match\//i.test(href)
+      ) {
+        return node;
+      }
+    }
+
+    node =
+      node.nextSibling;
+  }
+
+  return null;
+}
+
+function findOddsSpan(
+  $,
+  matchAnchor
+) {
+  let node =
+    matchAnchor.nextSibling;
+
+  while (node) {
+    if (
+      node.type === "tag" &&
+      node.name === "br"
+    ) {
+      return null;
     }
 
     if (
-      node.type !== "tag" ||
-      node.name !== "span"
+      node.type === "tag" &&
+      node.name === "span"
     ) {
-      continue;
-    }
-
-    const time = safe($(node).text());
-
-    if (!/^\d{1,2}:\d{2}$/.test(time)) {
-      continue;
-    }
-
-    let teams = "";
-    let matchAnchor = null;
-    let matchAnchorIndex = -1;
-
-    for (let j = i + 1; j < nodes.length; j++) {
-      const n = nodes[j];
+      const cls =
+        $(node).attr("class") || "";
 
       if (
-        n.type === "tag" &&
-        (n.name === "span" || n.name === "h4")
+        cls
+          .split(/\s+/)
+          .includes("mobi-odds")
       ) {
-        break;
-      }
-
-      if (
-        n.type === "tag" &&
-        n.name === "a" &&
-        /^\/match\//i.test(
-          $(n).attr("href") || ""
-        )
-      ) {
-        matchAnchor = n;
-        matchAnchorIndex = j;
-        break;
-      }
-
-      if (n.type === "text") {
-        teams += " " + safe(n.data || "");
+        return node;
       }
     }
 
-    if (!matchAnchor) {
-      continue;
-    }
-
-    teams = safe(teams)
-      .replace(/^[-–—]+|[-–—]+$/g, "")
-      .trim();
-
-    const href =
-      $(matchAnchor).attr("href") || "";
-
-    const matchId =
-      extractId(href);
-
-    if (!matchId || !teams) {
-      continue;
-    }
-
-    const odds = [];
-
-    for (
-      let j = matchAnchorIndex + 1;
-      j < nodes.length;
-      j++
-    ) {
-      const n = nodes[j];
-
-      if (
-        n.type === "tag" &&
-        (n.name === "span" || n.name === "h4")
-      ) {
-        break;
-      }
-
-      if (
-        n.type === "tag" &&
-        n.name === "a"
-      ) {
-        const text =
-          safe($(n).text())
-            .replace(",", ".");
-
-        if (/^\d+\.\d+$/.test(text)) {
-          const odd = Number(text);
-
-          if (
-            Number.isFinite(odd) &&
-            odd >= 1.01 &&
-            odd <= 100
-          ) {
-            odds.push(odd);
-          }
-        }
-      }
-    }
-
-    if (odds.length < 3) {
-      continue;
-    }
-
-    const {
-      country,
-      competition
-    } = splitCompetition(competitionText);
-
-    out.push({
-      match_id: matchId,
-      teams,
-      time,
-      country,
-      competition,
-      home: odds[0],
-      draw: odds[1],
-      away: odds[2]
-    });
+    node =
+      node.nextSibling;
   }
 
-  return out;
+  return null;
 }
 
-function makeSelection(match, row, side, odd) {
-  const market =
+function parseOddsFromSpan(
+  $,
+  oddsSpan
+) {
+  const odds = [];
+
+  $(oddsSpan)
+    .find("a")
+    .each((_, anchor) => {
+      const text =
+        clean(
+          $(anchor).text()
+        )
+          .replace(",", ".");
+
+      if (
+        !/^\d+(?:\.\d+)?$/.test(text)
+      ) {
+        return;
+      }
+
+      const odd =
+        Number(text);
+
+      if (
+        Number.isFinite(odd) &&
+        odd >= 1.01 &&
+        odd <= 100
+      ) {
+        odds.push(odd);
+      }
+    });
+
+  return odds;
+}
+
+function parseOddsList(html) {
+  const $ =
+    cheerio.load(
+      html,
+      {
+        decodeEntities: false
+      }
+    );
+
+  const root =
+    $("#score-data");
+
+  if (!root.length) {
+    console.warn(
+      "[FS-ODDS] #score-data not found"
+    );
+
+    return [];
+  }
+
+  const rows = [];
+
+  root
+    .find("span")
+    .each((_, span) => {
+      /*
+       * Ignore mobi-odds spans themselves.
+       */
+      const cls =
+        $(span).attr("class") || "";
+
+      if (
+        cls
+          .split(/\s+/)
+          .includes("mobi-odds")
+      ) {
+        return;
+      }
+
+      const time =
+        clean(
+          $(span).text()
+        );
+
+      if (!isTime(time)) {
+        return;
+      }
+
+      const matchAnchor =
+        findNextMatchAnchor(
+          $,
+          span
+        );
+
+      if (!matchAnchor) {
+        return;
+      }
+
+      const href =
+        $(matchAnchor)
+          .attr("href") || "";
+
+      const matchId =
+        extractMatchId(href);
+
+      if (!matchId) {
+        return;
+      }
+
+      const teams =
+        collectTeamsBetween(
+          $,
+          span,
+          matchAnchor
+        );
+
+      if (
+        !teams ||
+        !teams.includes(" - ")
+      ) {
+        return;
+      }
+
+      const oddsSpan =
+        findOddsSpan(
+          $,
+          matchAnchor
+        );
+
+      if (!oddsSpan) {
+        return;
+      }
+
+      const odds =
+        parseOddsFromSpan(
+          $,
+          oddsSpan
+        );
+
+      if (odds.length < 3) {
+        return;
+      }
+
+      const competitionText =
+        getCompetitionText(
+          $,
+          span
+        );
+
+      const {
+        country,
+        competition
+      } =
+        splitCompetition(
+          competitionText
+        );
+
+      rows.push({
+        match_id: matchId,
+
+        teams,
+        time,
+
+        country,
+        competition,
+
+        home:
+          Number(odds[0]),
+
+        draw:
+          Number(odds[1]),
+
+        away:
+          Number(odds[2])
+      });
+    });
+
+  return rows;
+}
+
+function makeSelection(
+  match,
+  row,
+  side,
+  odd
+) {
+  const id =
+    matchIdOf(match);
+
+  const marketRaw =
     side === "1"
       ? "Victorie gazde"
       : "Victorie oaspeti";
 
-  const id = safe(match.id);
-
   const url =
-    safe(match.url) ||
-    `https://www.flashscore.mobi/match/${id}/`;
+    clean(
+      match?.url ||
+      match?.flashscore_url
+    ) ||
+    `${BASE}/match/${id}/`;
 
   return {
     id,
     match_id: id,
+
     flashscore_url: url,
     url,
 
     teams:
-      safe(match.teams) ||
-      safe(row.teams),
+      clean(match?.teams) ||
+      row.teams,
 
     time:
-      safe(match.time) ||
-      safe(row.time),
+      clean(match?.time) ||
+      row.time,
 
     country:
-      safe(match.country) ||
-      safe(row.country),
+      clean(match?.country) ||
+      row.country,
 
     competition:
-      safe(match.competition || match.league) ||
-      safe(row.competition),
+      clean(
+        match?.competition ||
+        match?.league
+      ) ||
+      row.competition,
 
     bet_type: "1x2",
-    market_raw: market,
-    odd: Number(Number(odd).toFixed(3)),
+    market_raw: marketRaw,
 
-    // INTERNAL ONLY
-    source: "flashscore_odds_fallback",
+    odd:
+      Number(
+        Number(odd)
+          .toFixed(3)
+      ),
+
+    /*
+     * INTERNAL ONLY.
+     */
+    source:
+      "flashscore_odds_fallback",
+
     fallback_level: 3,
 
     meta: {
-      bet_text: market,
-      source: "flashscore_odds_fallback",
+      bet_text: marketRaw,
+
+      source:
+        "flashscore_odds_fallback",
+
       fallback_level: 3,
-      odds_origin: "flashscore_odds_list",
+
+      odds_origin:
+        "flashscore_odds_list",
+
       visitor_visible: false
     }
   };
 }
 
-function dedupe(items) {
-  const seen = new Set();
-  const out = [];
+function selectionKey(
+  selection
+) {
+  return [
+    clean(
+      selection?.match_id
+    ),
+    normalize(
+      selection?.market_raw
+    )
+  ].join("|");
+}
 
-  for (const s of items) {
+function dedupe(
+  selections
+) {
+  const seen =
+    new Set();
+
+  const output = [];
+
+  for (
+    const selection
+    of selections
+  ) {
     const key =
-      `${safe(s.match_id)}|${norm(s.market_raw)}`;
+      selectionKey(
+        selection
+      );
 
-    if (seen.has(key)) {
+    if (
+      !key ||
+      seen.has(key)
+    ) {
       continue;
     }
 
     seen.add(key);
-    out.push(s);
+
+    output.push(
+      selection
+    );
   }
 
-  return out;
+  return output;
 }
 
 (async () => {
@@ -332,45 +641,73 @@ function dedupe(items) {
     await readJson(
       "master_pool.json",
       {
-        source: "master_pool",
+        source:
+          "master_pool",
+
         selections: []
       }
     );
 
   const existing =
-    Array.isArray(master.selections)
+    Array.isArray(
+      master?.selections
+    )
       ? master.selections
       : [];
 
-  if (existing.length >= MIN_POOL) {
+  if (
+    existing.length >=
+    MIN_POOL
+  ) {
     console.log(
-      `[FS-ODDS] skipped: pool already ${existing.length}`
+      `[FS-ODDS] skipped: ` +
+      `existing pool=${existing.length} >= ${MIN_POOL}`
     );
+
     return;
   }
 
   const rawMatches =
     await readJson(
       "matches.json",
-      { matches: [] }
+      {
+        matches: []
+      }
     );
 
   const matches =
-    getMatches(rawMatches);
-
-  const matchMap =
-    new Map(
-      matches.map(m => [
-        safe(
-          m.id ||
-          m.match_id ||
-          m.flashscore_id
-        ),
-        m
-      ])
+    getMatches(
+      rawMatches
     );
 
-  const { url, html } =
+  console.log(
+    `[FS-ODDS] Flashscore matches loaded=${matches.length}`
+  );
+
+  const matchMap =
+    new Map();
+
+  for (
+    const match
+    of matches
+  ) {
+    const id =
+      matchIdOf(
+        match
+      );
+
+    if (id) {
+      matchMap.set(
+        id,
+        match
+      );
+    }
+  }
+
+  const {
+    url,
+    html
+  } =
     await fetchOddsPage();
 
   await fs.writeFile(
@@ -380,37 +717,93 @@ function dedupe(items) {
   );
 
   const rows =
-    parseOddsList(html);
+    parseOddsList(
+      html
+    );
 
   console.log(
-    `[FS-ODDS] rows with 1X2 odds: ${rows.length}`
+    `[FS-ODDS] rows with 1X2 odds=${rows.length}`
   );
+
+  /*
+   * Diagnostic:
+   * how many IDs on odds page are present
+   * in our matches.json?
+   */
+  const exactRows =
+    rows.filter(
+      row =>
+        matchMap.has(
+          row.match_id
+        )
+    );
+
+  console.log(
+    `[FS-ODDS] exact match_id rows=${exactRows.length}`
+  );
+
+  if (rows.length) {
+    console.log(
+      `[FS-ODDS] sample: ` +
+      `${rows[0].teams} | ` +
+      `${rows[0].home}/${rows[0].draw}/${rows[0].away} | ` +
+      `${rows[0].match_id}`
+    );
+  }
 
   const historicalTest =
     DAY_OFFSET < 0;
 
   const candidates = [];
 
-  for (const row of rows) {
+  for (
+    const row
+    of exactRows
+  ) {
     const match =
-      matchMap.get(row.match_id);
+      matchMap.get(
+        row.match_id
+      );
 
-    // Critical safety rule:
-    // no exact Flashscore ID match = no pool.
     if (!match) {
       continue;
     }
 
-    // Production: do not bet matches already started.
-    // Historical tests are allowed for DAY_OFFSET < 0.
-    if (
-      !historicalTest &&
-      safe(match.status || "sched") !== "sched"
-    ) {
-      continue;
+    /*
+     * Production safety.
+     */
+    if (!historicalTest) {
+      const status =
+        clean(
+          match?.status ||
+          "sched"
+        ).toLowerCase();
+
+      if (
+        ![
+          "sched",
+          "scheduled"
+        ].includes(status)
+      ) {
+        continue;
+      }
     }
 
-    if (validOdd(row.home)) {
+    /*
+     * For now fallback uses only
+     * verifier-safe 1X2 picks.
+     *
+     * Odds band chosen to provide
+     * enough combinations for Cota 2
+     * and Biletul Zilei.
+     */
+    if (
+      validOdd(
+        row.home,
+        1.22,
+        1.90
+      )
+    ) {
       candidates.push(
         makeSelection(
           match,
@@ -421,7 +814,13 @@ function dedupe(items) {
       );
     }
 
-    if (validOdd(row.away)) {
+    if (
+      validOdd(
+        row.away,
+        1.22,
+        1.90
+      )
+    ) {
       candidates.push(
         makeSelection(
           match,
@@ -433,96 +832,173 @@ function dedupe(items) {
     }
   }
 
+  /*
+   * Prefer odds near 1.55.
+   */
   candidates.sort(
     (a, b) =>
-      Math.abs(a.odd - 1.55) -
-      Math.abs(b.odd - 1.55)
+      Math.abs(
+        a.odd - 1.55
+      ) -
+      Math.abs(
+        b.odd - 1.55
+      )
   );
 
   const combined =
-    dedupe(existing);
+    dedupe(
+      existing
+    );
 
   const existingKeys =
     new Set(
       combined.map(
-        s =>
-          `${safe(s.match_id)}|${norm(s.market_raw)}`
+        selection =>
+          selectionKey(
+            selection
+          )
       )
     );
 
   const added = [];
 
-  for (const s of candidates) {
-    if (combined.length >= TARGET_POOL) {
+  for (
+    const selection
+    of candidates
+  ) {
+    if (
+      combined.length >=
+      TARGET_POOL
+    ) {
       break;
     }
 
     const key =
-      `${safe(s.match_id)}|${norm(s.market_raw)}`;
+      selectionKey(
+        selection
+      );
 
-    if (existingKeys.has(key)) {
+    if (
+      existingKeys.has(key)
+    ) {
       continue;
     }
 
     existingKeys.add(key);
-    combined.push(s);
-    added.push(s);
+
+    combined.push(
+      selection
+    );
+
+    added.push(
+      selection
+    );
   }
 
-  const out = {
+  const output = {
     ...master,
+
+    source:
+      "master_pool",
 
     source_mode:
       added.length
-        ? `${master.source_mode || "existing"}_plus_flashscore_odds_fallback`
-        : master.source_mode || "existing",
+        ? `${
+            master.source_mode ||
+            "existing"
+          }_plus_flashscore_odds_fallback`
+        : (
+            master.source_mode ||
+            "existing"
+          ),
 
     sources_used: [
       ...new Set([
-        ...(master.sources_used || []),
-        ...(added.length
-          ? ["flashscore_odds_fallback"]
-          : [])
+        ...(
+          master.sources_used ||
+          []
+        ),
+
+        ...(
+          added.length
+            ? [
+                "flashscore_odds_fallback"
+              ]
+            : []
+        )
       ])
     ],
 
     fallback: {
-      used: added.length > 0,
-      level: added.length > 0 ? 3 : null,
-      added: added.length,
-      internal_only: true,
-      odds_url: url
+      used:
+        added.length > 0,
+
+      level:
+        added.length > 0
+          ? 3
+          : null,
+
+      added:
+        added.length,
+
+      internal_only:
+        true,
+
+      odds_url:
+        url
     },
 
-    selections: combined
+    selections:
+      combined
   };
 
   await fs.writeFile(
     "master_pool.json",
-    JSON.stringify(out, null, 2),
-    "utf8"
-  );
 
-  await fs.writeFile(
-    "flashscore_odds_fallback.json",
     JSON.stringify(
-      {
-        used: added.length > 0,
-        odds_rows: rows.length,
-        existing_pool_size:
-          existing.length,
-        candidate_count:
-          candidates.length,
-        added:
-          added.length,
-        final_pool_size:
-          combined.length,
-        selections:
-          added
-      },
+      output,
       null,
       2
     ),
+
+    "utf8"
+  );
+
+  const audit = {
+    used:
+      added.length > 0,
+
+    odds_rows:
+      rows.length,
+
+    exact_match_id_rows:
+      exactRows.length,
+
+    existing_pool_size:
+      existing.length,
+
+    candidate_count:
+      candidates.length,
+
+    added:
+      added.length,
+
+    final_pool_size:
+      combined.length,
+
+    selections:
+      added
+  };
+
+  await fs.writeFile(
+    "flashscore_odds_fallback.json",
+
+    JSON.stringify(
+      audit,
+      null,
+      2
+    ),
+
     "utf8"
   );
 
@@ -534,6 +1010,6 @@ function dedupe(items) {
 })().catch(error => {
   console.warn(
     `[FS-ODDS] non-blocking error: ` +
-    `${error?.message || error}`
+    `${error?.stack || error?.message || error}`
   );
 });
