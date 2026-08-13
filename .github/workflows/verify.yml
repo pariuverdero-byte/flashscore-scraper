@@ -1,6 +1,11 @@
 name: Verify tickets & update WP
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/verify.yml"
+      - "verify_and_update_wp_runtime.js"
   workflow_dispatch:
     inputs:
       recheck:
@@ -50,9 +55,11 @@ jobs:
           WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
           HOMEPAGE_ID: "11"
           MAX_POSTS_PER_CAT: "8"
-          RECHECK_ONCE: ${{ inputs.recheck && '1' || '0' }}
-          RECHECK_LAST_N: ${{ inputs.recheck_last_n }}
-        run: node verify_and_update_wp.js
+          RECHECK_ONCE: ${{ github.event_name == 'push' && '1' || (inputs.recheck && '1' || '0') }}
+          RECHECK_LAST_N: ${{ github.event_name == 'push' && '30' || inputs.recheck_last_n }}
+          MAX_ROWS_PER_POST: "10"
+          VERIFY_NON_BLOCKING: "false"
+        run: node verify_and_update_wp_runtime.js
 
       # -------------------------------
       # VERIFY – GREENBETTIPS.COM (EN)
@@ -66,6 +73,8 @@ jobs:
           WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
           HOMEPAGE_ID: "2"
           MAX_POSTS_PER_CAT: "8"
-          RECHECK_ONCE: ${{ inputs.recheck && '1' || '0' }}
-          RECHECK_LAST_N: ${{ inputs.recheck_last_n }}
-        run: node verify_and_update_wp.js
+          RECHECK_ONCE: ${{ github.event_name == 'push' && '1' || (inputs.recheck && '1' || '0') }}
+          RECHECK_LAST_N: ${{ github.event_name == 'push' && '30' || inputs.recheck_last_n }}
+          MAX_ROWS_PER_POST: "10"
+          VERIFY_NON_BLOCKING: "true"
+        run: node verify_and_update_wp_runtime.js
