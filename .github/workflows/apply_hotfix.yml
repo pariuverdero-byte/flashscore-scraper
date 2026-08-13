@@ -1,4 +1,4 @@
-name: One-time pipeline hotfix
+name: One-time verifier hotfix
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply exact hotfixes
+      - name: Patch final-status parser
         shell: bash
         run: |
           set -euo pipefail
@@ -29,79 +29,40 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          def replace_once(path, old, new):
-              p = Path(path)
-              text = p.read_text(encoding="utf-8")
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"Expected exactly 1 occurrence in {path}, found {count}: {old!r}")
-              p.write_text(text.replace(old, new, 1), encoding="utf-8")
-              print(f"Updated {path}: {old!r} -> {new!r}")
-
-          replace_once(
-              ".github/workflows/scrape.yml",
-              '- cron: "00 12 * * *"',
-              '- cron: "30 13 * * *"',
-          )
-
-          replace_once(
-              ".github/workflows/scrape_greenbettips.yml",
-              '# 13:30 UTC = 14:30 in Romania during daylight-saving time (summer).',
-              '# 13:30 UTC = 16:30 in Romania during daylight-saving time (summer).',
-          )
-
-          replace_once(
-              ".github/workflows/scrape_greenbettips.yml",
-              '- cron: "30 11 * * *"',
-              '- cron: "30 13 * * *"',
-          )
-
           p = Path("verify_and_update_wp.js")
           text = p.read_text(encoding="utf-8")
           old = r'(?:Finished|Full Time|Final|FT|AET)(?=\d|\s|$)'
           new = r'(?:Finished|Full Time|Final\b|AET\b|FT\b)'
           count = text.count(old)
-          if count != 3:
-              raise SystemExit(
-                  f"Expected 3 final-status regex occurrences in verify_and_update_wp.js, found {count}"
-              )
-          text = text.replace(old, new)
-          p.write_text(text, encoding="utf-8")
-          print(f"Updated verify_and_update_wp.js final-status regex in {count} places")
+
+          if count == 0 and text.count(new) == 3:
+              print("Parser is already patched.")
+          elif count == 3:
+              text = text.replace(old, new)
+              p.write_text(text, encoding="utf-8")
+              print("Updated final-status parser in 3 places.")
+          else:
+              raise SystemExit(f"Unexpected parser state: old={count}, new={text.count(new)}")
           PY
 
-      - name: Validate hotfix
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "PariuVerde schedule:"
-          grep -n 'cron:' .github/workflows/scrape.yml
-
-          echo "GreenBetTips schedule:"
-          grep -n 'cron:' .github/workflows/scrape_greenbettips.yml
-
-          echo "Final-status parser patterns:"
+          node --check verify_and_update_wp.js
           grep -nE 'Finished\|Full Time\|Final' verify_and_update_wp.js
 
-          node --check verify_and_update_wp.js
-
-      - name: Commit corrected production files and remove hotfix runner
+      - name: Commit verifier fix
         shell: bash
         run: |
           set -euo pipefail
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add verify_and_update_wp.js
 
-          git rm .github/workflows/apply_hotfix.yml
-          git add \
-            .github/workflows/scrape.yml \
-            .github/workflows/scrape_greenbettips.yml \
-            verify_and_update_wp.js
-
-          git commit -m "Fix ticket verification and 16:30 daily schedules"
-          git push origin main
+          if git diff --cached --quiet; then
+            echo "No verifier changes to commit."
+          else
+            git commit -m "Fix Flashscore finished status parsing"
+            git push origin main
+          fi
 
       - name: Install verifier dependencies
         shell: bash
