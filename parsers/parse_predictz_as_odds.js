@@ -1,4 +1,5 @@
 // parsers/parse_predictz_as_odds.js
+// PredictZ injection, then multi-source augmentation + Flashscore-odds fallback.
 
 import fs from "fs/promises";
 
@@ -19,49 +20,45 @@ function detectType(p) {
   return "1x2";
 }
 
-(async () => {
-  const matched = JSON.parse(await fs.readFile("predictz_matched.json", "utf8"));
-  const pool = JSON.parse(await fs.readFile("master_pool.json", "utf8"));
+async function readJsonSafe(path, fallback) {
+  try { return JSON.parse(await fs.readFile(path, "utf8")); }
+  catch { return fallback; }
+}
 
-  const selections = pool.selections || [];
+(async () => {
+  const matched = await readJsonSafe("predictz_matched.json", { selections: [] });
+  const pool = await readJsonSafe("master_pool.json", { date: null, source: "master_pool", selections: [] });
+  const selections = Array.isArray(pool.selections) ? [...pool.selections] : [];
   let added = 0;
 
-  for (const p of matched.selections) {
+  for (const p of (Array.isArray(matched?.selections) ? matched.selections : [])) {
+    if (!p?.flashscore_id) continue;
     let odd = 1.45;
-
     if (p.market === "BTTS") odd = 1.70;
     if (p.market === "OVER_2_5") odd = 1.50;
-
+    const url = p.flashscore_url || `https://www.flashscore.mobi/match/${p.flashscore_id}/`;
     selections.push({
       match_id: p.flashscore_id,
-      flashscore_url: p.flashscore_url,
-
+      id: p.flashscore_id,
+      flashscore_url: url,
+      url,
       teams: p.teams,
       time: p.flashscore_kickoff,
-
       bet_type: detectType(p),
-      market_raw: p.market,
+      market_raw: betText(p),
       odd,
-
       source: "predictz",
-
-      meta: {
-        bet_text: betText(p),
-        source: "predictz"
-      }
+      meta: { bet_text: betText(p), source: "predictz", source_market: p.market }
     });
-
     added++;
   }
 
-  await fs.writeFile(
-    "master_pool.json",
-    JSON.stringify({
-      date: pool.date,
-      source: "master_pool",
-      selections
-    }, null, 2)
-  );
-
+  await fs.writeFile("master_pool.json", JSON.stringify({ ...pool, source: "master_pool", selections }, null, 2), "utf8");
   console.log(`✅ predictz added: ${added}`);
+
+  try {
+    await import("./augment_pool_sources_and_fallback.js");
+  } catch (e) {
+    console.warn(`[POOL+] skipped after error: ${e?.message || e}`);
+  }
 })();
