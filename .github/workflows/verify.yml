@@ -56,7 +56,7 @@ jobs:
           HOMEPAGE_ID: "11"
           MAX_POSTS_PER_CAT: "8"
           RECHECK_ONCE: ${{ github.event_name == 'push' && '1' || (inputs.recheck && '1' || '0') }}
-          RECHECK_LAST_N: ${{ github.event_name == 'push' && '30' || inputs.recheck_last_n }}
+          RECHECK_LAST_N: ${{ github.event_name == 'push' && '1' || inputs.recheck_last_n }}
           MAX_ROWS_PER_POST: "10"
           VERIFY_NON_BLOCKING: "false"
         run: node verify_and_update_wp_runtime.js
@@ -74,7 +74,7 @@ jobs:
           HOMEPAGE_ID: "2"
           MAX_POSTS_PER_CAT: "8"
           RECHECK_ONCE: ${{ github.event_name == 'push' && '1' || (inputs.recheck && '1' || '0') }}
-          RECHECK_LAST_N: ${{ github.event_name == 'push' && '30' || inputs.recheck_last_n }}
+          RECHECK_LAST_N: ${{ github.event_name == 'push' && '1' || inputs.recheck_last_n }}
           MAX_ROWS_PER_POST: "10"
           VERIFY_NON_BLOCKING: "true"
         run: node verify_and_update_wp_runtime.js
