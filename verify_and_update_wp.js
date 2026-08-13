@@ -1360,7 +1360,7 @@ function extractFinishedScore(
 
   let m =
     text.match(
-      /(\d{1,2})\s*[-:]\s*(\d{1,2})(?:\s*\([^)]*\))?\s*(?:Finished|Full Time|Final|FT|AET)(?=\d|\s|$)/i
+      /(\d{1,2})\s*[-:]\s*(\d{1,2})(?:\s*\([^)]*\))?\s*(?:Finished|Full Time|Final\b|AET\b|FT\b)/i
     );
 
   if (m) {
@@ -1383,7 +1383,7 @@ function extractFinishedScore(
 
   m =
     text.match(
-      /(?:Finished|Full Time|Final|FT|AET)(?=\d|\s|$)[^0-9]{0,120}(\d{1,2})\s*[-:]\s*(\d{1,2})/i
+      /(?:Finished|Full Time|Final\b|AET\b|FT\b)[^0-9]{0,120}(\d{1,2})\s*[-:]\s*(\d{1,2})/i
     );
 
   if (m) {
@@ -1406,7 +1406,7 @@ function extractFinishedScore(
 
   const statusIndex =
     text.search(
-      /(?:Finished|Full Time|Final|FT|AET)(?=\d|\s|$)/i
+      /(?:Finished|Full Time|Final\b|AET\b|FT\b)/i
     );
 
   if (
