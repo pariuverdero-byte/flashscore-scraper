@@ -463,13 +463,18 @@ function parse1x2FromText(
   }
 
   if (teams) {
+    const cleanTeamName = (name) =>
+      normalize(name)
+        .replace(/\s*\([^)]{2,12}\)\s*$/g, "")
+        .trim();
+
     const home =
-      normalize(
+      cleanTeamName(
         teams.home
       );
 
     const away =
-      normalize(
+      cleanTeamName(
         teams.away
       );
 
@@ -1025,6 +1030,47 @@ function parseBetText(
     return null;
   }
 
+  let specialMatch =
+    v.match(
+      /(?:scor corect.*(?:prima repriza|prima jumatate)|(?:prima repriza|prima jumatate).*scor corect).*?(\d{1,2})\s*[-:]\s*(\d{1,2})/i
+    ) ||
+    v.match(
+      /(?:correct score.*(?:first half|1st half)|(?:first half|1st half).*correct score).*?(\d{1,2})\s*[-:]\s*(\d{1,2})/i
+    );
+
+  if (specialMatch) {
+    return {
+      type: "half_correct_score",
+      half: 1,
+      h: Number(specialMatch[1]),
+      a: Number(specialMatch[2]),
+    };
+  }
+
+  if (
+    /\b(gol marcat in ambele reprize|gol in ambele reprize|goal scored in both halves|goal in both halves)\b/.test(v)
+  ) {
+    return {
+      type: "goal_both_halves",
+    };
+  }
+
+  specialMatch =
+    v.match(
+      /(?:minim|minimum|at least)\s*(\d+(?:[.,]\d+)?)\s*(?:gol|goluri|goal|goals).*?(?:repriza secunda|a doua repriza|second half|2nd half)/i
+    ) ||
+    v.match(
+      /(?:repriza secunda|a doua repriza|second half|2nd half).*?(?:minim|minimum|at least)\s*(\d+(?:[.,]\d+)?)\s*(?:gol|goluri|goal|goals)/i
+    );
+
+  if (specialMatch) {
+    return {
+      type: "half_goals_min",
+      half: 2,
+      min: Number(String(specialMatch[1]).replace(",", ".")),
+    };
+  }
+
   if (
     /(^|\s)1x(\s|$)/.test(
       v
@@ -1360,10 +1406,19 @@ function extractFinishedScore(
 
   let m =
     text.match(
-      /(\d{1,2})\s*[-:]\s*(\d{1,2})(?:\s*\([^)]*\))?\s*(?:Finished|Full Time|Final\b|AET\b|FT\b)/i
+      /(\d{1,2})\s*[-:]\s*(\d{1,2})(?:\s*\(([^)]*)\))?\s*(?:Finished|Full Time|After Extra Time|Final\b|AET\b|FT\b)/i
     );
 
   if (m) {
+    const periods = String(m[3] || "")
+      .split(",")
+      .map((part) => part.trim())
+      .map((part) => {
+        const pm = part.match(/^(\d{1,2})\s*[-:]\s*(\d{1,2})$/);
+        return pm ? { h: Number(pm[1]), a: Number(pm[2]) } : null;
+      })
+      .filter(Boolean);
+
     return {
       h:
         Number(
@@ -1374,6 +1429,8 @@ function extractFinishedScore(
         Number(
           m[2]
         ),
+
+      periods,
     };
   }
 
@@ -1383,7 +1440,7 @@ function extractFinishedScore(
 
   m =
     text.match(
-      /(?:Finished|Full Time|Final\b|AET\b|FT\b)[^0-9]{0,120}(\d{1,2})\s*[-:]\s*(\d{1,2})/i
+      /(?:Finished|Full Time|After Extra Time|Final\b|AET\b|FT\b)[^0-9]{0,120}(\d{1,2})\s*[-:]\s*(\d{1,2})/i
     );
 
   if (m) {
@@ -1406,7 +1463,7 @@ function extractFinishedScore(
 
   const statusIndex =
     text.search(
-      /(?:Finished|Full Time|Final\b|AET\b|FT\b)/i
+      /(?:Finished|Full Time|After Extra Time|Final\b|AET\b|FT\b)/i
     );
 
   if (
@@ -2093,6 +2150,64 @@ function evalBet(
     a,
   } =
     data.ft;
+
+  if (
+    bet.type ===
+    "half_correct_score"
+  ) {
+    const period =
+      data.ft.periods?.[
+        Math.max(0, Number(bet.half || 1) - 1)
+      ];
+
+    if (!period) {
+      return null;
+    }
+
+    return (
+      period.h === bet.h &&
+      period.a === bet.a
+    )
+      ? WIN
+      : LOSS;
+  }
+
+  if (
+    bet.type ===
+    "goal_both_halves"
+  ) {
+    const first = data.ft.periods?.[0];
+    const second = data.ft.periods?.[1];
+
+    if (!first || !second) {
+      return null;
+    }
+
+    return (
+      first.h + first.a > 0 &&
+      second.h + second.a > 0
+    )
+      ? WIN
+      : LOSS;
+  }
+
+  if (
+    bet.type ===
+    "half_goals_min"
+  ) {
+    const period =
+      data.ft.periods?.[
+        Math.max(0, Number(bet.half || 1) - 1)
+      ];
+
+    if (!period) {
+      return null;
+    }
+
+    return (period.h + period.a) >= bet.min
+      ? WIN
+      : LOSS;
+  }
 
   if (
     bet.type ===
