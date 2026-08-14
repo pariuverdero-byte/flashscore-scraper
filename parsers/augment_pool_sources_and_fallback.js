@@ -1994,10 +1994,21 @@ function extractBetinum(
          * matcher_core's universal date/context guard
          * can use them directly.
          */
-        selection.kickoff =
+        /*
+         * Betinum's JSON-LD date is useful, but its displayed/
+         * encoded kickoff time can differ systematically from
+         * Flashscore. Preserve full kickoff in metadata, while
+         * exposing only YYYY-MM-DD to the universal date guard.
+         *
+         * This prevents a correct team match being penalized by
+         * an unreliable source timezone.
+         */
+        selection.date =
           safe(
             schemaEvent.kickoff
-          );
+          ).match(
+            /^\d{4}-\d{2}-\d{2}/
+          )?.[0] || "";
 
         selection.competition =
           safe(

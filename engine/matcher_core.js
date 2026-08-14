@@ -175,6 +175,10 @@ function normalizeTeam(value = "") {
     .replace(/\buniv\b/g, " univ ")
     .replace(/\bdep\b/g, " deportivo ")
 
+    // Generic European naming variants:
+    // St. Pauli / Saint Pauli / Sankt Pauli
+    .replace(/\b(?:st|saint|sankt)\b/g, " saint ")
+
     // remove duplicate whitespace
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
