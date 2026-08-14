@@ -891,7 +891,7 @@ function parseSourceDate(
   // YYYY-MM-DD
   match =
     text.match(
-      /\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/
+      /\b(20\d{2})-(\d{1,2})-(\d{1,2})(?=T|\s|$)/
     );
 
   if (match) {

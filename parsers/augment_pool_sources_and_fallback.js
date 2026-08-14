@@ -21,7 +21,8 @@ import fs from "fs/promises";
 import * as cheerio from "cheerio";
 
 import {
-  matchEventToFlashscore
+  matchEventToFlashscore,
+  eventDateGuard
 } from "../engine/matcher_core.js";
 
 const DAY_OFFSET =
@@ -1624,6 +1625,394 @@ function extractSportyTrader(
   return out;
 }
 
+
+function betinumMarket(
+  prediction
+) {
+  const text =
+    safe(prediction);
+
+  if (!text) {
+    return null;
+  }
+
+  if (
+    /both\s+teams\s+to\s+score/i.test(
+      text
+    )
+  ) {
+    return "Ambele echipe marcheaza";
+  }
+
+  let match =
+    text.match(
+      /\bover\s+(\d+(?:[.,]\d+)?)\s+goals?\b/i
+    );
+
+  if (match) {
+    return (
+      `Peste ${
+        match[1].replace(",", ".")
+      } goluri`
+    );
+  }
+
+  match =
+    text.match(
+      /\bunder\s+(\d+(?:[.,]\d+)?)\s+goals?\b/i
+    );
+
+  if (match) {
+    return (
+      `Sub ${
+        match[1].replace(",", ".")
+      } goluri`
+    );
+  }
+
+  /*
+   * HT/FT and other exotic markets are deliberately
+   * not admitted yet because the downstream ticket
+   * generator/verifier does not support them safely.
+   */
+  return null;
+}
+
+function extractBetinum(
+  html,
+  sourceUrl
+) {
+  const $ =
+    cheerio.load(
+      html,
+      {
+        decodeEntities:
+          false
+      }
+    );
+
+  const out = [];
+
+  /*
+   * Betinum exposes reliable SportsEvent JSON-LD:
+   *
+   * startDate
+   * organizer.name
+   * description
+   * competitor[0/1].name
+   *
+   * Build an event lookup first, then enrich it with
+   * odd + stake stars from the visible HTML block.
+   */
+  const eventMap =
+    new Map();
+
+  $(
+    'script[type="application/ld+json"]'
+  ).each(
+    (_, script) => {
+      const raw =
+        $(script).html();
+
+      if (
+        !raw ||
+        !raw.includes(
+          '"competitor"'
+        )
+      ) {
+        return;
+      }
+
+      try {
+        const parsed =
+          JSON.parse(raw);
+
+        const nodes =
+          Array.isArray(parsed)
+            ? parsed
+            : (
+                Array.isArray(
+                  parsed?.["@graph"]
+                )
+                  ? parsed["@graph"]
+                  : [parsed]
+              );
+
+        for (
+          const node
+          of nodes
+        ) {
+          const competitors =
+            Array.isArray(
+              node?.competitor
+            )
+              ? node.competitor
+              : [];
+
+          if (
+            competitors.length < 2
+          ) {
+            continue;
+          }
+
+          const home =
+            safe(
+              competitors[0]?.name
+            );
+
+          const away =
+            safe(
+              competitors[1]?.name
+            );
+
+          if (
+            !home ||
+            !away
+          ) {
+            continue;
+          }
+
+          const key =
+            `${norm(home)}|${norm(away)}`;
+
+          eventMap.set(
+            key,
+            {
+              home,
+              away,
+
+              kickoff:
+                safe(
+                  node?.startDate
+                ),
+
+              competition:
+                safe(
+                  node?.organizer?.name
+                ),
+
+              prediction:
+                safe(
+                  node?.description
+                )
+            }
+          );
+        }
+      } catch {
+        // Invalid JSON-LD block: ignore safely.
+      }
+    }
+  );
+
+  $(".mrbara-freetips")
+    .each(
+      (_, block) => {
+        const teamNames =
+          $(block)
+            .find(
+              "img.mrbara-mr-10px[alt]"
+            )
+            .map(
+              (_, img) =>
+                safe(
+                  $(img).attr(
+                    "alt"
+                  )
+                )
+            )
+            .get()
+            .filter(Boolean);
+
+        const uniqueTeams =
+          [
+            ...new Set(
+              teamNames
+            )
+          ];
+
+        if (
+          uniqueTeams.length < 2
+        ) {
+          return;
+        }
+
+        const home =
+          uniqueTeams[0];
+
+        const away =
+          uniqueTeams[1];
+
+        const event = {
+          home,
+          away
+        };
+
+        const key =
+          `${norm(home)}|${norm(away)}`;
+
+        const schemaEvent =
+          eventMap.get(
+            key
+          ) || {};
+
+        /*
+         * Use the first tiny box only.
+         * Some HT/FT boxes contain tooltip explanation text,
+         * but those markets are excluded below anyway.
+         */
+        const boxes =
+          $(block)
+            .find(
+              ".betinum-tiny-box"
+            )
+            .map(
+              (_, box) =>
+                safe(
+                  $(box).text()
+                )
+            )
+            .get();
+
+        const htmlPrediction =
+          safe(
+            $(
+              block
+            )
+              .find(
+                ".mrbara-freetips-end-prediction"
+              )
+              .first()
+              .clone()
+              .children()
+              .remove()
+              .end()
+              .text()
+          );
+
+        const prediction =
+          safe(
+            schemaEvent.prediction
+          ) ||
+          htmlPrediction ||
+          safe(
+            boxes[0]
+          );
+
+        const market =
+          betinumMarket(
+            prediction
+          );
+
+        if (
+          !market
+        ) {
+          return;
+        }
+
+        const odd =
+          Number(
+            safe(
+              boxes[1]
+            )
+              .replace(
+                ",",
+                "."
+              )
+          );
+
+        if (
+          !Number.isFinite(
+            odd
+          ) ||
+          odd <= 1.01 ||
+          odd > 10
+        ) {
+          return;
+        }
+
+        const stake =
+          $(block)
+            .find(
+              ".mrbara-freetips-stake-star.fill-star"
+            )
+            .length;
+
+        const selection =
+          makeRawSelection({
+            event,
+            market,
+            odd,
+
+            source:
+              "betinum",
+
+            sourceUrl,
+
+            extraMeta: {
+              parser:
+                "betinum",
+
+              source_prediction:
+                prediction,
+
+              source_stake:
+                stake,
+
+              source_stake_max:
+                5,
+
+              source_confidence:
+                stake > 0
+                  ? Number(
+                      (
+                        stake /
+                        5
+                      ).toFixed(2)
+                    )
+                  : null,
+
+              source_kickoff:
+                safe(
+                  schemaEvent.kickoff
+                ),
+
+              source_competition:
+                safe(
+                  schemaEvent.competition
+                )
+            }
+          });
+
+        if (
+          !selection
+        ) {
+          return;
+        }
+
+        /*
+         * These top-level fields are intentional.
+         * matcher_core's universal date/context guard
+         * can use them directly.
+         */
+        selection.kickoff =
+          safe(
+            schemaEvent.kickoff
+          );
+
+        selection.competition =
+          safe(
+            schemaEvent.competition
+          );
+
+        out.push(
+          selection
+        );
+      }
+    );
+
+  return out;
+}
+
 function extractSelectionsBySource(
   html,
   source,
@@ -1664,6 +2053,16 @@ function extractSelectionsBySource(
     "sportytrader"
   ) {
     return extractSportyTrader(
+      html,
+      sourceUrl
+    );
+  }
+
+  if (
+    source ===
+    "betinum"
+  ) {
+    return extractBetinum(
       html,
       sourceUrl
     );
@@ -1861,7 +2260,7 @@ function canonicalize(
 ) {
   const hit =
     matchEventToFlashscore(
-      selection.teams,
+      selection,
       matches
     );
 
@@ -1958,6 +2357,37 @@ function canonicalize(
         )
           ? Number(
               score.toFixed(3)
+            )
+          : null,
+
+      match_method:
+        hit.match_method ||
+        hit.method ||
+        null,
+
+      match_margin:
+        Number.isFinite(
+          Number(
+            hit.margin
+          )
+        )
+          ? Number(
+              Number(
+                hit.margin
+              ).toFixed(3)
+            )
+          : null,
+
+      second_best_match_score:
+        Number.isFinite(
+          Number(
+            hit.secondBestScore
+          )
+        )
+          ? Number(
+              Number(
+                hit.secondBestScore
+              ).toFixed(3)
             )
           : null
     }
@@ -2078,6 +2508,18 @@ function sourceConfigs(
 
       discover:
         true
+    },
+
+    {
+      source:
+        "betinum",
+
+      urls: [
+        "https://betinum.com/en/"
+      ],
+
+      discover:
+        false
     }
   ];
 }
@@ -2274,6 +2716,15 @@ async function addExtraSources(
         canonical
       );
     } else {
+      const dateGuard =
+        eventDateGuard(
+          selection,
+          {
+            targetDate:
+              iso
+          }
+        );
+
       dropped.push({
         source:
           selection.source,
@@ -2288,7 +2739,22 @@ async function addExtraSources(
           selection.odd,
 
         reason:
-          "no_clear_flashscore_match"
+          !dateGuard.ok
+            ? "date_mismatch"
+            : "no_clear_flashscore_match",
+
+        source_date:
+          dateGuard.sourceDate ||
+          null,
+
+        target_date:
+          dateGuard.targetDate ||
+          iso,
+
+        kickoff:
+          selection.kickoff ||
+          selection.meta?.source_kickoff ||
+          null
       });
     }
   }
