@@ -1,7 +1,8 @@
 // parsers/parse_predictz_as_odds.js
 //
 // FINAL — PredictZ injection + sequential external augmentation
-// + sequential Flashscore odds fallback.
+// + sequential Flashscore odds fallback
+// + stale daily pool protection.
 //
 // IMPORTANT:
 //
@@ -10,10 +11,11 @@
 //
 // This guarantees:
 //
-// 1. PredictZ is injected into master_pool
-// 2. external sources augment the existing master_pool
-// 3. Flashscore fallback sees the FINAL external pool
-// 4. fallback only completes what is missing
+// 1. stale master_pool from another day is rejected
+// 2. PredictZ is injected into master_pool
+// 3. external sources augment the existing master_pool
+// 4. Flashscore fallback sees the FINAL external pool
+// 5. fallback only completes what is missing
 //
 // Do NOT replace these sequential subprocess calls with parallel
 // dynamic imports. Both downstream scripts write master_pool.json
@@ -66,6 +68,12 @@ const FALLBACK_SCRIPT =
     "flashscore_odds_list_fallback.js"
   );
 
+const DAY_OFFSET =
+  Number(
+    process.env.DAY_OFFSET ||
+    "0"
+  );
+
 /* ============================================================
  * HELPERS
  * ============================================================ */
@@ -90,6 +98,73 @@ async function readJsonSafe(
   } catch {
     return fallback;
   }
+}
+
+function targetDate() {
+  const date =
+    new Date(
+      Date.now() +
+      DAY_OFFSET *
+      86400000
+    );
+
+  const parts =
+    new Intl.DateTimeFormat(
+      "en-CA",
+      {
+        timeZone:
+          "Europe/Bucharest",
+
+        year:
+          "numeric",
+
+        month:
+          "2-digit",
+
+        day:
+          "2-digit"
+      }
+    ).formatToParts(
+      date
+    );
+
+  const get =
+    type =>
+      parts.find(
+        part =>
+          part.type === type
+      )?.value || "";
+
+  return (
+    `${get("year")}-` +
+    `${get("month")}-` +
+    `${get("day")}`
+  );
+}
+
+function freshMasterPool(
+  date,
+  reason =
+    "fresh_daily_pool"
+) {
+  return {
+    date,
+
+    source:
+      "master_pool",
+
+    source_mode:
+      reason,
+
+    sources_used:
+      [],
+
+    upstream_counts:
+      {},
+
+    selections:
+      []
+  };
 }
 
 function betText(p) {
@@ -151,7 +226,8 @@ function detectParams(p) {
     p.market === "BTTS"
   ) {
     return {
-      side: "yes"
+      side:
+        "yes"
     };
   }
 
@@ -159,8 +235,11 @@ function detectParams(p) {
     p.market === "OVER_2_5"
   ) {
     return {
-      side: "over",
-      line: 2.5
+      side:
+        "over",
+
+      line:
+        2.5
     };
   }
 
@@ -245,6 +324,7 @@ function dedupeSelections(
     }
 
     seen.add(key);
+
     out.push(item);
   }
 
@@ -260,6 +340,7 @@ function runNodeStage(
   scriptPath
 ) {
   console.log("");
+
   console.log(
     `[PIPELINE] ${label}`
   );
@@ -269,7 +350,8 @@ function runNodeStage(
       process.execPath,
       [scriptPath],
       {
-        cwd: ROOT,
+        cwd:
+          ROOT,
 
         stdio:
           "inherit",
@@ -304,6 +386,9 @@ function runNodeStage(
  * ============================================================ */
 
 async function main() {
+  const iso =
+    targetDate();
+
   /* ----------------------------------------------------------
    * 1. READ PREDICTZ MATCHES
    * ---------------------------------------------------------- */
@@ -322,27 +407,84 @@ async function main() {
    * At this point it normally already contains:
    * - ClaudiuHood
    * - TalkFootball
+   *
+   * CRITICAL:
+   * Never reuse selections from another calendar day.
    * ---------------------------------------------------------- */
 
-  const pool =
+  const loadedPool =
     await readJsonSafe(
       MASTER_POOL_FILE,
-      {
-        date: null,
-
-        source:
-          "master_pool",
-
-        source_mode:
-          "empty",
-
-        sources_used:
-          [],
-
-        selections:
-          []
-      }
+      freshMasterPool(
+        iso,
+        "empty"
+      )
     );
+
+  let pool =
+    loadedPool &&
+    typeof loadedPool ===
+      "object"
+      ? loadedPool
+      : freshMasterPool(
+          iso,
+          "invalid_master_reset"
+        );
+
+  const existingDate =
+    safe(
+      pool.date
+    );
+
+  /*
+   * DAILY STALE-POOL GUARD
+   *
+   * If master_pool explicitly belongs to another date,
+   * reject every old selection before any downstream source
+   * or Flashscore fallback is run.
+   *
+   * This prevents:
+   *
+   * 2026-08-13 master selections
+   * +
+   * 2026-08-14 matches.json
+   *
+   * from ever being mixed.
+   */
+  if (
+    existingDate &&
+    existingDate !== iso
+  ) {
+    const staleCount =
+      Array.isArray(
+        pool.selections
+      )
+        ? pool.selections.length
+        : 0;
+
+    console.warn(
+      `[PIPELINE] stale master_pool detected: ` +
+      `${existingDate} != ${iso}; ` +
+      `discarding ${staleCount} selections`
+    );
+
+    pool =
+      freshMasterPool(
+        iso,
+        "stale_daily_pool_reset"
+      );
+  }
+
+  /*
+   * If an older producer created master_pool without a date,
+   * preserve its selections because Claudiu/TalkFootball may
+   * legitimately have been generated earlier in this same run.
+   *
+   * From this point forward, however, always stamp the pool
+   * with the current target date.
+   */
+  pool.date =
+    iso;
 
   const selections =
     Array.isArray(
@@ -505,6 +647,9 @@ async function main() {
       {
         ...pool,
 
+        date:
+          iso,
+
         source:
           "master_pool",
 
@@ -523,6 +668,10 @@ async function main() {
 
   console.log(
     `✅ predictz added: ${added}`
+  );
+
+  console.log(
+    `[PIPELINE] target date: ${iso}`
   );
 
   console.log(
@@ -591,6 +740,20 @@ async function main() {
       ? finalPool.selections
       : [];
 
+  const finalDate =
+    safe(
+      finalPool.date
+    );
+
+  if (
+    finalDate &&
+    finalDate !== iso
+  ) {
+    throw new Error(
+      `Final master_pool date mismatch: ${finalDate} != ${iso}`
+    );
+  }
+
   const sourceCounts =
     {};
 
@@ -613,6 +776,11 @@ async function main() {
   }
 
   console.log("");
+
+  console.log(
+    `[PIPELINE] FINAL date=${iso}`
+  );
+
   console.log(
     `[PIPELINE] FINAL pool=${finalSelections.length}`
   );
