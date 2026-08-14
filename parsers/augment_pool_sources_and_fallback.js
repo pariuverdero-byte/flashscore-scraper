@@ -2024,6 +2024,370 @@ function extractBetinum(
   return out;
 }
 
+
+function mrFixitsMarket(
+  prediction
+) {
+  const text =
+    safe(prediction);
+
+  if (!text) {
+    return null;
+  }
+
+  if (
+    /both\s+teams\s+to\s+score/i
+      .test(text)
+  ) {
+    return "Ambele echipe marcheaza";
+  }
+
+  let match =
+    text.match(
+      /\bover\s+(\d+(?:[.,]\d+)?)\s+goals?\b/i
+    );
+
+  if (match) {
+    return `Peste ${match[1].replace(",", ".")} goluri`;
+  }
+
+  match =
+    text.match(
+      /\bunder\s+(\d+(?:[.,]\d+)?)\s+goals?\b/i
+    );
+
+  if (match) {
+    return `Sub ${match[1].replace(",", ".")} goluri`;
+  }
+
+  return null;
+}
+
+function fractionalOddToDecimal(
+  value
+) {
+  const text =
+    safe(value)
+      .replace(",", ".");
+
+  if (!text) {
+    return null;
+  }
+
+  const decimal =
+    Number(text);
+
+  if (
+    Number.isFinite(decimal) &&
+    decimal > 1.01 &&
+    decimal <= 20
+  ) {
+    return Number(decimal.toFixed(3));
+  }
+
+  const fraction =
+    text.match(
+      /^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/
+    );
+
+  if (!fraction) {
+    return null;
+  }
+
+  const num =
+    Number(fraction[1]);
+
+  const den =
+    Number(fraction[2]);
+
+  if (
+    !Number.isFinite(num) ||
+    !Number.isFinite(den) ||
+    den <= 0
+  ) {
+    return null;
+  }
+
+  const odd =
+    1 + num / den;
+
+  if (
+    odd <= 1.01 ||
+    odd > 20
+  ) {
+    return null;
+  }
+
+  return Number(
+    odd.toFixed(3)
+  );
+}
+
+function extractMrFixitsTips(
+  html,
+  sourceUrl
+) {
+  const $ =
+    cheerio.load(
+      html,
+      {
+        decodeEntities: false
+      }
+    );
+
+  const xpertHeading =
+    $("h2")
+      .filter(
+        (_, el) =>
+          /^MFT'?s\s+X-pert\s+tip\s*:/i
+            .test(
+              safe(
+                $(el).text()
+              )
+            )
+      )
+      .first();
+
+  if (!xpertHeading.length) {
+    return [];
+  }
+
+  const headingText =
+    safe(
+      xpertHeading.text()
+    );
+
+  const colonIndex =
+    headingText.indexOf(":");
+
+  const sourcePrediction =
+    colonIndex >= 0
+      ? safe(
+          headingText.slice(
+            colonIndex + 1
+          )
+        )
+      : "";
+
+  const market =
+    mrFixitsMarket(
+      sourcePrediction
+    );
+
+  if (!market) {
+    return [];
+  }
+
+  let event =
+    null;
+
+  $("h3").each(
+    (_, el) => {
+      if (event) {
+        return;
+      }
+
+      const parsed =
+        splitEvent(
+          safe(
+            $(el).text()
+          )
+        );
+
+      if (parsed) {
+        event = parsed;
+      }
+    }
+  );
+
+  if (!event) {
+    const candidates = [
+      safe(
+        $("h1.page-title")
+          .first()
+          .text()
+      ),
+      safe(
+        $("title")
+          .first()
+          .text()
+      )
+    ];
+
+    for (const text of candidates) {
+      const parsed =
+        splitEvent(
+          text.replace(
+            /\s+Prediction\s+and\s+Betting\s+Tips.*$/i,
+            ""
+          )
+        );
+
+      if (parsed) {
+        event = parsed;
+        break;
+      }
+    }
+  }
+
+  if (!event) {
+    return [];
+  }
+
+  let odd =
+    null;
+
+  let oddRaw =
+    "";
+
+  let bookmaker =
+    "";
+
+  $(".row.alt_colors").each(
+    (_, row) => {
+      if (odd !== null) {
+        return;
+      }
+
+      const cols =
+        $(row).children("div");
+
+      if (cols.length < 2) {
+        return;
+      }
+
+      const pick =
+        safe(
+          cols
+            .eq(0)
+            .find("strong")
+            .first()
+            .text()
+        ) ||
+        safe(
+          cols
+            .eq(0)
+            .text()
+        );
+
+      if (
+        norm(pick) !==
+        norm(sourcePrediction)
+      ) {
+        return;
+      }
+
+      const raw =
+        safe(
+          cols
+            .eq(1)
+            .text()
+        );
+
+      const parsedOdd =
+        fractionalOddToDecimal(raw);
+
+      if (
+        parsedOdd === null ||
+        parsedOdd === undefined ||
+        !Number.isFinite(
+          Number(parsedOdd)
+        ) ||
+        Number(parsedOdd) <= 1.01
+      ) {
+        return;
+      }
+
+      odd =
+        Number(parsedOdd);
+
+      oddRaw =
+        raw;
+
+      bookmaker =
+        safe(
+          cols
+            .eq(2)
+            .text()
+        );
+    }
+  );
+
+  if (
+    odd === null ||
+    odd === undefined ||
+    !Number.isFinite(
+      Number(odd)
+    ) ||
+    Number(odd) <= 1.01
+  ) {
+    return [];
+  }
+
+  const sourceDate =
+    safe(sourceUrl)
+      .match(
+        /(20\d{2}-\d{2}-\d{2})/
+      )?.[1] || "";
+
+  const competition =
+    safe(
+      $(".previews-info a")
+        .first()
+        .text()
+    );
+
+  const selection =
+    makeRawSelection({
+      event,
+
+      market,
+
+      odd,
+
+      source:
+        "mrfixitstips",
+
+      sourceUrl,
+
+      extraMeta: {
+        parser:
+          "mrfixitstips",
+
+        source_prediction:
+          sourcePrediction,
+
+        source_odd_raw:
+          oddRaw,
+
+        source_bookmaker:
+          bookmaker,
+
+        source_date:
+          sourceDate,
+
+        source_competition:
+          competition,
+
+        source_tip_type:
+          "xpert"
+      }
+    });
+
+  if (!selection) {
+    return [];
+  }
+
+  selection.date =
+    sourceDate;
+
+  selection.competition =
+    competition;
+
+  return [selection];
+}
+
+
 function extractSelectionsBySource(
   html,
   source,
@@ -2074,6 +2438,16 @@ function extractSelectionsBySource(
     "betinum"
   ) {
     return extractBetinum(
+      html,
+      sourceUrl
+    );
+  }
+
+  if (
+    source ===
+    "mrfixitstips"
+  ) {
+    return extractMrFixitsTips(
       html,
       sourceUrl
     );
@@ -2181,6 +2555,18 @@ function articleLinks(
             /biletul zilei|biletulzilei|cota 2|ponturi/i
               .test(
                 `${text} ${url}`
+              );
+        }
+
+        if (
+          !relevant &&
+          source ===
+          "mrfixitstips"
+        ) {
+          relevant =
+            /\/previews\/.*prediction-and-betting-tips/i
+              .test(
+                url
               );
         }
 
@@ -2531,6 +2917,18 @@ function sourceConfigs(
 
       discover:
         false
+    },
+
+    {
+      source:
+        "mrfixitstips",
+
+      urls: [
+        "https://mrfixitstips.co.uk/football/"
+      ],
+
+      discover:
+        true
     }
   ];
 }

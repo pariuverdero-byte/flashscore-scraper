@@ -117,6 +117,10 @@ const TEAM_ALIASES = {
   "braga": "braga",
 
   "kr reykjavik": "kr",
+
+  "wolverhampton wanderers": "wolves",
+  "wolverhampton": "wolves",
+  "wolves": "wolves",
 };
 
 // ============================================================
