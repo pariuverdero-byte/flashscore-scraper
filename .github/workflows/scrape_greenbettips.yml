@@ -592,62 +592,64 @@ jobs:
           echo "Published: ${PUBLISHED_COUNT}"
           echo "Skipped: ${SKIPPED_COUNT}"
 
-          node -e "
-            const fs = require('fs');
+          PUBLISHED_COUNT="$PUBLISHED_COUNT" \
+          SKIPPED_COUNT="$SKIPPED_COUNT" \
+          node <<'NODE'
+          const fs = require('fs');
 
-            const ticketTypes = [
-              'bilet_cota2',
-              'biletul_zilei'
-            ];
+          const ticketTypes = [
+            'bilet_cota2',
+            'biletul_zilei'
+          ];
 
-            const results = [];
+          const results = [];
 
-            for (const ticketType of ticketTypes) {
-              const payloadFile =
-                `output/${ticketType}/shorts_payload.json`;
+          for (const ticketType of ticketTypes) {
+            const payloadFile =
+              `output/${ticketType}/shorts_payload.json`;
 
-              const resultFile =
-                `output/${ticketType}/distribution_results.json`;
+            const resultFile =
+              `output/${ticketType}/distribution_results.json`;
 
-              let payload = null;
-              let distribution = null;
+            let payload = null;
+            let distribution = null;
 
-              if (fs.existsSync(payloadFile)) {
-                payload = JSON.parse(
-                  fs.readFileSync(payloadFile, 'utf8')
-                );
-              }
-
-              if (fs.existsSync(resultFile)) {
-                distribution = JSON.parse(
-                  fs.readFileSync(resultFile, 'utf8')
-                );
-              }
-
-              results.push({
-                ticketType,
-                payloadStatus: payload?.status || 'missing',
-                reason: payload?.reason || null,
-                publishingStatus:
-                  distribution?.status || 'not_published',
-                youtube: distribution?.youtube || null
-              });
+            if (fs.existsSync(payloadFile)) {
+              payload = JSON.parse(
+                fs.readFileSync(payloadFile, 'utf8')
+              );
             }
 
-            const summary = {
-              status: 'completed',
-              generatedAt: new Date().toISOString(),
-              publishedCount: Number(process.argv[1]),
-              skippedCount: Number(process.argv[2]),
-              results
-            };
+            if (fs.existsSync(resultFile)) {
+              distribution = JSON.parse(
+                fs.readFileSync(resultFile, 'utf8')
+              );
+            }
 
-            fs.writeFileSync(
-              'output/publishing_summary.json',
-              JSON.stringify(summary, null, 2),
-              'utf8'
-            );
-          " "$PUBLISHED_COUNT" "$SKIPPED_COUNT"
+            results.push({
+              ticketType,
+              payloadStatus: payload?.status || 'missing',
+              reason: payload?.reason || null,
+              publishingStatus:
+                distribution?.status || 'not_published',
+              youtube: distribution?.youtube || null
+            });
+          }
+
+          const summary = {
+            status: 'completed',
+            generatedAt: new Date().toISOString(),
+            publishedCount: Number(process.env.PUBLISHED_COUNT || 0),
+            skippedCount: Number(process.env.SKIPPED_COUNT || 0),
+            results
+          };
+
+          fs.writeFileSync(
+            'output/publishing_summary.json',
+            JSON.stringify(summary, null, 2),
+            'utf8'
+          );
+          NODE
 
           cat output/publishing_summary.json
 
