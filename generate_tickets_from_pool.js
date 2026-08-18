@@ -162,6 +162,23 @@ function selectionFingerprint(s) {
   return `${safe(s.match_id)}|${norm(s.market_raw)}|${Number(s.odd).toFixed(3)}`;
 }
 
+function ticketFingerprint(ticket) {
+  return ticket.selections.map(selectionFingerprint).sort().join("||");
+}
+
+function mergeTickets(primary, secondary, limit = 40) {
+  const seen = new Set();
+  const out = [];
+  for (const ticket of [...primary, ...secondary]) {
+    const fp = ticketFingerprint(ticket);
+    if (seen.has(fp)) continue;
+    seen.add(fp);
+    out.push(ticket);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 function attachBundleMeta(list, mode, c2Count, dayCount) {
   list.mode = mode;
   list.cota2Candidates = c2Count;
@@ -170,15 +187,20 @@ function attachBundleMeta(list, mode, c2Count, dayCount) {
 }
 
 function buildBundles(pool) {
-  const c2 = enumerate(pool, 2, 2, COTA2.min, COTA2.max, COTA2.target, 25);
+  const c2Strict = enumerate(pool, 2, 2, COTA2.min, COTA2.max, COTA2.target, 25);
+  const c2Singles = enumerate(pool, 1, 1, COTA2.min, COTA2.max, COTA2.target, 25);
+  const c2Fallback = mergeTickets(c2Strict, c2Singles, 40);
   const day = enumerate(pool, ZI.minSize, ZI.maxSize, ZI.min, ZI.max, ZI.target, 40);
 
   console.log(`[GENERATOR] verifier-compatible pool: ${pool.length}`);
-  console.log(`[GENERATOR] Cota2 candidates: ${c2.length}`);
+  console.log(`[GENERATOR] Cota2 strict 2-pick candidates: ${c2Strict.length}`);
+  console.log(`[GENERATOR] Cota2 single-pick fallback candidates: ${c2Singles.length}`);
   console.log(`[GENERATOR] Biletul Zilei candidates: ${day.length}`);
 
+  // Level 1: preserve the original preference — Cota 2 has two selections and
+  // the two tickets use completely different matches.
   const strict = [];
-  for (const a of c2) {
+  for (const a of c2Strict) {
     const aIds = new Set(a.selections.map(s => s.match_id));
     for (const b of day) {
       if (b.selections.some(s => aIds.has(s.match_id))) continue;
@@ -189,38 +211,40 @@ function buildBundles(pool) {
   }
   strict.sort((a, b) => b.score - a.score);
   console.log(`[GENERATOR] Strict bundles: ${strict.length}`);
-  if (strict.length) return attachBundleMeta(strict.slice(0, 80), "strict", c2.length, day.length);
+  if (strict.length) return attachBundleMeta(strict.slice(0, 80), "strict", c2Fallback.length, day.length);
 
-  // Fallback 1: the same match may appear in both tickets, but never the exact same selection.
+  // Level 2: Cota 2 may also be a valid single selection with total odds in the
+  // configured range. The same match may appear in both tickets, but never the
+  // exact same selection.
   const overlap = [];
-  for (const a of c2) {
+  for (const a of c2Fallback) {
     const aSelections = new Set(a.selections.map(selectionFingerprint));
     for (const b of day) {
       if (b.selections.some(s => aSelections.has(selectionFingerprint(s)))) continue;
-      overlap.push({ id: `F${String(overlap.length + 1).padStart(3, "0")}`, cota2: a, day: b, score: a.score + b.score - 0.5, fallback_mode: "shared_match_different_selection" });
+      overlap.push({ id: `F${String(overlap.length + 1).padStart(3, "0")}`, cota2: a, day: b, score: a.score + b.score - 0.5, fallback_mode: a.selections.length === 1 ? "single_cota2_shared_match_allowed" : "shared_match_different_selection" });
       if (overlap.length >= 120) break;
     }
     if (overlap.length >= 120) break;
   }
   overlap.sort((a, b) => b.score - a.score);
-  console.log(`[GENERATOR] Shared-match fallback bundles: ${overlap.length}`);
-  if (overlap.length) return attachBundleMeta(overlap.slice(0, 80), "shared_match_different_selection", c2.length, day.length);
+  console.log(`[GENERATOR] Flexible fallback bundles: ${overlap.length}`);
+  if (overlap.length) return attachBundleMeta(overlap.slice(0, 80), "flexible", c2Fallback.length, day.length);
 
-  // Fallback 2: generate the two ticket types independently. This keeps publishing alive
-  // even when the only feasible candidates overlap completely or only one ticket type exists.
-  if (c2.length || day.length) {
+  // Level 3: generate each ticket type independently. This keeps publishing alive
+  // when all feasible candidates overlap completely or only one ticket type exists.
+  if (c2Fallback.length || day.length) {
     const independent = [{
       id: "I001",
-      cota2: c2[0] || null,
+      cota2: c2Fallback[0] || null,
       day: day[0] || null,
-      score: (c2[0]?.score || 0) + (day[0]?.score || 0),
+      score: (c2Fallback[0]?.score || 0) + (day[0]?.score || 0),
       fallback_mode: "independent"
     }];
-    console.log(`[GENERATOR] Independent fallback active: cota2=${Boolean(c2[0])} day=${Boolean(day[0])}`);
-    return attachBundleMeta(independent, "independent", c2.length, day.length);
+    console.log(`[GENERATOR] Independent fallback active: cota2=${Boolean(c2Fallback[0])} day=${Boolean(day[0])}`);
+    return attachBundleMeta(independent, "independent", c2Fallback.length, day.length);
   }
 
-  return attachBundleMeta([], "none", c2.length, day.length);
+  return attachBundleMeta([], "none", c2Fallback.length, day.length);
 }
 
 function splitCanonicalTeams(teams = "") {
