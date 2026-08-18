@@ -1,26 +1,38 @@
-import fs from "fs/promises";
+// verify_and_update_wp_runtime.js
+// Compatibility launcher for verify_and_update_wp.js
+//
+// The previous version dynamically patched cleanTeamName() before running
+// the verifier. That patch is obsolete because verify_and_update_wp.js
+// has since been refactored.
+//
+// This launcher is intentionally kept so existing GitHub Actions workflows
+// can continue calling verify_and_update_wp_runtime.js without modification.
+
 import path from "path";
 import { pathToFileURL } from "url";
 
 const corePath = path.resolve("verify_and_update_wp.js");
-const runtimePath = path.resolve(".verify_and_update_wp_runtime.mjs");
 
-let source = await fs.readFile(corePath, "utf8");
-
-const oldNamedTeam = `    const cleanTeamName = (name) =>\n      normalize(name)\n        .replace(/\\s*\\([^)]{2,12}\\)\\s*$/g, "")\n        .trim();`;
-
-const newNamedTeam = `    const cleanTeamName = (name) =>\n      normalize(\n        String(name || "")\n          .replace(/\\s*\\([^)]{2,12}\\)\\s*$/g, "")\n      )\n        .trim();`;
-
-if (source.includes(oldNamedTeam)) {
-  source = source.replace(oldNamedTeam, newNamedTeam);
-} else if (!source.includes(newNamedTeam)) {
-  throw new Error("Named-team verifier patch target was not found.");
-}
-
-await fs.writeFile(runtimePath, source, "utf8");
+console.log(
+  `[VERIFY RUNTIME] Starting verifier: ${corePath}`
+);
 
 try {
-  await import(`${pathToFileURL(runtimePath).href}?t=${Date.now()}`);
-} finally {
-  await fs.unlink(runtimePath).catch(() => {});
+  await import(
+    `${pathToFileURL(corePath).href}?runtime=${Date.now()}`
+  );
+
+  console.log(
+    "[VERIFY RUNTIME] Verifier completed."
+  );
+} catch (error) {
+  console.error(
+    "[VERIFY RUNTIME] Verifier failed:"
+  );
+
+  console.error(
+    error?.stack || error?.message || error
+  );
+
+  process.exitCode = 1;
 }
