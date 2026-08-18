@@ -158,23 +158,70 @@ function enumerate(pool, minSize, maxSize, minOdd, maxOdd, target, limit) {
   return uniq;
 }
 
+function selectionFingerprint(s) {
+  return `${safe(s.match_id)}|${norm(s.market_raw)}|${Number(s.odd).toFixed(3)}`;
+}
+
+function attachBundleMeta(list, mode, c2Count, dayCount) {
+  list.mode = mode;
+  list.cota2Candidates = c2Count;
+  list.dayCandidates = dayCount;
+  return list;
+}
+
 function buildBundles(pool) {
   const c2 = enumerate(pool, 2, 2, COTA2.min, COTA2.max, COTA2.target, 25);
   const day = enumerate(pool, ZI.minSize, ZI.maxSize, ZI.min, ZI.max, ZI.target, 40);
-  const bundles = [];
+
+  console.log(`[GENERATOR] verifier-compatible pool: ${pool.length}`);
+  console.log(`[GENERATOR] Cota2 candidates: ${c2.length}`);
+  console.log(`[GENERATOR] Biletul Zilei candidates: ${day.length}`);
+
+  const strict = [];
   for (const a of c2) {
     const aIds = new Set(a.selections.map(s => s.match_id));
     for (const b of day) {
       if (b.selections.some(s => aIds.has(s.match_id))) continue;
-      bundles.push({ id: `B${String(bundles.length + 1).padStart(3, "0")}`, cota2: a, day: b, score: a.score + b.score });
-      if (bundles.length >= 120) break;
+      strict.push({ id: `B${String(strict.length + 1).padStart(3, "0")}`, cota2: a, day: b, score: a.score + b.score, fallback_mode: "strict" });
+      if (strict.length >= 120) break;
     }
-    if (bundles.length >= 120) break;
+    if (strict.length >= 120) break;
   }
-  bundles.sort((a, b) => b.score - a.score);
-  return bundles.slice(0, 80);
-}
+  strict.sort((a, b) => b.score - a.score);
+  console.log(`[GENERATOR] Strict bundles: ${strict.length}`);
+  if (strict.length) return attachBundleMeta(strict.slice(0, 80), "strict", c2.length, day.length);
 
+  // Fallback 1: the same match may appear in both tickets, but never the exact same selection.
+  const overlap = [];
+  for (const a of c2) {
+    const aSelections = new Set(a.selections.map(selectionFingerprint));
+    for (const b of day) {
+      if (b.selections.some(s => aSelections.has(selectionFingerprint(s)))) continue;
+      overlap.push({ id: `F${String(overlap.length + 1).padStart(3, "0")}`, cota2: a, day: b, score: a.score + b.score - 0.5, fallback_mode: "shared_match_different_selection" });
+      if (overlap.length >= 120) break;
+    }
+    if (overlap.length >= 120) break;
+  }
+  overlap.sort((a, b) => b.score - a.score);
+  console.log(`[GENERATOR] Shared-match fallback bundles: ${overlap.length}`);
+  if (overlap.length) return attachBundleMeta(overlap.slice(0, 80), "shared_match_different_selection", c2.length, day.length);
+
+  // Fallback 2: generate the two ticket types independently. This keeps publishing alive
+  // even when the only feasible candidates overlap completely or only one ticket type exists.
+  if (c2.length || day.length) {
+    const independent = [{
+      id: "I001",
+      cota2: c2[0] || null,
+      day: day[0] || null,
+      score: (c2[0]?.score || 0) + (day[0]?.score || 0),
+      fallback_mode: "independent"
+    }];
+    console.log(`[GENERATOR] Independent fallback active: cota2=${Boolean(c2[0])} day=${Boolean(day[0])}`);
+    return attachBundleMeta(independent, "independent", c2.length, day.length);
+  }
+
+  return attachBundleMeta([], "none", c2.length, day.length);
+}
 
 function splitCanonicalTeams(teams = "") {
   const cleaned = safe(teams).replace(/\s+[–—−]\s+/g, " - ");
@@ -301,7 +348,6 @@ function buildGoalsEvidence(prematch, market) {
     away_avg_total_goals: aa
   };
 
-  // Exact-line hit rates only with a full five-match sample for both teams.
   const key = `${direction}_${String(line).replace(".", "_")}`;
   if (
     hm >= 5 && am >= 5 &&
@@ -403,7 +449,6 @@ function buildAnalysisEvidence(selection, prematch) {
   }
 
   if (cls === "goals") {
-    // Current prematch parser does not reliably expose team-specific GF/GA perspective.
     if (/team goals|team total|goluri echip|gol echip/i.test(market)) {
       return { usable: false, type: "team_goals" };
     }
@@ -412,7 +457,6 @@ function buildAnalysisEvidence(selection, prematch) {
 
   if (cls === "btts") return buildBttsEvidence(prematch);
 
-  // Do not comment on corners/cards until genuine historical averages are supplied.
   if (cls === "corners" || cls === "cards") {
     return { usable: false, type: cls };
   }
@@ -448,14 +492,13 @@ function cleanReason(reason, evidence) {
   return banned.some(rule => rule.test(text)) ? "" : text;
 }
 
-
 async function collectPrematchContext(bundles) {
   if (!OPENAI_API_KEY || AI_PREMATCH_MAX <= 0) return new Map();
 
   const unique = new Map();
 
   for (const b of bundles.slice(0, 30)) {
-    for (const t of [b.cota2, b.day]) {
+    for (const t of [b.cota2, b.day].filter(Boolean)) {
       for (const s of t.selections) {
         if (unique.size >= AI_PREMATCH_MAX) break;
         if (!unique.has(s.match_id)) unique.set(s.match_id, s);
@@ -518,8 +561,11 @@ function responseText(body) {
 
 async function askAI(bundles, prematchContext = new Map()) {
   if (!OPENAI_API_KEY || !bundles.length) return null;
+  const eligibleBundles = bundles.filter(b => b.cota2 && b.day);
+  if (!eligibleBundles.length) return null;
+
   const selectionMap = new Map();
-  for (const b of bundles) for (const t of [b.cota2, b.day]) for (const s of t.selections) selectionMap.set(s.__sid, s);
+  for (const b of eligibleBundles) for (const t of [b.cota2, b.day].filter(Boolean)) for (const s of t.selections) selectionMap.set(s.__sid, s);
   const selections = [...selectionMap.entries()].map(([selection_id, s]) => ({
     selection_id,
     teams: s.teams,
@@ -532,7 +578,7 @@ async function askAI(bundles, prematchContext = new Map()) {
       prematchContext.get(s.match_id) || null
     )
   }));
-  const compactBundles = bundles.map(b => ({
+  const compactBundles = eligibleBundles.map(b => ({
     bundle_id: b.id,
     cota2_total: Number(b.cota2.product.toFixed(3)), cota2_selection_ids: b.cota2.selections.map(s => s.__sid),
     day_total: Number(b.day.product.toFixed(3)), day_selection_ids: b.day.selections.map(s => s.__sid)
@@ -540,7 +586,7 @@ async function askAI(bundles, prematchContext = new Map()) {
   const schema = {
     type: "object", additionalProperties: false,
     properties: {
-      bundle_id: { type: "string", enum: bundles.map(b => b.id) },
+      bundle_id: { type: "string", enum: eligibleBundles.map(b => b.id) },
       annotations: { type: "array", minItems: 1, maxItems: 6, items: {
         type: "object", additionalProperties: false,
         properties: {
@@ -617,6 +663,7 @@ LANGUAGE:
 }
 
 function decorate(ticket, annotations) {
+  if (!ticket) return null;
   const map = new Map((annotations || []).map(a => [safe(a.selection_id), a]));
   return {
     product: Number(ticket.product.toFixed(3)),
@@ -650,19 +697,26 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
     const canonical = (poolData?.selections || []).map(s => canonicalize(s, matches)).filter(Boolean);
     const pool = preparePool(canonical);
     pool.forEach((s, i) => { s.__sid = `S${String(i + 1).padStart(3, "0")}`; });
+
+    console.log(`[GENERATOR] canonical selections: ${canonical.length}`);
     const bundles = buildBundles(pool);
     if (!bundles.length) {
-      await writeNoPicks(date, "No compatible ticket bundle after strict Flashscore matching", pool.length, { source_mode: poolData?.source_mode || "unknown" });
-      console.log(`[AI] no bundles; canonical=${canonical.length}, pool=${pool.length}`);
+      await writeNoPicks(date, "No compatible Cota 2 or Biletul Zilei candidate after strict Flashscore matching", pool.length, {
+        source_mode: poolData?.source_mode || "unknown",
+        cota2_candidates: bundles.cota2Candidates || 0,
+        biletul_zilei_candidates: bundles.dayCandidates || 0
+      });
+      console.log(`[GENERATOR] FINAL STATUS: no_picks`);
       return;
     }
+
     let chosen = bundles[0], annotations = [], aiUsed = false, aiError = null;
     let prematchContext = new Map();
     try {
       prematchContext = await collectPrematchContext(bundles);
 
       for (const bundle of bundles) {
-        for (const ticket of [bundle.cota2, bundle.day]) {
+        for (const ticket of [bundle.cota2, bundle.day].filter(Boolean)) {
           for (const selection of ticket.selections) {
             selection.__analysisEvidence = buildAnalysisEvidence(
               selection,
@@ -676,7 +730,7 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
       if (ai) {
         const found = bundles.find(b => b.id === ai.bundle_id);
         if (!found) throw new Error("AI selected unknown bundle");
-        const allowed = new Set([...found.cota2.selections, ...found.day.selections].map(s => s.__sid));
+        const allowed = new Set([...(found.cota2?.selections || []), ...(found.day?.selections || [])].map(s => s.__sid));
         annotations = (ai.annotations || []).filter(a => allowed.has(a.selection_id));
         chosen = found; aiUsed = true;
       }
@@ -684,17 +738,39 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
       aiError = e?.message || String(e);
       console.warn(`[AI] safe fallback: ${aiError}`);
     }
+
     const out = {
-      date, source: "master_pool", source_mode: poolData?.source_mode || "unknown", status: "ok", reason: null,
-      pool_size: pool.length, canonical_matches: canonical.length, ai_used: aiUsed, ai_model: aiUsed ? OPENAI_MODEL : null, ai_error: aiError,
-      bilet_cota2: decorate(chosen.cota2, annotations), biletul_zilei: decorate(chosen.day, annotations)
+      date,
+      source: "master_pool",
+      source_mode: poolData?.source_mode || "unknown",
+      status: "ok",
+      reason: null,
+      generation_mode: chosen.fallback_mode || bundles.mode || "strict",
+      pool_size: pool.length,
+      canonical_matches: canonical.length,
+      cota2_candidates: bundles.cota2Candidates || 0,
+      biletul_zilei_candidates: bundles.dayCandidates || 0,
+      ai_used: aiUsed,
+      ai_model: aiUsed ? OPENAI_MODEL : null,
+      ai_error: aiError,
+      bilet_cota2: decorate(chosen.cota2, annotations),
+      biletul_zilei: decorate(chosen.day, annotations)
     };
+
     await fs.writeFile("tickets.json", JSON.stringify(out, null, 2));
-    const md = [`# Tickets — ${date}`, `AI: ${aiUsed ? OPENAI_MODEL : "local fallback"}`, "", `## Cota 2 — ${out.bilet_cota2.product}`];
-    for (const s of out.bilet_cota2.selections) md.push(`- ${s.teams} — ${s.ai.label_ro} @ ${s.odd}`);
-    md.push("", `## Biletul zilei — ${out.biletul_zilei.product}`);
-    for (const s of out.biletul_zilei.selections) md.push(`- ${s.teams} — ${s.ai.label_ro} @ ${s.odd}`);
+
+    const md = [`# Tickets — ${date}`, `Mode: ${out.generation_mode}`, `AI: ${aiUsed ? OPENAI_MODEL : "local fallback"}`];
+    if (out.bilet_cota2) {
+      md.push("", `## Cota 2 — ${out.bilet_cota2.product}`);
+      for (const s of out.bilet_cota2.selections) md.push(`- ${s.teams} — ${s.ai.label_ro} @ ${s.odd}`);
+    }
+    if (out.biletul_zilei) {
+      md.push("", `## Biletul zilei — ${out.biletul_zilei.product}`);
+      for (const s of out.biletul_zilei.selections) md.push(`- ${s.teams} — ${s.ai.label_ro} @ ${s.odd}`);
+    }
     await fs.writeFile("tickets.md", md.join("\n"));
+
+    console.log(`[GENERATOR] FINAL STATUS: ok mode=${out.generation_mode} cota2=${Boolean(out.bilet_cota2)} day=${Boolean(out.biletul_zilei)}`);
     console.log(`[AI] canonical=${canonical.length} pool=${pool.length} bundles=${bundles.length} ai_used=${aiUsed}`);
   } catch (e) {
     console.error("[AI] generator error:", e);
