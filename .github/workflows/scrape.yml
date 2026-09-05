@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
   schedule:
     # GitHub Actions cron uses UTC.
-    # 13:30 UTC = 16:30 in Romania during daylight-saving time (summer).
-    # During winter, change this to "30 14 * * *" to keep 16:30 Romania time.
-    - cron: "30 13 * * *"
+    # 11:30 UTC = 14:30 in Romania during daylight-saving time (summer)
+    # and 13:30 during standard time (winter).
+    - cron: "30 11 * * *"
 
 jobs:
   scrape-build-publish:
