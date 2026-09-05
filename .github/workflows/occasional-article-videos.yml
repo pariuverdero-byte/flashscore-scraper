@@ -67,6 +67,9 @@ jobs:
       OCCASIONAL_YOUTUBE_RETRY_ATTEMPTS: "3"
       YOUTUBE_PRIVACY_STATUS: public
       OCCASIONAL_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+      ELEVENLABS_VOICE_ID_RO: ${{ secrets.ELEVENLABS_VOICE_ID_RO }}
+      ELEVENLABS_VOICE_ID_EN: ${{ secrets.ELEVENLABS_VOICE_ID_EN }}
 
     steps:
       - name: Checkout repository
@@ -129,6 +132,7 @@ jobs:
             "occasional/render_article_video.js"
             "occasional/build_manifest.js"
             "occasional/process_site.js"
+            "scripts/generate_voice.js"
             "publish/platforms/youtube.js"
           )
 

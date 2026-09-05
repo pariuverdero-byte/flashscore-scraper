@@ -35,6 +35,8 @@ jobs:
       SHORTS_TTS_VOICE: "en-US-AndrewNeural"
       SHORTS_TTS_RATE: "+2%"
       SHORTS_TTS_PITCH: "+1Hz"
+      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+      ELEVENLABS_VOICE_ID_EN: ${{ secrets.ELEVENLABS_VOICE_ID_EN }}
 
       SHORTS_PRESENTER_SCALE_MIN: "0.88"
       SHORTS_PRESENTER_SCALE_MAX: "1.02"
@@ -308,6 +310,7 @@ jobs:
             "assets/intros/en/intro_01.mp4"
             "shorts/build_all_shorts.js"
             "shorts/render_short.js"
+            "scripts/generate_voice.js"
             "publish/generate_manifest.js"
             "publish/platforms/youtube.js"
           )

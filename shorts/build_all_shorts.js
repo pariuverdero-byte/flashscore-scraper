@@ -931,26 +931,19 @@ function generateVoice({
    */
 
   runCommand(
-    "edge-tts",
-    [
-      "--voice",
-      TTS_VOICE,
-
-      `--rate=${TTS_RATE}`,
-
-      `--pitch=${TTS_PITCH}`,
-
-      "--volume=+0%",
-
-      "--file",
-      scriptFile,
-
-      "--write-media",
-      voiceFile,
-
-      "--write-subtitles",
-      subtitlesFile
-    ]
+    "node",
+    ["scripts/generate_voice.js"],
+    {
+      env: {
+        VOICE_SCRIPT_FILE: scriptFile,
+        VOICE_AUDIO_FILE: voiceFile,
+        VOICE_SUBTITLES_FILE: subtitlesFile,
+        VOICE_LANGUAGE: LANGUAGE,
+        EDGE_TTS_VOICE: TTS_VOICE,
+        EDGE_TTS_RATE: TTS_RATE,
+        EDGE_TTS_PITCH: TTS_PITCH
+      }
+    }
   );
 
   requireFile(

@@ -296,6 +296,7 @@ jobs:
             "assets/intros/en/intro_01.mp4"
             "shorts/build_all_shorts.js"
             "shorts/render_short.js"
+            "scripts/generate_voice.js"
             "publish/generate_manifest.js"
           )
 
