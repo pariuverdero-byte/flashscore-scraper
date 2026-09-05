@@ -14,9 +14,13 @@ export const SITES = {
     doneTagId: 710,
 
     presenterFiles: [
-      "assets/presenters/ro_presenter_01.mp4",
-      "assets/presenters/ro_presenter_02.mp4",
-      "assets/presenters/ro_presenter_03.mp4"
+      "assets/intros/ro/intro_01.mp4",
+      "assets/intros/ro/intro_02.mp4",
+      "assets/intros/ro/intro_03.mp4",
+      "assets/intros/ro/intro_04.mp4",
+      "assets/intros/ro/intro_05.mp4",
+      "assets/intros/ro/intro_06.mp4",
+      "assets/intros/ro/intro_07.mp4"
     ],
 
     ttsVoice: "ro-RO-EmilNeural",
@@ -50,9 +54,14 @@ export const SITES = {
     doneTagId: 709,
 
     presenterFiles: [
-      "assets/presenters/en_presenter_01.mp4",
-      "assets/presenters/en_presenter_02.mp4",
-      "assets/presenters/en_presenter_03.mp4"
+      "assets/intros/en/intro_01.mp4",
+      "assets/intros/en/intro_02.mp4",
+      "assets/intros/en/intro_03.mp4",
+      "assets/intros/en/intro_04.mp4",
+      "assets/intros/en/intro_05.mp4",
+      "assets/intros/en/intro_06.mp4",
+      "assets/intros/en/intro_07.mp4",
+      "assets/intros/en/intro_08.mp4"
     ],
 
     ttsVoice: "en-US-AndrewNeural",

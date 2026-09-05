@@ -348,7 +348,10 @@ async function processPost({
       article.files.scriptFile,
 
       "--write-media",
-      article.files.voiceFile
+      article.files.voiceFile,
+
+      "--write-subtitles",
+      article.files.subtitlesFile
     ]
   );
 
@@ -357,6 +360,9 @@ async function processPost({
 
     voiceFile:
       article.files.voiceFile,
+
+    subtitlesFile:
+      article.files.subtitlesFile,
 
     titleFile:
       article.files.titleFile,

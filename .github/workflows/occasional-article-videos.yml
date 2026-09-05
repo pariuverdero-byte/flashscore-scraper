@@ -120,6 +120,8 @@ jobs:
           set -euo pipefail
 
           REQUIRED_FILES=(
+            "assets/intros/ro/intro_01.mp4"
+            "assets/intros/en/intro_01.mp4"
             "occasional/config.js"
             "occasional/helpers.js"
             "occasional/wordpress.js"
