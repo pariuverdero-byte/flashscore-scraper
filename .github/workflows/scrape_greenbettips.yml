@@ -31,7 +31,7 @@ jobs:
       PV_ZI_TOL: "0.00"
 
       SHORTS_OUTPUT_ROOT: "output"
-      SHORTS_PRESENTER_FILES: "assets/presenters/en_presenter_01.mp4,assets/presenters/en_presenter_02.mp4,assets/presenters/en_presenter_03.mp4,assets/presenters/presenter-01.mp4"
+      SHORTS_PRESENTER_FILES: "assets/intros/en/intro_01.mp4,assets/intros/en/intro_02.mp4,assets/intros/en/intro_03.mp4,assets/intros/en/intro_04.mp4,assets/intros/en/intro_05.mp4,assets/intros/en/intro_06.mp4,assets/intros/en/intro_07.mp4,assets/intros/en/intro_08.mp4"
       SHORTS_TTS_VOICE: "en-US-AndrewNeural"
       SHORTS_TTS_RATE: "+2%"
       SHORTS_TTS_PITCH: "+1Hz"
@@ -305,7 +305,7 @@ jobs:
           set -euo pipefail
 
           REQUIRED_FILES=(
-            "assets/presenters/presenter-01.mp4"
+            "assets/intros/en/intro_01.mp4"
             "shorts/build_all_shorts.js"
             "shorts/render_short.js"
             "publish/generate_manifest.js"
@@ -328,7 +328,7 @@ jobs:
             -show_entries stream=codec_name,width,height,r_frame_rate \
             -show_entries format=duration,size \
             -of default=noprint_wrappers=1 \
-            assets/presenters/presenter-01.mp4
+            assets/intros/en/intro_01.mp4
 
       # ==================================================
       # 11) BUILD ALL AVAILABLE SHORTS

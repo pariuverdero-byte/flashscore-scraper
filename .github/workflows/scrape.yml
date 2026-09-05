@@ -51,7 +51,7 @@ jobs:
       # CONTENT ENGINE
       # ==================================================
       SHORTS_OUTPUT_ROOT: "output"
-      SHORTS_PRESENTER_FILES: "assets/presenters/ro_presenter_01.mp4,assets/presenters/ro_presenter_02.mp4,assets/presenters/ro_presenter_03.mp4"
+      SHORTS_PRESENTER_FILES: "assets/intros/ro/intro_01.mp4,assets/intros/ro/intro_02.mp4,assets/intros/ro/intro_03.mp4,assets/intros/ro/intro_04.mp4,assets/intros/ro/intro_05.mp4,assets/intros/ro/intro_06.mp4,assets/intros/ro/intro_07.mp4"
 
       SHORTS_TTS_VOICE: "ro-RO-EmilNeural"
       SHORTS_TTS_RATE: "+1%"
@@ -402,7 +402,7 @@ jobs:
           set -euo pipefail
 
           REQUIRED_FILES=(
-            "assets/presenters/ro_presenter_01.mp4"
+            "assets/intros/ro/intro_01.mp4"
             "shorts/generate_shorts_payload.js"
             "shorts/build_all_shorts.js"
             "shorts/render_short.js"
@@ -426,7 +426,7 @@ jobs:
             -show_entries stream=codec_name,width,height,r_frame_rate \
             -show_entries format=duration,size \
             -of default=noprint_wrappers=1 \
-            assets/presenters/ro_presenter_01.mp4
+            assets/intros/ro/intro_01.mp4
 
       # ==================================================
       # 11) BUILD ALL AVAILABLE ROMANIAN SHORTS

@@ -27,6 +27,12 @@ const LANG =
     .trim()
     .toLowerCase();
 
+const REQUIRE_EVIDENCE =
+  String(
+    process.env.SHORTS_REQUIRE_EVIDENCE ??
+    "true"
+  ).toLowerCase() !== "false";
+
 /*
  * =========================================================
  * BRAND CONFIGURATION
@@ -1492,41 +1498,12 @@ function buildVoiceScript(
   const phrases =
     getVoicePhrases(random);
 
-  const introOptions =
-    phrases.intros[
-      TICKET_TYPE
-    ] ||
-    phrases.intros.biletul_zilei;
-
   const lines = [];
 
-  const intro =
-    pickRandom(
-      introOptions,
-      random
-    );
-
-  const mentionBrand =
-    random() >= 0.45;
-
-  lines.push(
-    capitalizeFirst(
-      intro
-    )
-  );
-
-  if (mentionBrand) {
-    lines.push(
-      `${capitalizeFirst(
-        pickRandom(
-          phrases.brandMentions,
-          random
-        )
-      )}.`
-    );
-  }
-
-  lines.push("");
+  /*
+   * The greeting and presenter introduction are recorded in the intro clip.
+   * Starting TTS directly with the first match avoids repeating that message.
+   */
 
   matches.forEach(
     (
@@ -1922,7 +1899,7 @@ async function writeSkippedPayload(
       "skipped",
 
     version:
-      4,
+      5,
 
     reason,
 
@@ -2046,6 +2023,33 @@ async function main() {
       selectionToPayload
     );
 
+  const missingAnalysis =
+    matches.filter(
+      (match) =>
+        !match.analysisReason ||
+        !/\d/.test(match.analysisReason)
+    );
+
+  if (
+    REQUIRE_EVIDENCE &&
+    (
+      tickets.ai_used !== true ||
+      missingAnalysis.length > 0
+    )
+  ) {
+    const reason =
+      LANG === "ro"
+        ? "Videoclip omis: analiza OpenAI nu are statistici recente verificabile pentru fiecare selecție."
+        : "Video skipped: the OpenAI analysis does not contain verifiable recent statistics for every selection.";
+
+    await writeSkippedPayload(
+      reason,
+      tickets.date
+    );
+
+    return;
+  }
+
   const totalOdds =
     displayOdd(
       ticket.product ??
@@ -2127,7 +2131,7 @@ async function main() {
       "ready",
 
     version:
-      4,
+      5,
 
     generatedAt:
       new Date().toISOString(),
@@ -2231,8 +2235,8 @@ async function main() {
           .SHORTS_PRESENTER_FILE ||
         (
           LANG === "ro"
-            ? "assets/presenters/ro_presenter_01.mp4"
-            : "assets/presenters/presenter-01.mp4"
+            ? "assets/intros/ro/intro_01.mp4"
+            : "assets/intros/en/intro_01.mp4"
         ),
 
       presenterVariation,

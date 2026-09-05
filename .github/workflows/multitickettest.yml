@@ -293,7 +293,7 @@ jobs:
           set -euo pipefail
 
           REQUIRED_FILES=(
-            "assets/presenters/presenter-01.mp4"
+            "assets/intros/en/intro_01.mp4"
             "shorts/build_all_shorts.js"
             "shorts/render_short.js"
             "publish/generate_manifest.js"
@@ -315,7 +315,7 @@ jobs:
             -show_entries stream=codec_name,width,height,r_frame_rate \
             -show_entries format=duration,size \
             -of default=noprint_wrappers=1 \
-            assets/presenters/presenter-01.mp4
+            assets/intros/en/intro_01.mp4
 
       # ------------------
       # 13) RUN MULTI-TICKET SHORTS ENGINE
@@ -325,7 +325,7 @@ jobs:
         timeout-minutes: 30
         env:
           SHORTS_OUTPUT_ROOT: output
-          SHORTS_PRESENTER_FILE: assets/presenters/presenter-01.mp4
+          SHORTS_PRESENTER_FILE: assets/intros/en/intro_01.mp4
 
           SHORTS_TTS_VOICE: en-US-GuyNeural
           SHORTS_TTS_RATE: "+5%"

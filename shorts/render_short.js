@@ -14,7 +14,11 @@ const PAYLOAD_FILE =
 
 const PRESENTER_FILE =
   process.env.SHORTS_PRESENTER_FILE ||
-  "assets/presenters/presenter-01.mp4";
+  (
+    String(process.env.LANG || "en").toLowerCase() === "ro"
+      ? "assets/intros/ro/intro_01.mp4"
+      : "assets/intros/en/intro_01.mp4"
+  );
 
 const AUDIO_FILE =
   process.env.SHORTS_AUDIO_FILE ||
@@ -47,6 +51,7 @@ const FONT_BOLD =
  */
 
 const INTRO_DURATION = 3;
+const TRANSITION_DURATION = 0.65;
 const OUTRO_DURATION = 3;
 
 /*
@@ -1051,6 +1056,8 @@ function main() {
 
   const finalDuration =
     INTRO_DURATION +
+    presenterDuration +
+    TRANSITION_DURATION +
     audioDuration +
     OUTRO_DURATION;
 
@@ -1421,8 +1428,8 @@ function main() {
 
   const introTitle =
     language === "ro"
-      ? ticketTitle
-      : `TODAY'S ${ticketTitle}`;
+      ? "TELEJURNAL SPORTIV"
+      : "SPORTS NEWS DESK";
 
   const mainOddsText =
     `${combinedOddsLabel}: ${totalOdds}`;
@@ -1641,23 +1648,6 @@ function main() {
     OUTRO_DURATION -
     0.35;
 
-  const presenterWidth =
-    Math.round(
-      1080 *
-      presenterZoom
-    );
-
-  const presenterHeight =
-    Math.round(
-      1920 *
-      presenterZoom
-    );
-
-  const horizontalFlipFilter =
-    presenterFlipped
-      ? ",hflip"
-      : "";
-
   /*
    * =========================================================
    * SELECTION DRAW FILTERS
@@ -1806,57 +1796,37 @@ function main() {
 
       "[intro_a]",
 
-    /*
-     * =====================================================
-     * PRESENTER
-     * =====================================================
-     */
-
+    /* The recorded presenter is a self-contained newsreader segment. */
     "[0:v]" +
-
-      "scale=1080:1920:" +
-      "force_original_aspect_ratio=decrease," +
-
-      "pad=1080:1920:" +
-      "(ow-iw)/2:" +
-      "(oh-ih)/2:" +
-      "color=0x00FF00," +
-
+      "scale=1080:1920:force_original_aspect_ratio=increase," +
+      "crop=1080:1920," +
       "fps=30," +
+      `trim=duration=${presenterDuration.toFixed(3)},` +
+      "setpts=PTS-STARTPTS," +
+      "format=yuv420p,setsar=1" +
+      "[presenter_intro_v]",
 
-      "chromakey=" +
-      "0x00FF00:" +
-      "0.18:" +
-      "0.08," +
+    "[0:a]" +
+      "aresample=48000," +
+      "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo," +
+      `atrim=duration=${presenterDuration.toFixed(3)},` +
+      "asetpts=PTS-STARTPTS" +
+      "[presenter_intro_a]",
 
-      "format=rgba," +
+    /* Short green broadcast slash between presenter and ticket. */
+    "color=c=0x38E878:s=1080x1920:r=30:" +
+      `d=${TRANSITION_DURATION}` +
+      ",drawbox=x=720:y=0:w=360:h=1920:color=0x072B1A:t=fill" +
+      ",format=yuv420p,setsar=1,setpts=PTS-STARTPTS" +
+      "[transition_v]",
 
-      `scale=${presenterWidth}:${presenterHeight}` +
+    "anullsrc=r=48000:cl=stereo," +
+      `atrim=duration=${TRANSITION_DURATION},` +
+      "asetpts=PTS-STARTPTS" +
+      "[transition_a]",
 
-      horizontalFlipFilter +
-
-      "[person]",
-
-    /*
-     * =====================================================
-     * PERIODIC RANDOM BACKGROUND
-     * =====================================================
-     */
-
-    ...periodicBackground.filters,
-
-    /*
-     * =====================================================
-     * PRESENTER OVER BACKGROUND
-     * =====================================================
-     */
-
-    "[main_bg][person]" +
-
-      `overlay=(W-w)/2+${presenterXOffset}:` +
-      `(H-h)/2+${presenterYOffset}:` +
-      "shortest=1" +
-
+    /* Full-screen green ticket desk; narration continues without an avatar. */
+    `color=c=0x063D24:s=1080x1920:r=30:d=${audioDuration.toFixed(3)}` +
       "[main_base]",
 
     /*
@@ -2065,11 +2035,13 @@ function main() {
      */
 
     "[intro_v][intro_a]" +
+      "[presenter_intro_v][presenter_intro_a]" +
+      "[transition_v][transition_a]" +
       "[main_v][main_a]" +
       "[outro_v][outro_a]" +
 
       "concat=" +
-      "n=3:" +
+      "n=5:" +
       "v=1:" +
       "a=1" +
 
@@ -2084,21 +2056,6 @@ function main() {
 
   const ffmpegArguments = [
     "-y",
-
-    /*
-     * Start prezentator dintr-un punct variabil.
-     */
-    "-ss",
-    presenterStartOffset.toFixed(
-      2
-    ),
-
-    /*
-     * Repetă prezentatorul dacă video-ul lui
-     * este mai scurt decât vocea.
-     */
-    "-stream_loop",
-    "-1",
 
     "-i",
     PRESENTER_FILE,
