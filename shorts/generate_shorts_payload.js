@@ -2033,14 +2033,13 @@ async function main() {
   if (
     REQUIRE_EVIDENCE &&
     (
-      tickets.ai_used !== true ||
       missingAnalysis.length > 0
     )
   ) {
     const reason =
       LANG === "ro"
-        ? "Videoclip omis: analiza OpenAI nu are statistici recente verificabile pentru fiecare selecție."
-        : "Video skipped: the OpenAI analysis does not contain verifiable recent statistics for every selection.";
+        ? "Videoclip omis: nu există statistici recente verificabile pentru fiecare selecție."
+        : "Video skipped: verifiable recent statistics are unavailable for every selection.";
 
     await writeSkippedPayload(
       reason,

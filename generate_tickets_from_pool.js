@@ -6,7 +6,9 @@ const POOL_FILE = "master_pool.json";
 const MATCHES_FILE = "matches.json";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
-const AI_PREMATCH_MAX = Math.max(0, Number(process.env.AI_PREMATCH_MAX || 12));
+// Enrich the candidate pool before the model chooses a ticket. The old limit
+// could leave the ultimately selected bundle outside the enriched set.
+const AI_PREMATCH_MAX = Math.max(0, Number(process.env.AI_PREMATCH_MAX || 48));
 const AI_PREMATCH_CONCURRENCY = Math.max(1, Number(process.env.AI_PREMATCH_CONCURRENCY || 4));
 
 const COTA2 = {
@@ -516,20 +518,14 @@ function cleanReason(reason, evidence) {
   return banned.some(rule => rule.test(text)) ? "" : text;
 }
 
-async function collectPrematchContext(bundles) {
-  if (!OPENAI_API_KEY || AI_PREMATCH_MAX <= 0) return new Map();
+async function collectPrematchContext(selections) {
+  if (AI_PREMATCH_MAX <= 0) return new Map();
 
   const unique = new Map();
 
-  for (const b of bundles.slice(0, 30)) {
-    for (const t of [b.cota2, b.day].filter(Boolean)) {
-      for (const s of t.selections) {
-        if (unique.size >= AI_PREMATCH_MAX) break;
-        if (!unique.has(s.match_id)) unique.set(s.match_id, s);
-      }
-      if (unique.size >= AI_PREMATCH_MAX) break;
-    }
+  for (const s of selections) {
     if (unique.size >= AI_PREMATCH_MAX) break;
+    if (!unique.has(s.match_id)) unique.set(s.match_id, s);
   }
 
   const jobs = [...unique.values()];
@@ -563,6 +559,56 @@ async function collectPrematchContext(bundles) {
 
   console.log(`[AI-STATS] enriched ${result.size}/${jobs.length} candidate matches`);
   return result;
+}
+
+function localEvidenceReason(selection, language = "ro") {
+  const evidence = selection?.__analysisEvidence;
+  if (evidence?.usable !== true) return "";
+
+  const ro = language === "ro";
+  const { home, away } = splitCanonicalTeams(selection.teams);
+  const formText = (form, team) => ro
+    ? `${team}: ${form.wins} victorii, ${form.draws} egaluri și ${form.losses} în ultimele ${form.matches} meciuri`
+    : `${team}: ${form.wins} wins, ${form.draws} draws and ${form.losses} losses in the last ${form.matches} matches`;
+
+  if (evidence.type === "goals") {
+    const direction = evidence.direction === "over" ? (ro ? "peste" : "over") : (ro ? "sub" : "under");
+    const hitText = Number.isFinite(evidence.home_hits) && Number.isFinite(evidence.away_hits)
+      ? (ro
+        ? ` Pragul a fost bifat în ${evidence.home_hits}/${evidence.home_matches}, respectiv ${evidence.away_hits}/${evidence.away_matches}.`
+        : ` The line landed in ${evidence.home_hits}/${evidence.home_matches} and ${evidence.away_hits}/${evidence.away_matches}, respectively.`)
+      : "";
+    return ro
+      ? `Meciurile recente ale lui ${home} au avut media de ${evidence.home_avg_total_goals} goluri, iar cele ale lui ${away} ${evidence.away_avg_total_goals}; cifrele susțin selecția ${direction} ${evidence.line}.${hitText}`
+      : `${home}'s recent matches averaged ${evidence.home_avg_total_goals} total goals and ${away}'s ${evidence.away_avg_total_goals}; the numbers support ${direction} ${evidence.line}.${hitText}`;
+  }
+
+  if (evidence.type === "btts") {
+    return ro
+      ? `Ambele au avut goluri de fiecare parte în ${evidence.home_btts}/${evidence.home_matches} și ${evidence.away_btts}/${evidence.away_matches} dintre ultimele meciuri.`
+      : `Both teams scored in ${evidence.home_btts}/${evidence.home_matches} and ${evidence.away_btts}/${evidence.away_matches} of their latest matches.`;
+  }
+
+  if (evidence.type === "result") {
+    const parts = [];
+    if (evidence.home_form && evidence.away_form) {
+      parts.push(formText(evidence.home_form, home), formText(evidence.away_form, away));
+    }
+    if (evidence.standings) {
+      parts.push(ro
+        ? `în clasament sunt pe locurile ${evidence.standings.home_position} și ${evidence.standings.away_position}`
+        : `their table positions are ${evidence.standings.home_position} and ${evidence.standings.away_position}`);
+    }
+    return parts.length ? `${parts.join("; ")}.` : "";
+  }
+
+  if (evidence.type === "double_chance_goals") {
+    const resultReason = localEvidenceReason({ ...selection, __analysisEvidence: evidence.result }, language);
+    const goalsReason = localEvidenceReason({ ...selection, __analysisEvidence: evidence.goals }, language);
+    return [resultReason, goalsReason].filter(Boolean).join(" ");
+  }
+
+  return "";
 }
 
 function fallbackEnglish(raw) {
@@ -699,9 +745,10 @@ function decorate(ticket, annotations) {
       out.ai = {
         label_ro: safe(a.label_ro) || safe(out.market_raw),
         label_en: safe(a.label_en) || fallbackEnglish(out.market_raw),
-        reason_ro: cleanReason(a.reason_ro, s.__analysisEvidence),
-        reason_en: cleanReason(a.reason_en, s.__analysisEvidence),
+        reason_ro: cleanReason(a.reason_ro, s.__analysisEvidence) || localEvidenceReason(s, "ro"),
+        reason_en: cleanReason(a.reason_en, s.__analysisEvidence) || localEvidenceReason(s, "en"),
       };
+      out.analysis_evidence = s.__analysisEvidence;
       return out;
     })
   };
@@ -723,7 +770,7 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
     pool.forEach((s, i) => { s.__sid = `S${String(i + 1).padStart(3, "0")}`; });
 
     console.log(`[GENERATOR] canonical selections: ${canonical.length}`);
-    const bundles = buildBundles(pool);
+    let bundles = buildBundles(pool);
     if (!bundles.length) {
       await writeNoPicks(date, "No compatible Cota 2 or Biletul Zilei candidate after strict Flashscore matching", pool.length, {
         source_mode: poolData?.source_mode || "unknown",
@@ -737,17 +784,24 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
     let chosen = bundles[0], annotations = [], aiUsed = false, aiError = null;
     let prematchContext = new Map();
     try {
-      prematchContext = await collectPrematchContext(bundles);
+      prematchContext = await collectPrematchContext(pool);
 
-      for (const bundle of bundles) {
-        for (const ticket of [bundle.cota2, bundle.day].filter(Boolean)) {
-          for (const selection of ticket.selections) {
-            selection.__analysisEvidence = buildAnalysisEvidence(
-              selection,
-              prematchContext.get(selection.match_id) || null
-            );
-          }
-        }
+      for (const selection of pool) {
+        selection.__analysisEvidence = buildAnalysisEvidence(
+          selection,
+          prematchContext.get(selection.match_id) || null
+        );
+      }
+
+      // Rebuild the ticket candidates from selections that have market-specific
+      // Flashscore evidence. OpenAI now curates and writes from this dossier; it
+      // is no longer expected to know current football facts by itself.
+      const evidencePool = pool.filter(selection => selection.__analysisEvidence?.usable === true);
+      const evidenceBundles = buildBundles(evidencePool);
+      console.log(`[AI-STATS] evidence-ready selections=${evidencePool.length}/${pool.length}; bundles=${evidenceBundles.length}`);
+      if (evidenceBundles.length) {
+        bundles = evidenceBundles;
+        chosen = bundles[0];
       }
 
       const ai = await askAI(bundles, prematchContext);
@@ -777,6 +831,8 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
       ai_used: aiUsed,
       ai_model: aiUsed ? OPENAI_MODEL : null,
       ai_error: aiError,
+      analysis_source: aiUsed ? "openai_from_flashscore_evidence" : "local_from_flashscore_evidence",
+      statistics_collected_at: new Date().toISOString(),
       bilet_cota2: decorate(chosen.cota2, annotations),
       biletul_zilei: decorate(chosen.day, annotations)
     };

@@ -18,6 +18,7 @@ const voiceId = String(
   process.env.ELEVENLABS_VOICE_ID ||
   ""
 ).trim();
+const provider = String(process.env.VOICE_PROVIDER || "auto").trim().toLowerCase();
 
 function ensureParent(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -118,7 +119,9 @@ async function runElevenLabs() {
 ensureParent(audioFile);
 ensureParent(subtitlesFile);
 
-if (apiKey && voiceId) {
+if (provider === "edge") {
+  runEdgeFallback();
+} else if (apiKey && voiceId) {
   await runElevenLabs();
 } else {
   console.warn(`[VOICE] ElevenLabs secrets are incomplete for ${language}; using Edge TTS fallback.`);
