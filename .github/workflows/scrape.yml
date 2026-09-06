@@ -851,6 +851,23 @@ jobs:
           LANG: ro
         run: node embed_youtube_wp.js
 
+      - name: Publish PariuVerde tickets to Telegram
+        if: success()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_PV_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_PV_CHAT_ID }}
+          LANG: ro
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+            echo "Telegram PariuVerde is not configured; skipping."
+            exit 0
+          fi
+          for TICKET_TYPE in bilet_cota2 biletul_zilei; do
+            TICKET_TYPE="$TICKET_TYPE" node publish/platforms/telegram.js
+          done
+
       # ==================================================
       # 15) UPLOAD FINAL ARTIFACT
       # ==================================================

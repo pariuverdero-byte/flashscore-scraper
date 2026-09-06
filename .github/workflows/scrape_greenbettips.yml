@@ -664,6 +664,23 @@ jobs:
           LANG: en
         run: node embed_youtube_wp.js
 
+      - name: Publish GreenBetTips tickets to Telegram
+        if: success()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_GBT_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_GBT_CHAT_ID }}
+          LANG: en
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+            echo "Telegram GreenBetTips is not configured; skipping."
+            exit 0
+          fi
+          for TICKET_TYPE in bilet_cota2 biletul_zilei; do
+            TICKET_TYPE="$TICKET_TYPE" node publish/platforms/telegram.js
+          done
+
       # ==================================================
       # 15) UPLOAD FINAL ARTIFACT
       # ==================================================
