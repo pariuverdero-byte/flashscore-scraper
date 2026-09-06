@@ -1,0 +1,43 @@
+name: Test Telegram Channel Connection
+
+on:
+  workflow_dispatch:
+    inputs:
+      brand:
+        description: Telegram brand connection to test
+        required: true
+        default: pariuverde
+        type: choice
+        options:
+          - pariuverde
+          - greenbettips
+
+jobs:
+  test-telegram:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test PariuVerde Telegram publishing
+        if: inputs.brand == 'pariuverde'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_PV_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_PV_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=✅ Conexiunea automată PariuVerde este activă. Biletele și videoclipurile vor fi publicate aici după generare."
+
+      - name: Test GreenBetTips Telegram publishing
+        if: inputs.brand == 'greenbettips'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_GBT_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_GBT_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=✅ The GreenBetTips automated connection is active. Tickets and videos will be published here after generation."
