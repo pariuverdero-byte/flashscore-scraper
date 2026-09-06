@@ -1426,10 +1426,10 @@ function main() {
       language
     );
 
+  // Preserve the product name in the generic: Bilet Cota 2 / Biletul Zilei
+  // (and the corresponding English label supplied by the payload).
   const introTitle =
-    language === "ro"
-      ? "TELEJURNAL SPORTIV"
-      : "SPORTS NEWS DESK";
+    ticketTitle;
 
   const mainOddsText =
     `${combinedOddsLabel}: ${totalOdds}`;
