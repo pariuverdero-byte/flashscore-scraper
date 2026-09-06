@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import * as cheerio from "cheerio";
 import { matchEventToFlashscore } from "./engine/matcher_core.js";
 import { fetchPrematchData } from "./live-betting/lib/prematch.js";
 
@@ -561,6 +562,115 @@ async function collectPrematchContext(selections) {
   return result;
 }
 
+function teamTokens(value) {
+  return norm(value).split(" ").filter(token => token.length >= 3 && !["club", "football", "bucuresti"].includes(token));
+}
+
+function mentionsTeam(text, team) {
+  const haystack = ` ${norm(text)} `;
+  const tokens = teamTokens(team);
+  if (!tokens.length) return false;
+  const hits = tokens.filter(token => haystack.includes(` ${token} `)).length;
+  return hits >= Math.min(2, tokens.length);
+}
+
+function dateVariants(date) {
+  const match = safe(date).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return [];
+  const [, year, month, day] = match;
+  return [date, `${day}.${month}.${year}`, `${day}-${month}-${year}`, `${day}/${month}/${year}`];
+}
+
+async function fetchSourcePageEvidence(selection, eventDate) {
+  const sourceUrl = safe(selection.source_url || selection.meta?.source_url);
+  if (!/^https?:\/\//i.test(sourceUrl)) return null;
+
+  const confidence = Number(selection.meta?.flashscore_match_confidence || 0);
+  if (confidence < 0.88) return null;
+
+  const { home, away } = splitCanonicalTeams(selection.teams);
+  if (!home || !away) return null;
+
+  try {
+    const response = await fetch(sourceUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; PariuVerdeEvidenceBot/1.0)",
+        "Accept-Language": "ro,en;q=0.8"
+      },
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!response.ok) return null;
+
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    $("script,style,noscript,svg,nav,footer").remove();
+    const title = cleanReasonText($("title").first().text()).slice(0, 180);
+    const blocks = $("article p, main p, table tr, li, h1, h2, h3")
+      .map((_, element) => cleanReasonText($(element).text()))
+      .get()
+      .filter(text => text.length >= 25 && text.length <= 900);
+    const fullText = cleanReasonText($("body").text());
+
+    const exactEvent = mentionsTeam(fullText, home) && mentionsTeam(fullText, away);
+    const exactDate = dateVariants(eventDate).some(value => fullText.includes(value) || sourceUrl.includes(value));
+    if (!exactEvent || !exactDate) return null;
+
+    let excerpts = blocks.filter(text =>
+      (mentionsTeam(text, home) || mentionsTeam(text, away)) && /\d/.test(text)
+    ).slice(0, 5);
+
+    if (!excerpts.length) {
+      const normalizedHome = teamTokens(home)[0];
+      const index = normalizedHome ? norm(fullText).indexOf(normalizedHome) : -1;
+      if (index >= 0) excerpts = [fullText.slice(Math.max(0, index - 250), index + 900)];
+    }
+
+    excerpts = excerpts.map(value => value.slice(0, 700)).filter(value => /\d/.test(value));
+    if (!excerpts.length) return null;
+
+    return {
+      usable: true,
+      type: "verified_web_source",
+      market_class: marketClass(selection),
+      event_identity: {
+        home,
+        away,
+        date: eventDate,
+        flashscore_match_confidence: confidence
+      },
+      sources: [{
+        url: sourceUrl,
+        title,
+        retrieved_at: new Date().toISOString(),
+        excerpts
+      }]
+    };
+  } catch (error) {
+    console.warn(`[WEB-EVIDENCE] ${selection.teams}: ${error?.message || error}`);
+    return null;
+  }
+}
+
+function cleanReasonText(value) {
+  return String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+}
+
+async function addVerifiedWebFallback(pool, eventDate) {
+  const missing = pool.filter(selection => selection.__analysisEvidence?.usable !== true);
+  const concurrency = 4;
+  let added = 0;
+  for (let start = 0; start < missing.length; start += concurrency) {
+    const batch = missing.slice(start, start + concurrency);
+    const evidence = await Promise.all(batch.map(selection => fetchSourcePageEvidence(selection, eventDate)));
+    evidence.forEach((item, index) => {
+      if (!item) return;
+      batch[index].__analysisEvidence = item;
+      added += 1;
+    });
+  }
+  console.log(`[WEB-EVIDENCE] verified exact-event pages=${added}/${missing.length}`);
+}
+
 function localEvidenceReason(selection, language = "ro") {
   const evidence = selection?.__analysisEvidence;
   if (evidence?.usable !== true) return "";
@@ -631,7 +741,7 @@ function responseText(body) {
 
 async function askAI(bundles, prematchContext = new Map()) {
   if (!OPENAI_API_KEY || !bundles.length) return null;
-  const eligibleBundles = bundles.filter(b => b.cota2 && b.day);
+  const eligibleBundles = bundles.filter(b => b.cota2 || b.day);
   if (!eligibleBundles.length) return null;
 
   const selectionMap = new Map();
@@ -686,6 +796,7 @@ MARKET-SPECIFIC RULES:
 - H2H is secondary and must never replace market-specific evidence.
 - Corners: comment only when historical corner statistics are explicitly supplied.
 - Cards: comment only when historical card statistics are explicitly supplied.
+- Verified web source fallback: event_identity has already matched both teams and the event date. Use only numerical claims explicitly present in sources[].excerpts and relate them to market_class. Never infer a statistic that is absent from the excerpts.
 
 QUALITY:
 - Write for an informed adult audience in the tone of a concise professional match analyst.
@@ -803,6 +914,8 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
         );
       }
 
+      await addVerifiedWebFallback(pool, date);
+
       // Rebuild the ticket candidates from selections that have market-specific
       // Flashscore evidence. OpenAI now curates and writes from this dossier; it
       // is no longer expected to know current football facts by itself.
@@ -814,7 +927,9 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
         chosen = bundles[0];
       }
 
-      const ai = await askAI(bundles, prematchContext);
+      const ai = evidenceBundles.length
+        ? await askAI(bundles, prematchContext)
+        : null;
       if (ai) {
         const found = bundles.find(b => b.id === ai.bundle_id);
         if (!found) throw new Error("AI selected unknown bundle");
