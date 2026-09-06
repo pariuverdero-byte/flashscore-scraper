@@ -995,6 +995,21 @@ function replaceNumbersForSpeech(
   let result =
     clean(value);
 
+  // Ratios and percentages are common in the evidence-backed analysis. Spell
+  // them naturally before the generic number pass ("4/5" -> "patru din cinci").
+  result = result.replace(
+    /\b(\d+)\s*\/\s*(\d+)\b/g,
+    (_, numerator, denominator) =>
+      LANG === "ro"
+        ? `${integerToRomanian(Number(numerator))} din ${integerToRomanian(Number(denominator))}`
+        : `${integerToEnglish(Number(numerator))} out of ${integerToEnglish(Number(denominator))}`
+  );
+
+  result = result.replace(
+    /\b(\d+(?:\.\d+)?)\s*%/g,
+    "$1 " + (LANG === "ro" ? "la sută" : "percent")
+  );
+
   result =
     result.replace(
       /\b(\d+)\.(\d+)\b/g,
@@ -1557,10 +1572,15 @@ function buildVoiceScript(
       }
 
       if (match.analysisReason) {
+        const spokenAnalysis =
+          replaceNumbersForSpeech(
+            match.analysisReason
+          );
+
         lines.push(
-          match.analysisReason.endsWith(".")
-            ? match.analysisReason
-            : `${match.analysisReason}.`
+          spokenAnalysis.endsWith(".")
+            ? spokenAnalysis
+            : `${spokenAnalysis}.`
         );
       }
 
