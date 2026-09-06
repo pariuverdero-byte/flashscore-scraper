@@ -730,7 +730,10 @@ async function fetchSourcePageEvidence(selection, eventDate, candidateUrl = "") 
 
 function decodeSearchUrl(value) {
   try {
-    const url = new URL(value);
+    const url = new URL(value, "https://html.duckduckgo.com");
+    if (/duckduckgo\.com$/i.test(url.hostname) && url.searchParams.get("uddg")) {
+      return decodeURIComponent(url.searchParams.get("uddg"));
+    }
     if (/bing\.com$/i.test(url.hostname) && url.searchParams.get("url")) {
       return url.searchParams.get("url");
     }
@@ -755,6 +758,12 @@ async function discoverExactEventPages(selection, eventDate) {
     `"${home}" "${away}" "${humanDate[2] || eventDate}" analiză ponturi`
   ];
   const found = [];
+  const addResult = (urlValue, summaryValue) => {
+    const url = decodeSearchUrl(urlValue);
+    const summary = cleanReasonText(summaryValue);
+    if (!url || !mentionsTeam(summary, home) || !mentionsTeam(summary, away)) return;
+    if (!found.includes(url)) found.push(url);
+  };
   for (const query of queries) {
     try {
       const searchUrl = `https://www.bing.com/search?format=rss&q=${encodeURIComponent(query)}`;
@@ -765,15 +774,32 @@ async function discoverExactEventPages(selection, eventDate) {
       if (!response.ok) continue;
       const $ = cheerio.load(await response.text(), { xmlMode: true });
       $("item").each((_, item) => {
-        const url = decodeSearchUrl($(item).find("link").first().text());
-        const summary = cleanReasonText(`${$(item).find("title").text()} ${$(item).find("description").text()}`);
-        if (!url || !mentionsTeam(summary, home) || !mentionsTeam(summary, away)) return;
-        if (!found.includes(url)) found.push(url);
+        addResult(
+          $(item).find("link").first().text(),
+          `${$(item).find("title").text()} ${$(item).find("description").text()}`
+        );
       });
-      if (found.length >= 10) break;
     } catch (error) {
       console.warn(`[WEB-SEARCH] ${selection.teams}: ${error?.message || error}`);
     }
+
+    try {
+      const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+      const response = await fetch(searchUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; PariuVerdeEvidenceBot/1.0)" },
+        signal: AbortSignal.timeout(12000)
+      });
+      if (response.ok) {
+        const $ = cheerio.load(await response.text());
+        $(".result").each((_, item) => addResult(
+          $(item).find(".result__a").attr("href"),
+          `${$(item).find(".result__a").text()} ${$(item).find(".result__snippet").text()}`
+        ));
+      }
+    } catch (error) {
+      console.warn(`[WEB-SEARCH] DuckDuckGo ${selection.teams}: ${error?.message || error}`);
+    }
+    if (found.length >= 10) break;
   }
   return found.slice(0, 10);
 }
