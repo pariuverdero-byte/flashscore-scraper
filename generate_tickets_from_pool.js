@@ -688,10 +688,15 @@ MARKET-SPECIFIC RULES:
 - Cards: comment only when historical card statistics are explicitly supplied.
 
 QUALITY:
-- Every non-empty reason must contain at least one concrete number.
-- Prefer statistics for BOTH teams.
-- Explain how the numbers relate to the EXACT selected market.
-- Maximum 40 words and two sentences.
+- Write for an informed adult audience in the tone of a concise professional match analyst.
+- Every non-empty reason must contain at least two relevant concrete numbers whenever the evidence permits it.
+- Compare BOTH teams; do not merely list one isolated statistic.
+- First state the strongest statistical pattern, then explain why it supports the EXACT selected market.
+- Distinguish supporting evidence from certainty: use "susține", "înclină" or "oferă argument", never claim that a bet is guaranteed.
+- Prefer hit rates and sample sizes over vague adjectives. A percentage without its sample (for example 4/5) is incomplete.
+- Avoid repeating the team names, market or odds when they add no analytical value.
+- Use one or two information-dense sentences, normally 25-45 words so the complete ticket still fits a Short.
+- Do not use exclamation marks, hype, sales language or beginner explanations of what the market means.
 
 NEVER WRITE phrases equivalent to:
 - "no data available"
@@ -701,12 +706,17 @@ NEVER WRITE phrases equivalent to:
 - "the threshold is moderate"
 - "balanced selection"
 - "conservative pick"
+- "we expect an interesting match"
+- "both teams will give everything"
+- "anything can happen"
+- "looks like a good choice"
+- "this should be a safe bet"
 
 GOOD OVER 1.5 EXAMPLE:
-"Annagh's last five matches averaged 2.8 total goals and Rathfriland's 2.4; Over 1.5 landed in 4/5 for both teams."
+"Annagh's last five matches averaged 2.8 total goals and Rathfriland's 2.4, with Over 1.5 landing in 4/5 for each side. Two independent recent samples therefore support the selected line, without treating it as a certainty."
 
 GOOD DOUBLE CHANCE EXAMPLE:
-"Fenerbahce are unbeaten in 4 of their last 5 matches, while Sturm Graz lost 3 of 5; that supports the X2 protection."
+"Fenerbahce avoided defeat in 4 of their last 5 matches, while Sturm Graz lost 3 of 5. The contrast in recent W-D-L records gives a concrete basis for the double-chance protection."
 
 LANGUAGE:
 - label_ro/reason_ro: natural Romanian betting language.

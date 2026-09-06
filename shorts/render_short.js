@@ -1796,7 +1796,7 @@ function main() {
 
       "[intro_a]",
 
-    /* The recorded presenter is a self-contained newsreader segment. */
+    /* The recorded presenter is a self-contained introduction segment. */
     "[0:v]" +
       "scale=1080:1920:force_original_aspect_ratio=increase," +
       "crop=1080:1920," +
