@@ -56,7 +56,9 @@ jobs:
       SHORTS_TTS_VOICE: "ro-RO-EmilNeural"
       SHORTS_TTS_RATE: "+1%"
       SHORTS_TTS_PITCH: "+1Hz"
-      VOICE_PROVIDER: "edge"
+      VOICE_PROVIDER: "piper"
+      PIPER_VOICE: "ro_RO-mihai-medium"
+      PIPER_DATA_DIR: ".cache/piper"
 
       SHORTS_PRESENTER_SCALE_MIN: "0.88"
       SHORTS_PRESENTER_SCALE_MAX: "1.02"
@@ -118,11 +120,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Edge TTS
+      - name: Restore Piper Romanian voice cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/piper
+          key: piper-ro-RO-mihai-medium-v1
+
+      - name: Install Romanian voice engines
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check --quiet edge-tts
+          python -m pip install --disable-pip-version-check --quiet edge-tts piper-tts
           edge-tts --version
 
       - name: Verify FFmpeg and fonts

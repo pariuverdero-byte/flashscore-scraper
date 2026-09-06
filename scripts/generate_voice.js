@@ -19,6 +19,8 @@ const voiceId = String(
   ""
 ).trim();
 const provider = String(process.env.VOICE_PROVIDER || "auto").trim().toLowerCase();
+const pythonCommand = String(process.env.PYTHON_COMMAND || "python").trim();
+const ffmpegCommand = String(process.env.FFMPEG_COMMAND || "ffmpeg").trim();
 
 function ensureParent(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -63,6 +65,86 @@ function alignmentToSrt(alignment) {
   return cues.map((cue, index) =>
     `${index + 1}\n${timestamp(cue.start)} --> ${timestamp(cue.end)}\n${cue.text}\n`
   ).join("\n");
+}
+
+function command(name, args, options = {}) {
+  const result = spawnSync(name, args, { stdio: "inherit", shell: false, ...options });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`${name} failed with exit code ${result.status}`);
+}
+
+function approximateSrt(text, duration) {
+  const chunks = String(text)
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map(value => value.trim())
+    .filter(Boolean)
+    .flatMap(sentence => {
+      if (sentence.length <= 82) return [sentence];
+      const words = sentence.split(/\s+/);
+      const parts = [];
+      let current = "";
+      for (const word of words) {
+        if (current && `${current} ${word}`.length > 74) {
+          parts.push(current);
+          current = word;
+        } else {
+          current = current ? `${current} ${word}` : word;
+        }
+      }
+      if (current) parts.push(current);
+      return parts;
+    });
+
+  const weights = chunks.map(chunk => Math.max(8, chunk.replace(/\s/g, "").length));
+  const totalWeight = weights.reduce((sum, value) => sum + value, 0) || 1;
+  let cursor = 0;
+  return chunks.map((chunk, index) => {
+    const start = cursor;
+    cursor = index === chunks.length - 1
+      ? duration
+      : Math.min(duration, cursor + duration * weights[index] / totalWeight);
+    return `${index + 1}\n${timestamp(start)} --> ${timestamp(cursor)}\n${chunk}\n`;
+  }).join("\n");
+}
+
+function wavDuration(filePath) {
+  const wav = fs.readFileSync(filePath);
+  if (wav.toString("ascii", 0, 4) !== "RIFF" || wav.toString("ascii", 8, 12) !== "WAVE") {
+    throw new Error("Piper output is not a valid WAV file");
+  }
+  let offset = 12;
+  let byteRate = 0;
+  let dataSize = 0;
+  while (offset + 8 <= wav.length) {
+    const id = wav.toString("ascii", offset, offset + 4);
+    const size = wav.readUInt32LE(offset + 4);
+    if (id === "fmt " && size >= 12) byteRate = wav.readUInt32LE(offset + 16);
+    if (id === "data") {
+      dataSize = size;
+      break;
+    }
+    offset += 8 + size + (size % 2);
+  }
+  const duration = dataSize / byteRate;
+  if (!Number.isFinite(duration) || duration <= 0) throw new Error("Invalid Piper WAV duration");
+  return duration;
+}
+
+function runPiper() {
+  const voice = String(process.env.PIPER_VOICE || "ro_RO-mihai-medium").trim();
+  const dataDir = path.resolve(process.env.PIPER_DATA_DIR || ".cache/piper");
+  const wavFile = `${audioFile}.piper.wav`;
+  const text = fs.readFileSync(scriptFile, "utf8").trim();
+  if (!text) throw new Error(`Voice script is empty: ${scriptFile}`);
+
+  fs.mkdirSync(dataDir, { recursive: true });
+  command(pythonCommand, ["-m", "piper.download_voices", "--data-dir", dataDir, voice]);
+  command(pythonCommand, ["-m", "piper", "-m", voice, "--data-dir", dataDir, "-f", wavFile, "--input-file", scriptFile]);
+  const duration = wavDuration(wavFile);
+  command(ffmpegCommand, ["-y", "-hide_banner", "-loglevel", "error", "-i", wavFile, "-codec:a", "libmp3lame", "-b:a", "128k", audioFile]);
+  fs.writeFileSync(subtitlesFile, approximateSrt(text, duration), "utf8");
+  fs.rmSync(wavFile, { force: true });
+  console.log(`[VOICE] Piper ${voice} generated local Romanian audio and subtitles.`);
 }
 
 function runEdgeFallback() {
@@ -119,7 +201,14 @@ async function runElevenLabs() {
 ensureParent(audioFile);
 ensureParent(subtitlesFile);
 
-if (provider === "edge") {
+if (provider === "piper") {
+  try {
+    runPiper();
+  } catch (error) {
+    console.warn(`[VOICE] Piper failed (${error?.message || error}); using Edge TTS fallback.`);
+    runEdgeFallback();
+  }
+} else if (provider === "edge") {
   runEdgeFallback();
 } else if (apiKey && voiceId) {
   await runElevenLabs();
