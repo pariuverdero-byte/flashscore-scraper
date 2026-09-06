@@ -28,6 +28,10 @@ const HANDOFF_AUDIO_FILE =
   process.env.SHORTS_HANDOFF_AUDIO_FILE ||
   "assets/handoffs/ro/mihai_analyst_intro.mp3";
 
+const TICKET_BACKGROUND_FILE =
+  process.env.SHORTS_TICKET_BACKGROUND_FILE ||
+  "assets/backgrounds/football_ticket_stadium_v1.png";
+
 const OUTPUT_FILE =
   process.env.SHORTS_VIDEO_FILE ||
   "output/short.mp4";
@@ -953,6 +957,10 @@ function main() {
   );
 
   requireFile(
+    TICKET_BACKGROUND_FILE
+  );
+
+  requireFile(
     FONT_REGULAR
   );
 
@@ -1066,6 +1074,9 @@ function main() {
     hasHandoff
       ? getMediaDuration(HANDOFF_AUDIO_FILE)
       : 0;
+
+  const ticketBackgroundInput =
+    hasHandoff ? 3 : 2;
 
   const finalDuration =
     INTRO_DURATION +
@@ -1872,8 +1883,15 @@ function main() {
       "asetpts=PTS-STARTPTS" +
       "[transition_a]",
 
-    /* Full-screen green ticket desk; narration continues without an avatar. */
-    `color=c=0x063D24:s=1080x1920:r=30:d=${audioDuration.toFixed(3)}` +
+    /* Original football broadcast artwork enriches the ticket desk while the
+     * dark central area keeps every selection readable. */
+    `[${ticketBackgroundInput}:v]` +
+      "scale=1080:1920:force_original_aspect_ratio=increase," +
+      "crop=1080:1920," +
+      "fps=30," +
+      "eq=brightness=-0.10:saturation=0.78," +
+      `trim=duration=${audioDuration.toFixed(3)},` +
+      "setpts=PTS-STARTPTS" +
       "[main_base]",
 
     /*
@@ -2118,6 +2136,11 @@ function main() {
     ...(hasHandoff
       ? ["-i", HANDOFF_AUDIO_FILE]
       : []),
+
+    "-loop",
+    "1",
+    "-i",
+    TICKET_BACKGROUND_FILE,
 
     "-filter_complex",
     filter,
