@@ -1810,6 +1810,8 @@ function main() {
       "aresample=48000," +
       "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo," +
       `atrim=duration=${presenterDuration.toFixed(3)},` +
+      "loudnorm=I=-16:TP=-1.5:LRA=11," +
+      `afade=t=out:st=${Math.max(0, presenterDuration - 0.18).toFixed(3)}:d=0.18,` +
       "asetpts=PTS-STARTPTS" +
       "[presenter_intro_a]",
 
@@ -1820,8 +1822,15 @@ function main() {
       ",format=yuv420p,setsar=1,setpts=PTS-STARTPTS" +
       "[transition_v]",
 
-    "anullsrc=r=48000:cl=stereo," +
-      `atrim=duration=${TRANSITION_DURATION},` +
+    /* A restrained audio sting makes the narrator change intentional. */
+    "anoisesrc=color=pink:sample_rate=48000:" +
+      `d=${TRANSITION_DURATION},` +
+      "highpass=f=450," +
+      "lowpass=f=4800," +
+      "volume=0.10," +
+      "afade=t=in:st=0:d=0.05," +
+      `afade=t=out:st=0.25:d=${Math.max(0.1, TRANSITION_DURATION - 0.25).toFixed(2)},` +
+      "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo," +
       "asetpts=PTS-STARTPTS" +
       "[transition_a]",
 
@@ -1908,6 +1917,10 @@ function main() {
       "sample_fmts=fltp:" +
       "sample_rates=48000:" +
       "channel_layouts=stereo," +
+
+      "loudnorm=I=-16:TP=-1.5:LRA=11," +
+
+      "afade=t=in:st=0:d=0.14," +
 
       `atrim=duration=${audioDuration.toFixed(
         3
