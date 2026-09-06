@@ -475,6 +475,16 @@ async function main() {
 
   if (tickets.status === "no_picks") {
     console.log("ℹ No picks today. Skip publish.");
+    await fs.writeFile(
+      "published_posts.json",
+      JSON.stringify({
+        generatedAt: new Date().toISOString(),
+        site: String(WP_URL).replace(/\/+$/, ""),
+        language: LANG,
+        posts: [],
+      }, null, 2),
+      "utf8"
+    );
     return;
   }
 
@@ -546,6 +556,23 @@ async function main() {
       `${failures.length} WordPress publication(s) failed`
     );
   }
+
+  await fs.writeFile(
+    "published_posts.json",
+    JSON.stringify(
+      {
+        generatedAt: new Date().toISOString(),
+        site: String(WP_URL).replace(/\/+$/, ""),
+        language: LANG,
+        posts: results,
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+
+  console.log("✅ WordPress post map saved to published_posts.json");
 }
 
 main().catch((error) => {

@@ -842,6 +842,15 @@ jobs:
 
           cat output/publishing_summary.json
 
+      - name: Embed published PariuVerde videos in WordPress articles
+        if: success()
+        env:
+          WP_URL: https://pariuverde.ro
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+          LANG: ro
+        run: node embed_youtube_wp.js
+
       # ==================================================
       # 15) UPLOAD FINAL ARTIFACT
       # ==================================================
