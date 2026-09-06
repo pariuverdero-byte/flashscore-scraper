@@ -850,41 +850,41 @@ function getTicketLayout(
   ) {
     return {
       cardX:
-        35,
+        55,
 
       cardY:
-        35,
+        115,
 
       cardWidth:
-        1010,
+        970,
 
       cardHeight:
-        560,
+        1220,
 
       headlineY:
-        63,
+        170,
 
       headlineFontSize:
-        39,
+        54,
 
       oddsY:
-        120,
+        255,
 
       oddsFontSize:
-        33,
+        46,
 
       selectionFontSize:
-        21,
+        34,
 
       selectionY: [
-        180,
-        270,
-        360,
-        450
+        400,
+        630,
+        860,
+        1090
       ],
 
       selectionMaxLength:
-        54
+        42
     };
   }
 
@@ -895,41 +895,41 @@ function getTicketLayout(
 
   return {
     cardX:
-      45,
+      65,
 
     cardY:
-      40,
+      170,
 
     cardWidth:
-      990,
+      950,
 
     cardHeight:
-      455,
+      1110,
 
     headlineY:
-      70,
+      235,
 
     headlineFontSize:
-      42,
+      58,
 
     oddsY:
-      130,
+      330,
 
     oddsFontSize:
-      36,
+      48,
 
     selectionFontSize:
-      23,
+      38,
 
     selectionY: [
-      190,
-      290,
-      390,
-      490
+      505,
+      800,
+      1095,
+      1390
     ],
 
     selectionMaxLength:
-      52
+      38
   };
 }
 
@@ -1998,17 +1998,17 @@ function main() {
       "y=410," +
 
       "drawbox=" +
-      "x=165:" +
+      "x=120:" +
       "y=565:" +
-      "w=750:" +
+      "w=840:" +
       "h=180:" +
       "color=0x38E878@0.16:" +
       "t=fill," +
 
       "drawbox=" +
-      "x=165:" +
+      "x=120:" +
       "y=565:" +
-      "w=750:" +
+      "w=840:" +
       "h=180:" +
       "color=0x38E878@0.75:" +
       "t=4," +
@@ -2016,7 +2016,7 @@ function main() {
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${outroSubscribePath}':` +
       "fontcolor=0x38E878:" +
-      "fontsize=100:" +
+      "fontsize=78:" +
       "x=(w-text_w)/2:" +
       "y=600," +
 
