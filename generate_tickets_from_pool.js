@@ -630,7 +630,10 @@ function mentionsTeam(text, team) {
   const tokens = teamTokens(team);
   if (!tokens.length) return false;
   const hits = tokens.filter(token => haystack.includes(` ${token} `)).length;
-  return hits >= Math.min(2, tokens.length);
+  // Articles often spell only one part of a club name (Rapid, Frankfurt) or use
+  // a different suffix (United/Utd). Requiring the opponent and exact date on
+  // the same page keeps the event identity strict while tolerating that alias.
+  return hits >= 1;
 }
 
 function dateVariants(date) {
@@ -743,10 +746,13 @@ async function discoverExactEventPages(selection, eventDate) {
   const { home, away } = splitCanonicalTeams(selection.teams);
   if (!home || !away) return [];
 
+  const humanDate = dateVariants(eventDate).slice(4);
   const queries = [
     `"${home}" "${away}" ${eventDate} prediction`,
     `"${home}" vs "${away}" ${eventDate} preview statistics`,
-    `"${home}" "${away}" ${eventDate} betting tips`
+    `"${home}" "${away}" ${eventDate} betting tips`,
+    `"${home}" v "${away}" "${humanDate[0] || eventDate}"`,
+    `"${home}" "${away}" "${humanDate[2] || eventDate}" analiză ponturi`
   ];
   const found = [];
   for (const query of queries) {
@@ -764,12 +770,12 @@ async function discoverExactEventPages(selection, eventDate) {
         if (!url || !mentionsTeam(summary, home) || !mentionsTeam(summary, away)) return;
         if (!found.includes(url)) found.push(url);
       });
-      if (found.length >= 6) break;
+      if (found.length >= 10) break;
     } catch (error) {
       console.warn(`[WEB-SEARCH] ${selection.teams}: ${error?.message || error}`);
     }
   }
-  return found.slice(0, 6);
+  return found.slice(0, 10);
 }
 
 async function fetchDiscoveredWebEvidence(selection, eventDate) {
