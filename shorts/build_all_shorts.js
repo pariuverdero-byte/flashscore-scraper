@@ -288,12 +288,21 @@ function buildVisualVariation(
       ""
     ).trim();
 
+  // Keep a common presenter identity, but reserve different recorded takes for
+  // the two daily products so they cannot open with the exact same clip.
+  const splitIndex = Math.max(1, Math.ceil(AVAILABLE_PRESENTERS.length / 2));
+  const presenterRange = ticketType === "biletul_zilei"
+    ? [splitIndex, AVAILABLE_PRESENTERS.length - 1]
+    : [0, splitIndex - 1];
+  const safePresenterRange = presenterRange[0] <= presenterRange[1]
+    ? presenterRange
+    : [0, AVAILABLE_PRESENTERS.length - 1];
   const presenterIndex =
     seededInteger(
       seed,
       "presenter",
-      0,
-      AVAILABLE_PRESENTERS.length - 1
+      safePresenterRange[0],
+      safePresenterRange[1]
     );
 
   const presenterFile =

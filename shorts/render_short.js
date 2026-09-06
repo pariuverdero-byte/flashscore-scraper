@@ -1828,6 +1828,10 @@ function main() {
       "fps=30," +
       `trim=duration=${presenterDuration.toFixed(3)},` +
       "setpts=PTS-STARTPTS," +
+      "drawbox=x=90:y=1510:w=900:h=155:color=black@0.72:t=fill," +
+      "drawbox=x=90:y=1510:w=12:h=155:color=0x38E878:t=fill," +
+      `drawtext=fontfile='${boldFont}':textfile='${introTitlePath}':` +
+      "fontcolor=white:fontsize=52:x=(w-text_w)/2:y=1558," +
       "format=yuv420p,setsar=1" +
       "[presenter_intro_v]",
 
