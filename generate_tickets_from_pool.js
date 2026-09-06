@@ -637,11 +637,23 @@ function dateVariants(date) {
   const match = safe(date).match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return [];
   const [, year, month, day] = match;
-  return [date, `${day}.${month}.${year}`, `${day}-${month}-${year}`, `${day}/${month}/${year}`];
+  const monthIndex = Number(month) - 1;
+  const dayNumber = String(Number(day));
+  const enMonths = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+  const roMonths = ["ianuarie", "februarie", "martie", "aprilie", "mai", "iunie", "iulie", "august", "septembrie", "octombrie", "noiembrie", "decembrie"];
+  return [
+    date,
+    `${day}.${month}.${year}`,
+    `${day}-${month}-${year}`,
+    `${day}/${month}/${year}`,
+    `${dayNumber} ${enMonths[monthIndex]} ${year}`,
+    `${enMonths[monthIndex]} ${dayNumber}, ${year}`,
+    `${dayNumber} ${roMonths[monthIndex]} ${year}`
+  ];
 }
 
-async function fetchSourcePageEvidence(selection, eventDate) {
-  const sourceUrl = safe(selection.source_url || selection.meta?.source_url);
+async function fetchSourcePageEvidence(selection, eventDate, candidateUrl = "") {
+  const sourceUrl = safe(candidateUrl || selection.source_url || selection.meta?.source_url);
   if (!/^https?:\/\//i.test(sourceUrl)) return null;
 
   const confidence = Number(selection.meta?.flashscore_match_confidence || 0);
@@ -671,7 +683,10 @@ async function fetchSourcePageEvidence(selection, eventDate) {
     const fullText = cleanReasonText($("body").text());
 
     const exactEvent = mentionsTeam(fullText, home) && mentionsTeam(fullText, away);
-    const exactDate = dateVariants(eventDate).some(value => fullText.includes(value) || sourceUrl.includes(value));
+    const normalizedPage = norm(fullText);
+    const exactDate = dateVariants(eventDate).some(value =>
+      fullText.includes(value) || sourceUrl.includes(value) || normalizedPage.includes(norm(value))
+    );
     if (!exactEvent || !exactDate) return null;
 
     let excerpts = blocks.filter(text =>
@@ -710,6 +725,65 @@ async function fetchSourcePageEvidence(selection, eventDate) {
   }
 }
 
+function decodeSearchUrl(value) {
+  try {
+    const url = new URL(value);
+    if (/bing\.com$/i.test(url.hostname) && url.searchParams.get("url")) {
+      return url.searchParams.get("url");
+    }
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+async function discoverExactEventPages(selection, eventDate) {
+  const confidence = Number(selection.meta?.flashscore_match_confidence || 0);
+  if (confidence < 0.88) return [];
+  const { home, away } = splitCanonicalTeams(selection.teams);
+  if (!home || !away) return [];
+
+  const queries = [
+    `"${home}" "${away}" ${eventDate} prediction`,
+    `"${home}" vs "${away}" ${eventDate} preview statistics`,
+    `"${home}" "${away}" ${eventDate} betting tips`
+  ];
+  const found = [];
+  for (const query of queries) {
+    try {
+      const searchUrl = `https://www.bing.com/search?format=rss&q=${encodeURIComponent(query)}`;
+      const response = await fetch(searchUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; PariuVerdeEvidenceBot/1.0)" },
+        signal: AbortSignal.timeout(12000)
+      });
+      if (!response.ok) continue;
+      const $ = cheerio.load(await response.text(), { xmlMode: true });
+      $("item").each((_, item) => {
+        const url = decodeSearchUrl($(item).find("link").first().text());
+        const summary = cleanReasonText(`${$(item).find("title").text()} ${$(item).find("description").text()}`);
+        if (!url || !mentionsTeam(summary, home) || !mentionsTeam(summary, away)) return;
+        if (!found.includes(url)) found.push(url);
+      });
+      if (found.length >= 6) break;
+    } catch (error) {
+      console.warn(`[WEB-SEARCH] ${selection.teams}: ${error?.message || error}`);
+    }
+  }
+  return found.slice(0, 6);
+}
+
+async function fetchDiscoveredWebEvidence(selection, eventDate) {
+  const urls = await discoverExactEventPages(selection, eventDate);
+  for (const url of urls) {
+    const evidence = await fetchSourcePageEvidence(selection, eventDate, url);
+    if (evidence) {
+      console.log(`[WEB-EVIDENCE] exact event verified from discovered page: ${selection.teams} | ${url}`);
+      return evidence;
+    }
+  }
+  return null;
+}
+
 function cleanReasonText(value) {
   return String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -723,14 +797,17 @@ async function addVerifiedWebFallback(pool, eventDate) {
   let added = 0;
   for (let start = 0; start < missing.length; start += concurrency) {
     const batch = missing.slice(start, start + concurrency);
-    const evidence = await Promise.all(batch.map(selection => fetchSourcePageEvidence(selection, eventDate)));
+    const evidence = await Promise.all(batch.map(async selection => {
+      const original = await fetchSourcePageEvidence(selection, eventDate);
+      return original || fetchDiscoveredWebEvidence(selection, eventDate);
+    }));
     evidence.forEach((item, index) => {
       if (!item) return;
       batch[index].__analysisEvidence = item;
       added += 1;
     });
   }
-  console.log(`[WEB-EVIDENCE] verified exact-event pages=${added}/${missing.length}`);
+  console.log(`[WEB-EVIDENCE] verified exact-event pages=${added}/${missing.length} (original source + web discovery)`);
 }
 
 function localEvidenceReason(selection, language = "ro") {
