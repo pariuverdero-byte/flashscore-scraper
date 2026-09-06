@@ -1835,7 +1835,7 @@ function main() {
           `color=c=0x063D24:s=1080x1920:r=30:d=${handoffDuration.toFixed(3)},` +
             "drawbox=x=0:y=0:w=1080:h=20:color=0x38E878:t=fill," +
             `drawtext=fontfile='${boldFont}':textfile='${introTitlePath}':fontcolor=white:fontsize=72:x=(w-text_w)/2:y=760,` +
-            `drawtext=fontfile='${regularFont}':textfile='${introBrandPath}':fontcolor=0x38E878:fontsize=38:x=(w-text_w)/2:y=875,` +
+            `drawtext=fontfile='${boldFont}':textfile='${introBrandPath}':fontcolor=0x38E878:fontsize=38:x=(w-text_w)/2:y=875,` +
             "fade=t=in:st=0:d=0.18," +
             `fade=t=out:st=${Math.max(0, handoffDuration - 0.18).toFixed(3)}:d=0.18,` +
             "format=yuv420p,setsar=1,setpts=PTS-STARTPTS" +

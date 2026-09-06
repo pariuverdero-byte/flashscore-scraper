@@ -562,6 +562,65 @@ async function collectPrematchContext(selections) {
   return result;
 }
 
+function evidenceSupportsSelection(selection, evidence) {
+  if (evidence?.usable !== true) return false;
+  if (evidence.type === "verified_web_source") return true;
+
+  if (evidence.type === "double_chance_goals") {
+    return evidenceSupportsSelection(selection, evidence.result) &&
+      evidenceSupportsSelection(selection, evidence.goals);
+  }
+
+  if (evidence.type === "goals") {
+    const averages = [Number(evidence.home_avg_total_goals), Number(evidence.away_avg_total_goals)];
+    if (!averages.every(Number.isFinite)) return false;
+    const rates = Number.isFinite(evidence.home_hits) && Number.isFinite(evidence.away_hits)
+      ? [evidence.home_hits / evidence.home_matches, evidence.away_hits / evidence.away_matches]
+      : null;
+    if (evidence.direction === "over") {
+      return averages.every(value => value > evidence.line) && (!rates || rates.every(value => value >= 0.6));
+    }
+    if (evidence.direction === "under") {
+      return averages.every(value => value < evidence.line + 0.25) && (!rates || rates.every(value => value >= 0.6));
+    }
+    return false;
+  }
+
+  if (evidence.type === "btts") {
+    return evidence.home_btts_rate >= 60 && evidence.away_btts_rate >= 60;
+  }
+
+  if (evidence.type === "result") {
+    const market = norm(selection.market_raw);
+    const home = evidence.home_form;
+    const away = evidence.away_form;
+    const standings = evidence.standings;
+    const homeBetter = standings && standings.home_position < standings.away_position;
+    const awayBetter = standings && standings.away_position < standings.home_position;
+
+    if (/(^| )x2( |$)/.test(market)) {
+      if (away && Number(away.losses) >= 3) return false;
+      return Boolean((away && home && away.losses <= 2 && home.wins <= 2) || awayBetter);
+    }
+    if (/(^| )1x( |$)/.test(market)) {
+      if (home && Number(home.losses) >= 3) return false;
+      return Boolean((home && away && home.losses <= 2 && away.wins <= 2) || homeBetter);
+    }
+    if (/(victorie gazde|home win)/.test(market)) {
+      return Boolean(home && away && home.wins >= 3 && away.losses >= 3);
+    }
+    if (/(victorie oaspeti|away win)/.test(market)) {
+      return Boolean(home && away && away.wins >= 3 && home.losses >= 3);
+    }
+    if (/(^| )(12)( |$)/.test(market)) {
+      return Boolean(home && away && home.draws <= 1 && away.draws <= 1);
+    }
+    return true;
+  }
+
+  return true;
+}
+
 function teamTokens(value) {
   return norm(value).split(" ").filter(token => token.length >= 3 && !["club", "football", "bucuresti"].includes(token));
 }
@@ -656,7 +715,10 @@ function cleanReasonText(value) {
 }
 
 async function addVerifiedWebFallback(pool, eventDate) {
-  const missing = pool.filter(selection => selection.__analysisEvidence?.usable !== true);
+  const missing = pool.filter(selection =>
+    selection.__analysisEvidence?.usable !== true &&
+    selection.__analysisEvidence?.blocked_by_contradiction !== true
+  );
   const concurrency = 4;
   let added = 0;
   for (let start = 0; start < missing.length; start += concurrency) {
@@ -678,7 +740,7 @@ function localEvidenceReason(selection, language = "ro") {
   const ro = language === "ro";
   const { home, away } = splitCanonicalTeams(selection.teams);
   const formText = (form, team) => ro
-    ? `${team}: ${form.wins} victorii, ${form.draws} egaluri și ${form.losses} în ultimele ${form.matches} meciuri`
+    ? `${team}: ${form.wins} victorii, ${form.draws} egaluri și ${form.losses} înfrângeri în ultimele ${form.matches} meciuri`
     : `${team}: ${form.wins} wins, ${form.draws} draws and ${form.losses} losses in the last ${form.matches} matches`;
 
   if (evidence.type === "goals") {
@@ -912,6 +974,18 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
           selection,
           prematchContext.get(selection.match_id) || null
         );
+        if (
+          selection.__analysisEvidence?.usable === true &&
+          !evidenceSupportsSelection(selection, selection.__analysisEvidence)
+        ) {
+          selection.__analysisEvidence = {
+            ...selection.__analysisEvidence,
+            usable: false,
+            blocked_by_contradiction: true,
+            rejection: "Recent numerical evidence does not support the selected market"
+          };
+          console.log(`[AI-STATS] rejected contradictory selection: ${selection.teams} | ${selection.market_raw}`);
+        }
       }
 
       await addVerifiedWebFallback(pool, date);
