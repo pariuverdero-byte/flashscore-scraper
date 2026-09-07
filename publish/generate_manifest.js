@@ -324,6 +324,25 @@ function main() {
       defaults.brand.websiteDisplay
     );
 
+  const socialLinks = language === "ro" ? {
+    youtube: "https://www.youtube.com/@pontverde",
+    instagram: "https://www.instagram.com/nick_verde_2025/",
+    tiktok: "https://www.tiktok.com/@nicu4578"
+  } : {
+    youtube: "https://www.youtube.com/@GreenBetTips",
+    instagram: "https://www.instagram.com/nick_verde_2025/",
+    tiktok: "https://www.tiktok.com/@greenbtps"
+  };
+
+  const promotionCycle = Math.floor(Date.now() / (3 * 24 * 60 * 60 * 1000));
+  const crossPromotion = (platform) => {
+    const alternatives = Object.entries(socialLinks).filter(([name]) => name !== platform);
+    const [name, url] = alternatives[promotionCycle % alternatives.length];
+    return language === "ro"
+      ? `Urmărește-ne și pe ${name[0].toUpperCase() + name.slice(1)}: ${url}`
+      : `Follow us on ${name[0].toUpperCase() + name.slice(1)}: ${url}`;
+  };
+
   /*
    * YouTube metadata is generated in
    * generate_shorts_payload.js and is reused here.
@@ -365,7 +384,7 @@ function main() {
 
   const youtubeDescription =
     appendHashtags(
-      description,
+      `${description}\n\n${crossPromotion("youtube")}`,
       hashtags
     );
 
@@ -437,6 +456,7 @@ function main() {
   const tiktokCaption =
     [
       title,
+      crossPromotion("tiktok"),
       formatHashtags(
         tiktokHashtags
       )
@@ -448,6 +468,7 @@ function main() {
     [
       title,
       description,
+      crossPromotion("instagram"),
       formatHashtags(
         tiktokHashtags
       )
@@ -458,7 +479,8 @@ function main() {
   const facebookDescription =
     [
       title,
-      description
+      description,
+      crossPromotion("facebook")
     ]
       .filter(Boolean)
       .join("\n\n");
