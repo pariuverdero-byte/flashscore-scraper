@@ -169,6 +169,45 @@ const I18N = {
 
 const T = I18N[LANG] || I18N.ro;
 
+function cleanTitlePart(value, maxLength = 72) {
+  return String(value || "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength)
+    .replace(/[\s:;,.–—-]+$/g, "");
+}
+
+function verifiedPostTitle(ticket, ticketType, ticketDateLabel) {
+  const base = ticketType === "cota-2" ? T.cota2_title : T.zi_title;
+  const first = ticket?.selections?.[0] || {};
+  const teams = cleanTitlePart(first.teams, 48) || base;
+  const aiLabel = LANG === "en" ? first.ai?.label_en : first.ai?.label_ro;
+  const rawLabel = LANG === "en"
+    ? ""
+    : (first.meta?.bet_text || first.meta?.market_text || first.market_raw || first.market);
+  const selection = cleanTitlePart(aiLabel || rawLabel, 40) || (LANG === "en" ? "key selection" : "selecția principală");
+  const odds = cleanTitlePart(safeProduct(ticket), 12);
+  const seed = `${ticketDateLabel}|${ticketType}|${teams}`
+    .split("")
+    .reduce((sum, character) => sum + character.charCodeAt(0), 0) % 3;
+
+  const variants = LANG === "en"
+    ? [
+        `${base}: ${teams} — ${selection}, odds ${odds} (${ticketDateLabel})`,
+        `${teams}: ${selection} leads the ${base} at odds ${odds} (${ticketDateLabel})`,
+        `${base} at odds ${odds}: ${teams} — ${selection} (${ticketDateLabel})`,
+      ]
+    : [
+        `${base}: ${teams} — ${selection}, cota ${odds} (${ticketDateLabel})`,
+        `${teams}: ${selection} deschide ${base}, cota ${odds} (${ticketDateLabel})`,
+        `${base} la cota ${odds}: ${teams} — ${selection} (${ticketDateLabel})`,
+      ];
+
+  return variants[seed];
+}
+
 function buildJsonBody(payload) {
   return JSON.stringify(payload);
 }
@@ -498,7 +537,7 @@ async function main() {
 
   if (cota2Html && tickets.bilet_cota2) {
     const result = await publish({
-      title: `${T.cota2_title} (${ticketDateLabel})`,
+      title: verifiedPostTitle(tickets.bilet_cota2, "cota-2", ticketDateLabel),
       html: cota2Html,
       excerpt: T.cota2_excerpt(tickets.bilet_cota2),
       categorySlug: "cota-2",
@@ -515,7 +554,7 @@ async function main() {
 
   if (ziHtml && tickets.biletul_zilei) {
     const result = await publish({
-      title: `${T.zi_title} (${ticketDateLabel})`,
+      title: verifiedPostTitle(tickets.biletul_zilei, "biletul-zilei", ticketDateLabel),
       html: ziHtml,
       excerpt: T.zi_excerpt(tickets.biletul_zilei),
       categorySlug: "biletul-zilei",

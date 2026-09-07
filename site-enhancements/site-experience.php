@@ -24,6 +24,11 @@ add_filter('the_content', function ($content) {
             '',
             $content
         );
+        $content = preg_replace(
+            '/<section\b[^>]*class=(?:"[^"]*\bticket-analysis\b[^"]*"|\'[^\']*\bticket-analysis\b[^\']*\')[^>]*>[\s\S]*?<\/section>/i',
+            '',
+            $content
+        );
         return $content;
     }
 
@@ -74,7 +79,7 @@ add_action('wp_footer', function () {
     ?>
     <style id="pv-site-experience-css">
       body.home .elementor-element[data-id="1fe2321b"]{display:none!important}
-      body.home .pv-ticket-video,body.blog .pv-ticket-video,body.home .pick-reason,body.blog .pick-reason{display:none!important}
+      body.home .pv-ticket-video,body.blog .pv-ticket-video,body.home .pick-reason,body.blog .pick-reason,body.home .ticket-analysis,body.blog .ticket-analysis{display:none!important}
       .single-post .pv-ticket-video{width:min(100%,460px);margin:28px auto}
       .single-post .pv-ticket-video h2{text-align:center;margin-bottom:14px}
       .single-post .pv-ticket-video .wp-block-embed__wrapper{position:relative;width:100%;aspect-ratio:9/16;overflow:hidden;border-radius:14px;background:#07130f;box-shadow:0 12px 34px rgba(0,0,0,.16)}

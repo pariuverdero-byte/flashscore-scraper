@@ -38,9 +38,7 @@ function youtubeBlock(url, ticket) {
 function addOrReplaceEmbed(content, block) {
   const marker = /<!-- pv-ticket-youtube:start -->[\s\S]*?<!-- pv-ticket-youtube:end -->/i;
   if (marker.test(content)) return content.replace(marker, block);
-  const more = "<!--more-->";
-  if (content.includes(more)) return content.replace(more, `${more}\n${block}`);
-  return `${block}\n${content}`;
+  return `${content.trimEnd()}\n${block}`;
 }
 
 async function updatePost(postId, content) {
