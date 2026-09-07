@@ -51,11 +51,14 @@ add_action('wp_footer', function () {
       });
       document.querySelectorAll('a.elementor-social-icon-x-twitter:not([href]),a.elementor-social-icon-whatsapp:not([href])').forEach(a => a.closest('.elementor-grid-item')?.remove());
       const socialWrap=document.querySelector('.elementor-element[data-id="6079c56f"] .elementor-social-icons-wrapper');
-      if(socialWrap && !socialWrap.querySelector('.pv-social-tiktok')){
-        const item=document.createElement('span'); item.className='elementor-grid-item pv-social-tiktok'; item.setAttribute('role','listitem');
-        item.innerHTML=`<a class="elementor-icon elementor-social-icon" href="${c.tiktok}" target="_blank" rel="noopener noreferrer" aria-label="TikTok" style="background:#111;color:#fff;font-weight:900;font-size:17px">♪</a>`;
+      const addSocial=(network,url,color,path)=>{
+        if(!socialWrap || socialWrap.querySelector(`.pv-social-${network}`) || socialWrap.querySelector(`.elementor-social-icon-${network}`)) return;
+        const item=document.createElement('span'); item.className=`elementor-grid-item pv-social-${network}`; item.setAttribute('role','listitem');
+        item.innerHTML=`<a class="elementor-icon elementor-social-icon" href="${url}" target="_blank" rel="noopener noreferrer" aria-label="${network[0].toUpperCase()+network.slice(1)}" style="background:${color};color:#fff"><span class="elementor-screen-only">${network}</span><svg aria-hidden="true" viewBox="0 0 448 512" xmlns="http://www.w3.org/2000/svg" style="width:1em;height:1em;fill:currentColor"><path d="${path}"></path></svg></a>`;
         socialWrap.appendChild(item);
-      }
+      };
+      addSocial('instagram',c.instagram,'#c13584','M224.1 141c-63.6 0-114.9 51.3-114.9 114.9s51.3 114.9 114.9 114.9S339 319.5 339 255.9 287.7 141 224.1 141zm0 189.6c-41.1 0-74.7-33.5-74.7-74.7s33.5-74.7 74.7-74.7 74.7 33.5 74.7 74.7-33.6 74.7-74.7 74.7zm146.4-194.3c0 14.9-12 26.8-26.8 26.8-14.9 0-26.8-12-26.8-26.8s12-26.8 26.8-26.8 26.8 12 26.8 26.8zm76.1 27.2c-1.7-35.9-9.9-67.7-36.2-93.9-26.2-26.2-58-34.4-93.9-36.2-37-2.1-147.9-2.1-184.9 0-35.8 1.7-67.6 9.9-93.9 36.1s-34.4 58-36.2 93.9c-2.1 37-2.1 147.9 0 184.9 1.7 35.9 9.9 67.7 36.2 93.9s58 34.4 93.9 36.2c37 2.1 147.9 2.1 184.9 0 35.9-1.7 67.7-9.9 93.9-36.2 26.2-26.2 34.4-58 36.2-93.9 2.1-37 2.1-147.8 0-184.8z');
+      addSocial('tiktok',c.tiktok,'#111','M448 209.9a210.1 210.1 0 0 1-122.8-39.3v178.7A162.6 162.6 0 1 1 185 188v89.9a74.6 74.6 0 1 0 52.2 71.3V0h88a121.2 121.2 0 0 0 1.9 22.2A122.2 122.2 0 0 0 381 102.4a121.4 121.4 0 0 0 67 20.1z');
       if(!document.body.classList.contains('home')) return;
       const key=`pvTelegramInvite:${location.hostname}`;
       const last=Number(localStorage.getItem(key)||0);
