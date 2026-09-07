@@ -20,10 +20,10 @@ jobs:
     timeout-minutes: 10
 
     env:
-      PV_LIVE_ENDPOINT: ${{ secrets.PV_LIVE_ENDPOINT }}
+      PV_LIVE_ENDPOINT: https://pariuverde.ro/wp-json/pv-live/v1/feed
       PV_LIVE_TOKEN: ${{ secrets.PV_LIVE_TOKEN }}
 
-      GBT_LIVE_ENDPOINT: ${{ secrets.GBT_LIVE_ENDPOINT }}
+      GBT_LIVE_ENDPOINT: https://greenbettips.com/wp-json/pv-live/v1/feed
       GBT_LIVE_TOKEN: ${{ secrets.GBT_LIVE_TOKEN }}
 
       LIVE_MAX_MATCHES: "15"
@@ -52,12 +52,24 @@ jobs:
             live-betting/data/signals.json
             live-betting/data/live_feed.json
             live-betting/data/pre_match_cache.json
+            live-betting/data/telegram_sent.json
           key: live-betting-state-${{ github.run_id }}
           restore-keys: |
             live-betting-state-
 
       - name: Build live feed
         run: node live-betting/scripts/run-once.js
+
+      - name: Publish live feed to both WordPress sites
+        run: node live-betting/scripts/publish-wordpress.js
+
+      - name: Publish new LIVE signals and periodic social promotion to Telegram
+        env:
+          TELEGRAM_PV_BOT_TOKEN: ${{ secrets.TELEGRAM_PV_BOT_TOKEN }}
+          TELEGRAM_PV_CHAT_ID: ${{ secrets.TELEGRAM_PV_CHAT_ID }}
+          TELEGRAM_GBT_BOT_TOKEN: ${{ secrets.TELEGRAM_GBT_BOT_TOKEN }}
+          TELEGRAM_GBT_CHAT_ID: ${{ secrets.TELEGRAM_GBT_CHAT_ID }}
+        run: node live-betting/scripts/publish-telegram.js
 
       - name: Save live state
         if: always()
@@ -68,6 +80,7 @@ jobs:
             live-betting/data/signals.json
             live-betting/data/live_feed.json
             live-betting/data/pre_match_cache.json
+            live-betting/data/telegram_sent.json
           key: live-betting-state-${{ github.run_id }}
 
       - name: Upload debug feed
@@ -80,5 +93,6 @@ jobs:
             live-betting/data/live_matches.json
             live-betting/data/signals.json
             live-betting/data/pre_match_cache.json
+            live-betting/data/telegram_sent.json
           if-no-files-found: warn
           retention-days: 3

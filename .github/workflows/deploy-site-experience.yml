@@ -1,0 +1,30 @@
+name: Deploy homepage social and Telegram experience
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - site-enhancements/site-experience.php
+      - site-enhancements/deploy-code-snippet.js
+      - .github/workflows/deploy-site-experience.yml
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - site: pariuverde
+            url: https://pariuverde.ro
+          - site: greenbettips
+            url: https://greenbettips.com
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy ${{ matrix.site }} frontend snippet
+        env:
+          WP_URL: ${{ matrix.url }}
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ matrix.site == 'greenbettips' && secrets.WP_APP_PASS_GREENBET || secrets.WP_APP_PASS }}
+        run: node site-enhancements/deploy-code-snippet.js
