@@ -31,11 +31,11 @@ jobs:
           if (organizations.length !== 1) throw new Error(`Expected one organization, found ${organizations.length}`);
           const org = organizations[0];
           const data = await request(`query { channels(input: { organizationId: "${org.id}" }) { name displayName service isQueuePaused } }`);
-          const expected = ['tiktok', 'instagram'];
+          const expected = ['tiktok', 'instagram', 'facebook'];
           const services = data.channels.map(channel => String(channel.service).toLowerCase());
           const missing = expected.filter(service => !services.includes(service));
           console.log(`Buffer organization: ${org.name}`);
           for (const channel of data.channels) console.log(`Connected: ${channel.service} / ${channel.displayName || channel.name}`);
           if (missing.length) throw new Error(`Missing required channels: ${missing.join(', ')}`);
-          console.log('Buffer connection is ready for TikTok and Instagram.');
+          console.log('Buffer connection is ready for TikTok, Instagram, and Facebook.');
           NODE

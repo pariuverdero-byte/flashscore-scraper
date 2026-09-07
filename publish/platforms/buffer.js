@@ -6,7 +6,7 @@ const WP_URL = String(process.env.WP_URL || "").trim().replace(/\/+$/, "");
 const WP_USER = String(process.env.WP_USER || "").trim();
 const WP_APP_PASS = String(process.env.WP_APP_PASS || "").trim();
 const TIME_ZONE = String(process.env.BUFFER_TIME_ZONE || "Europe/Bucharest").trim();
-const TARGET_SERVICES = String(process.env.BUFFER_TARGET_SERVICES || "tiktok,instagram")
+const TARGET_SERVICES = String(process.env.BUFFER_TARGET_SERVICES || "tiktok,instagram,facebook")
   .split(",")
   .map(value => value.trim().toLowerCase())
   .filter(Boolean);
@@ -129,7 +129,8 @@ function captionFor(manifest, service) {
   const fallback = [manifest.metadata?.title, ...(manifest.metadata?.hashtags || []).map(tag => `#${String(tag).replace(/^#/, "")}`)]
     .filter(Boolean)
     .join("\n\n");
-  return String(platform?.caption || fallback).trim().slice(0, service === "tiktok" ? 2200 : 2000);
+  const platformText = platform?.caption || platform?.description;
+  return String(platformText || fallback).trim().slice(0, service === "tiktok" ? 2200 : 2000);
 }
 
 async function createVideoPost(channel, text, videoUrl) {

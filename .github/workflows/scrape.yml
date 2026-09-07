@@ -872,7 +872,7 @@ jobs:
         if: success()
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
-          BUFFER_TARGET_SERVICES: tiktok,instagram
+          BUFFER_TARGET_SERVICES: tiktok,instagram,facebook
           BUFFER_TIME_ZONE: Europe/Bucharest
           WP_URL: https://pariuverde.ro
           WP_USER: ${{ secrets.WP_USER }}
