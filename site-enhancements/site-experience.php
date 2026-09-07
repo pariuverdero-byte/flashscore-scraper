@@ -9,7 +9,7 @@ add_action('wp_footer', function () {
     $config = $is_en ? [
         'brand' => 'GreenBetTips.com',
         'telegram' => 'https://t.me/greenbettips_com',
-        'facebook' => 'https://www.facebook.com/greenbet.tips/',
+        'facebook' => 'https://www.facebook.com/profile.php?id=61593989710772',
         'instagram' => 'https://www.instagram.com/nick_verde_2025/',
         'tiktok' => 'https://www.tiktok.com/@greenbtps',
         'youtube' => 'https://www.youtube.com/@GreenBetTips',
