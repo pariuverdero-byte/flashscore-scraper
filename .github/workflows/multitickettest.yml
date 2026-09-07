@@ -3,7 +3,7 @@ name: Scrape + WordPress + Test Multi-Ticket Shorts Engine
 on:
   workflow_dispatch:
   schedule:
-    - cron: "35 11 * * *" # 14:35 RO during daylight saving time
+    - cron: "35 7 * * *" # 10:35 RO during daylight-saving time
 
 jobs:
   scrape:
