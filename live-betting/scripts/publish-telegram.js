@@ -9,7 +9,7 @@ const targets = [
 
 const social = {
   ro: [
-    ["TikTok", "https://www.tiktok.com/@nicu4578"],
+    ["TikTok", "https://www.tiktok.com/@nicu_pariuverde"],
     ["YouTube", "https://www.youtube.com/@pontverde"],
     ["Instagram", "https://www.instagram.com/nick_verde_2025/"],
   ],

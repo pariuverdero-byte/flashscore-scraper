@@ -22,7 +22,7 @@ add_action('wp_footer', function () {
         'telegram' => 'https://t.me/pariuverde',
         'facebook' => 'https://www.facebook.com/profile.php?id=61594437740933',
         'instagram' => 'https://www.instagram.com/nick_verde_2025/',
-        'tiktok' => 'https://www.tiktok.com/@nicu4578',
+        'tiktok' => 'https://www.tiktok.com/@nicu_pariuverde',
         'youtube' => 'https://www.youtube.com/@pontverde',
         'title' => 'Primește ponturile imediat',
         'copy' => 'Intră pe canalul nostru de Telegram pentru biletele zilei și semnalele de pariere marcate clar LIVE.',

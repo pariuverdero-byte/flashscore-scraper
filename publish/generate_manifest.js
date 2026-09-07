@@ -327,7 +327,7 @@ function main() {
   const socialLinks = language === "ro" ? {
     youtube: "https://www.youtube.com/@pontverde",
     instagram: "https://www.instagram.com/nick_verde_2025/",
-    tiktok: "https://www.tiktok.com/@nicu4578"
+    tiktok: "https://www.tiktok.com/@nicu_pariuverde"
   } : {
     youtube: "https://www.youtube.com/@GreenBetTips",
     instagram: "https://www.instagram.com/nick_verde_2025/",
