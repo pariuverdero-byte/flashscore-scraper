@@ -3,6 +3,12 @@ name: Live Betting Feed
 on:
   workflow_dispatch:
 
+  push:
+    branches: [main]
+    paths:
+      - live-betting/**
+      - .github/workflows/live-betting.yml
+
   schedule:
     - cron: "*/5 * * * *"
 
