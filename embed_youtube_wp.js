@@ -19,14 +19,18 @@ function youtubeBlock(url, ticket) {
   const title = LANG === "ro"
     ? (ticket === "cota-2" ? "Analiza video – Bilet Cota 2" : "Analiza video – Biletul Zilei")
     : (ticket === "cota-2" ? "Video analysis – Odds 2 Ticket" : "Video analysis – Bet of the Day");
+  const videoId = new URL(url).searchParams.get("v");
+  if (!/^[A-Za-z0-9_-]{6,20}$/.test(videoId || "")) {
+    throw new Error(`Invalid YouTube video URL: ${url}`);
+  }
   return `<!-- pv-ticket-youtube:start -->
 <section class="pv-ticket-video">
 <h2>${title}</h2>
-<!-- wp:embed {"url":"${url}","type":"video","providerNameSlug":"youtube","responsive":true,"className":"wp-embed-aspect-9-16 wp-has-aspect-ratio"} -->
+<!-- wp:html -->
 <figure class="wp-block-embed is-type-video is-provider-youtube wp-block-embed-youtube wp-embed-aspect-9-16 wp-has-aspect-ratio"><div class="wp-block-embed__wrapper">
-${url}
+<iframe src="https://www.youtube-nocookie.com/embed/${videoId}" title="${title}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
 </div></figure>
-<!-- /wp:embed -->
+<!-- /wp:html -->
 </section>
 <!-- pv-ticket-youtube:end -->`;
 }

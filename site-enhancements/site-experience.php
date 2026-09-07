@@ -2,6 +2,46 @@
  * PariuVerde / GreenBetTips temporary homepage enhancements.
  * Installed through Code Snippets; intentionally contains no opening PHP tag.
  */
+add_filter('the_content', function ($content) {
+    if (is_admin() || !is_string($content) || $content === '') return $content;
+
+    // Homepage ticket cards must remain compact: ticket table only. Some
+    // themes render the full post content even when a <!--more--> marker is
+    // present, so remove article-only material server-side as well as in CSS.
+    if (is_front_page() || is_home()) {
+        $content = preg_replace(
+            '/<!--\s*pv-ticket-youtube:start\s*-->[\s\S]*?<!--\s*pv-ticket-youtube:end\s*-->/i',
+            '',
+            $content
+        );
+        $content = preg_replace(
+            '/<section\b[^>]*class=(?:"[^"]*\bpv-ticket-video\b[^"]*"|\'[^\']*\bpv-ticket-video\b[^\']*\')[^>]*>[\s\S]*?<\/section>/i',
+            '',
+            $content
+        );
+        $content = preg_replace(
+            '/<div\b[^>]*class=(?:"[^"]*\bpick-reason\b[^"]*"|\'[^\']*\bpick-reason\b[^\']*\')[^>]*>[\s\S]*?<\/div>/i',
+            '',
+            $content
+        );
+        return $content;
+    }
+
+    // REST-created Gutenberg embed blocks can be left as a plain YouTube URL
+    // by themes that do not run the oEmbed callback. Convert only our marked
+    // ticket videos to a real privacy-enhanced responsive player.
+    return preg_replace_callback(
+        '/(<section\b[^>]*class=(?:"[^"]*\bpv-ticket-video\b[^"]*"|\'[^\']*\bpv-ticket-video\b[^\']*\')[^>]*>[\s\S]*?<div\b[^>]*class="wp-block-embed__wrapper"[^>]*>)\s*(?:<p>)?https?:\/\/(?:www\.)?youtube\.com\/watch\?v=([A-Za-z0-9_-]{6,20})(?:[^<\s]*)(?:<\/p>)?\s*(<\/div>)/i',
+        function ($match) {
+            $id = esc_attr($match[2]);
+            $title = esc_attr__('Video analysis', 'pv-site-experience');
+            $iframe = '<iframe src="https://www.youtube-nocookie.com/embed/' . $id . '" title="' . $title . '" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>';
+            return $match[1] . $iframe . $match[3];
+        },
+        $content
+    );
+}, 99);
+
 add_action('wp_footer', function () {
     if (is_admin()) return;
 
@@ -34,6 +74,11 @@ add_action('wp_footer', function () {
     ?>
     <style id="pv-site-experience-css">
       body.home .elementor-element[data-id="1fe2321b"]{display:none!important}
+      body.home .pv-ticket-video,body.blog .pv-ticket-video,body.home .pick-reason,body.blog .pick-reason{display:none!important}
+      .single-post .pv-ticket-video{width:min(100%,460px);margin:28px auto}
+      .single-post .pv-ticket-video h2{text-align:center;margin-bottom:14px}
+      .single-post .pv-ticket-video .wp-block-embed__wrapper{position:relative;width:100%;aspect-ratio:9/16;overflow:hidden;border-radius:14px;background:#07130f;box-shadow:0 12px 34px rgba(0,0,0,.16)}
+      .single-post .pv-ticket-video iframe{position:absolute;inset:0;width:100%!important;height:100%!important;border:0}
       .elementor-element[data-id="6079c56f"] .elementor-social-icon{width:50px!important;height:50px!important;min-width:50px!important;min-height:50px!important;padding:0!important;border-radius:6px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;font-size:21px!important;line-height:1!important}
       .elementor-element[data-id="6079c56f"] .elementor-social-icon svg{width:21px!important;height:21px!important;display:block!important}
       .elementor-element[data-id="6079c56f"] .elementor-grid-item{display:inline-flex!important;align-items:center!important;justify-content:center!important}
@@ -41,6 +86,7 @@ add_action('wp_footer', function () {
       .pv-tg-overlay.is-open{opacity:1;visibility:visible}.pv-tg-card{position:relative;width:min(460px,100%);border:1px solid rgba(43,213,119,.35);border-radius:22px;padding:34px 30px 28px;background:linear-gradient(145deg,#071b15,#0b2c20);color:#fff;box-shadow:0 25px 80px rgba(0,0,0,.45);text-align:center}
       .pv-tg-icon{width:66px;height:66px;border-radius:18px;margin:0 auto 18px;display:grid;place-items:center;background:#25a7e8;box-shadow:0 10px 30px rgba(37,167,232,.3);font-size:34px}.pv-tg-card h2{color:#fff!important;font-size:27px!important;line-height:1.2!important;margin:0 0 12px!important}.pv-tg-card p{color:#d8e9e2!important;font-size:16px;line-height:1.55;margin:0 auto 23px;max-width:370px}
       .pv-tg-actions{display:flex;gap:11px;justify-content:center;flex-wrap:wrap}.pv-tg-join,.pv-tg-later{border:0;border-radius:999px;padding:13px 22px;font-weight:800;font-size:15px;cursor:pointer;text-decoration:none!important}.pv-tg-join{background:#20d276;color:#032116!important}.pv-tg-later{background:transparent;color:#d8e9e2;border:1px solid rgba(255,255,255,.25)}.pv-tg-close{position:absolute;right:14px;top:12px;border:0;background:transparent;color:#fff;font-size:27px;line-height:1;cursor:pointer;padding:5px}.pv-tg-note{display:block;margin-top:18px;font-size:11px;opacity:.62}
+      @media(max-width:767px){.bilet-pariu{display:block;width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}.bilet-pariu th,.bilet-pariu td{min-width:105px;white-space:nowrap}.bilet-pariu th:first-child,.bilet-pariu td:first-child{min-width:170px}.bilet-pariu .pick-reason{min-width:220px;white-space:normal}.single-post .pv-ticket-video{width:100%;margin:22px auto}.single-post .pv-ticket-video .wp-block-embed__wrapper{border-radius:10px}}
       @media(max-width:520px){.pv-tg-card{padding:31px 20px 24px}.pv-tg-actions{display:grid}.pv-tg-join,.pv-tg-later{width:100%}}
     </style>
     <script id="pv-site-experience-js">
