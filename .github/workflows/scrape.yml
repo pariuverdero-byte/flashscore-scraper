@@ -874,6 +874,9 @@ jobs:
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_TARGET_SERVICES: tiktok,instagram,facebook
+          # Publish to every connected channel instead of failing the entire
+          # distribution when Buffer temporarily omits one integration.
+          BUFFER_REQUIRE_ALL_TARGETS: "false"
           BUFFER_TIME_ZONE: Europe/Bucharest
           WP_URL: https://pariuverde.ro
           WP_USER: ${{ secrets.WP_USER }}
