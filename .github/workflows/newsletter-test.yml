@@ -25,7 +25,7 @@ jobs:
           if (!response.ok) throw new Error(body.message || `WordPress HTTP ${response.status}`);
           const plugins = body.filter(plugin => /newsletter|mailpoet|jetpack/i.test(`${plugin.plugin} ${plugin.name}`));
           for (const plugin of plugins) console.log(`Active: ${plugin.plugin} / ${plugin.name}`);
-          const core = plugins.some(plugin => /^newsletter\/newsletter\.php$/i.test(plugin.plugin));
+          const core = plugins.some(plugin => /^newsletter\/(?:newsletter\.php|plugin)$/i.test(plugin.plugin));
           const automated = plugins.some(plugin => /newsletter.*automated|automated.*newsletter/i.test(`${plugin.plugin} ${plugin.name}`));
           if (!core) throw new Error('The Newsletter Plugin core is not active');
           console.log(`Newsletter core: active`);
