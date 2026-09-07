@@ -868,6 +868,24 @@ jobs:
             TICKET_TYPE="$TICKET_TYPE" node publish/platforms/telegram.js
           done
 
+      - name: Publish alternating PariuVerde ticket through Buffer
+        if: success()
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_TARGET_SERVICES: tiktok,instagram
+          BUFFER_TIME_ZONE: Europe/Bucharest
+          WP_URL: https://pariuverde.ro
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${BUFFER_API_KEY:-}" ]; then
+            echo "Buffer is not configured; skipping."
+            exit 0
+          fi
+          node publish/platforms/buffer.js
+
       # ==================================================
       # 15) UPLOAD FINAL ARTIFACT
       # ==================================================
@@ -881,6 +899,7 @@ jobs:
 
             output/build_summary.json
             output/publishing_summary.json
+            output/buffer_publishing_summary.json
 
             output/bilet_cota2/shorts_payload.json
             output/bilet_cota2/voice_script.txt

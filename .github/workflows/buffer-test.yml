@@ -1,0 +1,41 @@
+name: Test Buffer connection
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-buffer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Buffer API and connected channels
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const apiKey = String(process.env.BUFFER_API_KEY || '').trim();
+          if (!apiKey) throw new Error('BUFFER_API_KEY is missing');
+          async function request(query) {
+            const response = await fetch('https://api.buffer.com', {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ query })
+            });
+            const body = await response.json();
+            if (!response.ok || body.errors?.length) throw new Error(body.errors?.map(e => e.message).join('; ') || `HTTP ${response.status}`);
+            return body.data;
+          }
+          const account = await request('query { account { organizations { id name } } }');
+          const organizations = account.account?.organizations || [];
+          if (organizations.length !== 1) throw new Error(`Expected one organization, found ${organizations.length}`);
+          const org = organizations[0];
+          const data = await request(`query { channels(input: { organizationId: "${org.id}" }) { name displayName service isQueuePaused } }`);
+          const expected = ['tiktok', 'instagram'];
+          const services = data.channels.map(channel => String(channel.service).toLowerCase());
+          const missing = expected.filter(service => !services.includes(service));
+          console.log(`Buffer organization: ${org.name}`);
+          for (const channel of data.channels) console.log(`Connected: ${channel.service} / ${channel.displayName || channel.name}`);
+          if (missing.length) throw new Error(`Missing required channels: ${missing.join(', ')}`);
+          console.log('Buffer connection is ready for TikTok and Instagram.');
+          NODE
