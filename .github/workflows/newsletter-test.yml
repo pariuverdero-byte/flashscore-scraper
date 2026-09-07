@@ -1,0 +1,33 @@
+name: Inspect PariuVerde newsletter setup
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect-newsletter:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect active newsletter plugins
+        env:
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const user = String(process.env.WP_USER || '').trim();
+          const password = String(process.env.WP_APP_PASS || '').trim();
+          if (!user || !password) throw new Error('WordPress credentials are missing');
+          const response = await fetch('https://pariuverde.ro/wp-json/wp/v2/plugins?status=active&per_page=100', {
+            headers: { Authorization: `Basic ${Buffer.from(`${user}:${password}`).toString('base64')}` }
+          });
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(body.message || `WordPress HTTP ${response.status}`);
+          const plugins = body.filter(plugin => /newsletter|mailpoet|jetpack/i.test(`${plugin.plugin} ${plugin.name}`));
+          for (const plugin of plugins) console.log(`Active: ${plugin.plugin} / ${plugin.name}`);
+          const core = plugins.some(plugin => /^newsletter\/newsletter\.php$/i.test(plugin.plugin));
+          const automated = plugins.some(plugin => /newsletter.*automated|automated.*newsletter/i.test(`${plugin.plugin} ${plugin.name}`));
+          if (!core) throw new Error('The Newsletter Plugin core is not active');
+          console.log(`Newsletter core: active`);
+          console.log(`Automated addon: ${automated ? 'active' : 'not active'}`);
+          NODE
