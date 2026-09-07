@@ -2,6 +2,15 @@ name: Test Buffer connection
 
 on:
   workflow_dispatch:
+    inputs:
+      account:
+        description: Buffer account to verify
+        required: true
+        type: choice
+        default: pariuverde
+        options:
+          - pariuverde
+          - greenbettips
 
 jobs:
   test-buffer:
@@ -9,7 +18,8 @@ jobs:
     steps:
       - name: Verify Buffer API and connected channels
         env:
-          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_API_KEY: ${{ inputs.account == 'greenbettips' && secrets.BUFFER_GBT_API_KEY || secrets.BUFFER_API_KEY }}
+          BUFFER_ACCOUNT: ${{ inputs.account }}
         shell: bash
         run: |
           set -euo pipefail
@@ -31,11 +41,15 @@ jobs:
           if (organizations.length !== 1) throw new Error(`Expected one organization, found ${organizations.length}`);
           const org = organizations[0];
           const data = await request(`query { channels(input: { organizationId: "${org.id}" }) { name displayName service isQueuePaused } }`);
-          const expected = ['tiktok', 'instagram', 'facebook'];
+          const allowed = ['tiktok', 'instagram', 'facebook'];
           const services = data.channels.map(channel => String(channel.service).toLowerCase());
-          const missing = expected.filter(service => !services.includes(service));
           console.log(`Buffer organization: ${org.name}`);
           for (const channel of data.channels) console.log(`Connected: ${channel.service} / ${channel.displayName || channel.name}`);
-          if (missing.length) throw new Error(`Missing required channels: ${missing.join(', ')}`);
-          console.log('Buffer connection is ready for TikTok, Instagram, and Facebook.');
+          const supported = services.filter(service => allowed.includes(service));
+          if (!supported.length) throw new Error(`No supported social channels connected for ${process.env.BUFFER_ACCOUNT}`);
+          if (process.env.BUFFER_ACCOUNT === 'pariuverde') {
+            const missing = allowed.filter(service => !services.includes(service));
+            if (missing.length) throw new Error(`Missing required PariuVerde channels: ${missing.join(', ')}`);
+          }
+          console.log(`Buffer connection is ready for ${supported.join(', ')}.`);
           NODE

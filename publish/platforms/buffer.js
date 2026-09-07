@@ -6,6 +6,11 @@ const WP_URL = String(process.env.WP_URL || "").trim().replace(/\/+$/, "");
 const WP_USER = String(process.env.WP_USER || "").trim();
 const WP_APP_PASS = String(process.env.WP_APP_PASS || "").trim();
 const TIME_ZONE = String(process.env.BUFFER_TIME_ZONE || "Europe/Bucharest").trim();
+const BRAND = String(process.env.BUFFER_BRAND || "PariuVerde").trim();
+const MEDIA_PREFIX = String(process.env.BUFFER_MEDIA_PREFIX || "pv-buffer").trim();
+const REQUIRE_ALL_TARGETS = String(process.env.BUFFER_REQUIRE_ALL_TARGETS || "true").trim().toLowerCase() !== "false";
+const TITLE_COTA2 = String(process.env.BUFFER_TITLE_COTA2 || "Bilet Cota 2").trim();
+const TITLE_DAILY = String(process.env.BUFFER_TITLE_DAILY || "Biletul Zilei").trim();
 const TARGET_SERVICES = String(process.env.BUFFER_TARGET_SERVICES || "tiktok,instagram,facebook")
   .split(",")
   .map(value => value.trim().toLowerCase())
@@ -79,7 +84,9 @@ async function getTargetChannels() {
   const channelData = await graphql(`query { channels(input: { organizationId: ${JSON.stringify(organization.id)} }) { id name displayName service isQueuePaused } }`);
   const channels = (channelData.channels || []).filter(channel => TARGET_SERVICES.includes(String(channel.service).toLowerCase()));
   const missing = TARGET_SERVICES.filter(service => !channels.some(channel => String(channel.service).toLowerCase() === service));
-  if (missing.length) throw new Error(`Missing Buffer channels: ${missing.join(", ")}`);
+  if (!channels.length) throw new Error(`No Buffer channels found for: ${TARGET_SERVICES.join(", ")}`);
+  if (REQUIRE_ALL_TARGETS && missing.length) throw new Error(`Missing Buffer channels: ${missing.join(", ")}`);
+  if (missing.length) console.log(`[BUFFER] Unconnected channels skipped: ${missing.join(", ")}`);
   if (channels.some(channel => channel.isQueuePaused)) {
     throw new Error(`Buffer queue is paused for: ${channels.filter(channel => channel.isQueuePaused).map(channel => channel.name).join(", ")}`);
   }
@@ -162,14 +169,15 @@ async function markPublished(mediaId, results) {
 
 const selected = chooseReadyTicket();
 if (!selected) {
-  console.log("[BUFFER] No ready PariuVerde ticket video; skipped.");
+  console.log(`[BUFFER] No ready ${BRAND} ticket video; skipped.`);
   process.exit(0);
 }
 
 const date = localDateParts();
 const localDate = `${date.year}-${date.month}-${date.day}`;
-const slug = `pv-buffer-${localDate}-${selected.ticketType.replace(/_/g, "-")}`;
-const title = selected.ticketType === "bilet_cota2" ? `Bilet Cota 2 ${localDate}` : `Biletul Zilei ${localDate}`;
+const slug = `${MEDIA_PREFIX}-${localDate}-${selected.ticketType.replace(/_/g, "-")}`;
+const titleBase = selected.ticketType === "bilet_cota2" ? TITLE_COTA2 : TITLE_DAILY;
+const title = `${titleBase} ${localDate}`;
 const { media, alreadyPublished } = await uploadVideo(selected.videoFile, slug, title);
 if (alreadyPublished) {
   console.log(`[BUFFER] ${slug} was already published; skipped to prevent duplicates.`);
@@ -188,6 +196,7 @@ const summary = {
   status: "success",
   generatedAt: new Date().toISOString(),
   organization: organization.name,
+  brand: BRAND,
   selectedTicket: selected.ticketType,
   usedFallback: selected.usedFallback,
   mediaUrl: media.source_url,

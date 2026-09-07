@@ -681,6 +681,29 @@ jobs:
             TICKET_TYPE="$TICKET_TYPE" node publish/platforms/telegram.js
           done
 
+      - name: Publish alternating GreenBetTips ticket through Buffer
+        if: success()
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_GBT_API_KEY }}
+          BUFFER_TARGET_SERVICES: tiktok,instagram,facebook
+          BUFFER_REQUIRE_ALL_TARGETS: "false"
+          BUFFER_TIME_ZONE: Europe/Bucharest
+          BUFFER_BRAND: GreenBetTips
+          BUFFER_MEDIA_PREFIX: gbt-buffer
+          BUFFER_TITLE_COTA2: Daily Double Bet
+          BUFFER_TITLE_DAILY: Bet of the Day
+          WP_URL: https://greenbettips.com
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${BUFFER_API_KEY:-}" ]; then
+            echo "Buffer GreenBetTips is not configured; skipping."
+            exit 0
+          fi
+          node publish/platforms/buffer.js
+
       # ==================================================
       # 15) UPLOAD FINAL ARTIFACT
       # ==================================================
@@ -694,6 +717,7 @@ jobs:
 
             output/build_summary.json
             output/publishing_summary.json
+            output/buffer_publishing_summary.json
 
             output/bilet_cota2/shorts_payload.json
             output/bilet_cota2/voice_script.txt
