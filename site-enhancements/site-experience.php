@@ -20,7 +20,7 @@ add_action('wp_footer', function () {
     ] : [
         'brand' => 'PariuVerde.ro',
         'telegram' => 'https://t.me/pariuverde',
-        'facebook' => 'https://www.facebook.com/PeVerde',
+        'facebook' => 'https://www.facebook.com/profile.php?id=61594437740933',
         'instagram' => 'https://www.instagram.com/nick_verde_2025/',
         'tiktok' => 'https://www.tiktok.com/@nicu4578',
         'youtube' => 'https://www.youtube.com/@pontverde',
