@@ -34,6 +34,9 @@ add_action('wp_footer', function () {
     ?>
     <style id="pv-site-experience-css">
       body.home .elementor-element[data-id="1fe2321b"]{display:none!important}
+      .elementor-element[data-id="6079c56f"] .elementor-social-icon{width:50px!important;height:50px!important;min-width:50px!important;min-height:50px!important;padding:0!important;border-radius:6px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;font-size:21px!important;line-height:1!important}
+      .elementor-element[data-id="6079c56f"] .elementor-social-icon svg{width:21px!important;height:21px!important;display:block!important}
+      .elementor-element[data-id="6079c56f"] .elementor-grid-item{display:inline-flex!important;align-items:center!important;justify-content:center!important}
       .pv-tg-overlay{position:fixed;inset:0;z-index:999999;background:rgba(4,15,12,.72);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:20px;opacity:0;visibility:hidden;transition:.22s ease}
       .pv-tg-overlay.is-open{opacity:1;visibility:visible}.pv-tg-card{position:relative;width:min(460px,100%);border:1px solid rgba(43,213,119,.35);border-radius:22px;padding:34px 30px 28px;background:linear-gradient(145deg,#071b15,#0b2c20);color:#fff;box-shadow:0 25px 80px rgba(0,0,0,.45);text-align:center}
       .pv-tg-icon{width:66px;height:66px;border-radius:18px;margin:0 auto 18px;display:grid;place-items:center;background:#25a7e8;box-shadow:0 10px 30px rgba(37,167,232,.3);font-size:34px}.pv-tg-card h2{color:#fff!important;font-size:27px!important;line-height:1.2!important;margin:0 0 12px!important}.pv-tg-card p{color:#d8e9e2!important;font-size:16px;line-height:1.55;margin:0 auto 23px;max-width:370px}
