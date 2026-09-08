@@ -2014,6 +2014,17 @@ async function main() {
   const ticket =
     tickets[TICKET_TYPE];
 
+  // The WordPress step records existing tickets. Do not redistribute them on
+  // a later manual/scheduled run, even when newly generated selections differ.
+  if (process.env.SHORTS_RESPECT_PUBLICATION_GUARD === "true") {
+    const publication = JSON.parse(await fs.readFile("published_posts.json", "utf8"));
+    const type = TICKET_TYPE === "bilet_cota2" ? "cota-2" : "biletul-zilei";
+    if (publication.posts.some(post => post.ticket === type && post.alreadyPublished)) {
+      await writeSkippedPayload("Ticket already published; repeat distribution skipped.", tickets.date);
+      return;
+    }
+  }
+
   if (
     !ticket ||
     !Array.isArray(

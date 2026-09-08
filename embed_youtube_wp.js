@@ -81,7 +81,7 @@ const mapping = {
 let updated = 0;
 
 for (const [ticketType, ticket] of Object.entries(mapping)) {
-  const post = posts.find(item => item.ticket === ticket && item.success && item.id);
+  const post = posts.find(item => item.ticket === ticket && item.success && item.id && !item.alreadyPublished);
   if (!post) {
     console.log(`[WP-EMBED] ${ticketType}: no newly published WordPress post`);
     continue;

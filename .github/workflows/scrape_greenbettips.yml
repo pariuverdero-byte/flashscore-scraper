@@ -1,5 +1,9 @@
 name: GreenBetTips Daily Tickets + WordPress + YouTube Shorts
 
+concurrency:
+  group: greenbettips-daily-pipeline
+  cancel-in-progress: false
+
 on:
   workflow_dispatch:
   schedule:
@@ -16,6 +20,7 @@ jobs:
 
     env:
       DAY_OFFSET: "0"
+      SHORTS_RESPECT_PUBLICATION_GUARD: "true"
       INCLUDE_LIVE: "true"
       LANG: "en"
 

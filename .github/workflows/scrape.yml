@@ -25,6 +25,7 @@ jobs:
       DAY_OFFSET: "0"
       INCLUDE_LIVE: "true"
       LANG: "ro"
+      SHORTS_RESPECT_PUBLICATION_GUARD: "true"
 
       CLAUDIU_MIN_ODD: "1.15"
 

@@ -4,6 +4,7 @@
 
 import fs from "fs/promises";
 import fetch from "node-fetch";
+import { findPublishedTicket, ticketSlug } from "./scripts/ticket-publication-guard.js";
 
 const { WP_URL, WP_USER, WP_APP_PASS } = process.env;
 const LANG = (process.env.LANG || "ro").toLowerCase();
@@ -216,6 +217,7 @@ function buildFormBody(payload) {
   const form = new URLSearchParams();
 
   form.set("title", payload.title);
+  form.set("slug", payload.slug);
   form.set("status", payload.status);
   form.set("content", payload.content);
   form.set("excerpt", payload.excerpt);
@@ -350,6 +352,15 @@ async function publish({
     };
   }
 
+  const existing = await findPublishedTicket({
+    endpoint: POSTS_ENDPOINT, auth, date: ticketDate,
+    type: categorySlug, categoryId: catId,
+  });
+  if (existing) {
+    console.log(`Already published ${ticketDate} / ${categorySlug}: ${existing.id}; skipped`);
+    return { skipped: true, alreadyPublished: true, success: true, id: existing.id, link: existing.link };
+  }
+
   const content = `
 <p><strong>${excerpt}</strong></p>
 <p><em>${T.ticket_date_label}: ${formatTicketDate(
@@ -361,6 +372,7 @@ ${cleanHtml}
 
   const payload = {
     title,
+    slug: ticketSlug(ticketDate, categorySlug),
     status: "publish",
     content,
     excerpt,
