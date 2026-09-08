@@ -141,12 +141,17 @@ function captionFor(manifest, service) {
 }
 
 async function createVideoPost(channel, text, videoUrl) {
+  const service = String(channel.service || "").toLowerCase();
+  const platformMetadata = service === "instagram"
+    ? "metadata: { instagram: { type: reel, shouldShareToFeed: true } }"
+    : "";
   const query = `mutation {
     createPost(input: {
       text: ${JSON.stringify(text)}
       channelId: ${JSON.stringify(channel.id)}
       schedulingType: automatic
       mode: shareNow
+      ${platformMetadata}
       assets: [{ video: { url: ${JSON.stringify(videoUrl)}, metadata: { thumbnailOffset: 2000 } } }]
     }) {
       ... on PostActionSuccess { post { id text status } }
