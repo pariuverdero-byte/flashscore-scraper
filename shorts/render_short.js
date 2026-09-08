@@ -24,10 +24,6 @@ const AUDIO_FILE =
   process.env.SHORTS_AUDIO_FILE ||
   "output/voice.mp3";
 
-const HANDOFF_AUDIO_FILE =
-  process.env.SHORTS_HANDOFF_AUDIO_FILE ||
-  "assets/handoffs/ro/mihai_analyst_intro.mp3";
-
 const TICKET_BACKGROUND_FILE =
   process.env.SHORTS_TICKET_BACKGROUND_FILE ||
   "assets/backgrounds/football_ticket_stadium_v1.png";
@@ -1066,22 +1062,9 @@ function main() {
       PRESENTER_FILE
     );
 
-  const hasHandoff =
-    language === "ro" &&
-    fs.existsSync(HANDOFF_AUDIO_FILE);
-
-  const handoffDuration =
-    hasHandoff
-      ? getMediaDuration(HANDOFF_AUDIO_FILE)
-      : 0;
-
-  const ticketBackgroundInput =
-    hasHandoff ? 3 : 2;
-
   const finalDuration =
     INTRO_DURATION +
     presenterDuration +
-    handoffDuration +
     TRANSITION_DURATION +
     audioDuration +
     OUTRO_DURATION;
@@ -1495,6 +1478,13 @@ function main() {
       totalOdds
     );
 
+  const analystLowerThirdPath = escapeFilterPath(writeTextFile(
+    "analyst_lower_third.txt",
+    language === "ro"
+      ? "Mihai - analist pariuverde.ro"
+      : "Mike - analyst at greenbettips.com"
+  ));
+
   const introFooterFile =
     writeTextFile(
       "intro_footer.txt",
@@ -1844,30 +1834,6 @@ function main() {
       "asetpts=PTS-STARTPTS" +
       "[presenter_intro_a]",
 
-    ...(hasHandoff
-      ? [
-          /* Branded holding card while the presenter introduces Mihai. */
-          `color=c=0x063D24:s=1080x1920:r=30:d=${handoffDuration.toFixed(3)},` +
-            "drawbox=x=0:y=0:w=1080:h=20:color=0x38E878:t=fill," +
-            `drawtext=fontfile='${boldFont}':textfile='${introTitlePath}':fontcolor=white:fontsize=72:x=(w-text_w)/2:y=760,` +
-            `drawtext=fontfile='${boldFont}':textfile='${introBrandPath}':fontcolor=0x38E878:fontsize=38:x=(w-text_w)/2:y=875,` +
-            "fade=t=in:st=0:d=0.18," +
-            `fade=t=out:st=${Math.max(0, handoffDuration - 0.18).toFixed(3)}:d=0.18,` +
-            "format=yuv420p,setsar=1,setpts=PTS-STARTPTS" +
-            "[handoff_v]",
-
-          "[2:a]" +
-            "aresample=48000," +
-            "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo," +
-            `atrim=duration=${handoffDuration.toFixed(3)},` +
-            "loudnorm=I=-16:TP=-1.5:LRA=11," +
-            "afade=t=in:st=0:d=0.08," +
-            `afade=t=out:st=${Math.max(0, handoffDuration - 0.12).toFixed(3)}:d=0.12,` +
-            "asetpts=PTS-STARTPTS" +
-            "[handoff_a]"
-        ]
-      : []),
-
     /* Short green broadcast slash between presenter and ticket. */
     "color=c=0x38E878:s=1080x1920:r=30:" +
       `d=${TRANSITION_DURATION}` +
@@ -1889,7 +1855,7 @@ function main() {
 
     /* Original football broadcast artwork enriches the ticket desk while the
      * dark central area keeps every selection readable. */
-    `[${ticketBackgroundInput}:v]` +
+    "[2:v]" +
       "scale=1080:1920:force_original_aspect_ratio=increase," +
       "crop=1080:1920," +
       "fps=30," +
@@ -1937,6 +1903,12 @@ function main() {
       selectionDrawFilters +
 
       "," +
+
+      // Analyst identification stays below the selections and above the CTA.
+      "drawbox=x=65:y=1490:w=950:h=112:color=0x062D20@0.94:t=fill," +
+      "drawbox=x=65:y=1490:w=9:h=112:color=0x38E878:t=fill," +
+      `drawtext=fontfile='${boldFont}':textfile='${analystLowerThirdPath}':` +
+      "fontcolor=white:fontsize=42:x=(w-text_w)/2:y=1525," +
 
       "drawbox=" +
       "x=45:" +
@@ -2109,13 +2081,12 @@ function main() {
 
     "[intro_v][intro_a]" +
       "[presenter_intro_v][presenter_intro_a]" +
-      (hasHandoff ? "[handoff_v][handoff_a]" : "") +
       "[transition_v][transition_a]" +
       "[main_v][main_a]" +
       "[outro_v][outro_a]" +
 
       "concat=" +
-      `n=${hasHandoff ? 6 : 5}:` +
+      "n=5:" +
       "v=1:" +
       "a=1" +
 
@@ -2136,10 +2107,6 @@ function main() {
 
     "-i",
     AUDIO_FILE,
-
-    ...(hasHandoff
-      ? ["-i", HANDOFF_AUDIO_FILE]
-      : []),
 
     "-loop",
     "1",
