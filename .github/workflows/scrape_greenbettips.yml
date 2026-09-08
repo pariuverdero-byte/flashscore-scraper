@@ -7,11 +7,9 @@ concurrency:
 on:
   workflow_dispatch:
   schedule:
-    # GitHub Actions cron uses UTC.
-    # 07:30 UTC = 10:30 in Romania during daylight-saving time (summer)
-    # and 09:30 during standard time (winter). This leaves enough same-day
-    # fixtures available while publishing well before the afternoon kick-offs.
-    - cron: "30 7 * * *"
+    # Keep 13:30 Romanian local time throughout summer and winter.
+    - cron: "30 13 * * *"
+      timezone: "Europe/Bucharest"
 
 jobs:
   scrape-build-publish:
