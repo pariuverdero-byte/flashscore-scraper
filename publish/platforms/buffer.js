@@ -144,7 +144,9 @@ async function createVideoPost(channel, text, videoUrl) {
   const service = String(channel.service || "").toLowerCase();
   const platformMetadata = service === "instagram"
     ? "metadata: { instagram: { type: reel, shouldShareToFeed: true } }"
-    : "";
+    : service === "facebook"
+      ? "metadata: { facebook: { type: reel } }"
+      : "";
   const query = `mutation {
     createPost(input: {
       text: ${JSON.stringify(text)}
