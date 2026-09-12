@@ -36,7 +36,7 @@ test('hidden tabs do not accumulate browsing time',()=>{
 test('storage failures do not break support links or timers; both languages render',()=>{
   for(const en of [false,true]) {
     const b=boot({blocked:true,en});b.advance(300000);assert.equal(b.dialog.open,true);
-    assert.match(b.dialog.innerHTML,/business=radujit%40hotmail.com/);
+    assert.match(b.dialog.innerHTML,/business=pariuverdero%40gmail.com/);
     assert.match(b.dialog.innerHTML,en?/Donate with PayPal/:/Donează prin PayPal/);
     assert.match(b.dialog.innerHTML,/currency_code=EUR/);
   }

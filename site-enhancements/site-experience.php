@@ -139,12 +139,12 @@ add_action('wp_footer', function () {
         youtube:'Abonează-te pe YouTube', close:'Continuă pe site', dismiss:'Închide', note:'Sprijin opțional. Alegi orice sumă pe PayPal.'
       };
       const paypal=new URL('https://www.paypal.com/cgi-bin/webscr');
-      paypal.search=new URLSearchParams({cmd:'_donations',business:'radujit@hotmail.com',currency_code:'EUR',item_name:`Support ${c.brand}`}).toString();
+      paypal.search=new URLSearchParams({cmd:'_donations',business:'pariuverdero@gmail.com',currency_code:'EUR',item_name:`Support ${c.brand}`}).toString();
       const dialog=document.createElement('dialog');
       dialog.id='pv-support-dialog'; dialog.className='pv-support-dialog pv-tg-card';
       dialog.setAttribute('aria-labelledby','pv-support-title');
       dialog.setAttribute('aria-describedby','pv-support-copy');
-      dialog.innerHTML=`<button type="button" class="pv-tg-close" aria-label="${t.dismiss}">×</button><div class="pv-support-heart" aria-hidden="true">♡</div><h2 id="pv-support-title">${t.title}</h2><p id="pv-support-copy">${t.copy}</p><a class="pv-tg-join pv-support-paypal" href="${paypal.href}" target="_blank" rel="noopener noreferrer">${t.donate} ↗</a><small class="pv-support-email">radujit@hotmail.com</small><p class="pv-support-social-copy">${t.social}</p><div class="pv-support-socials">${[['youtube',t.youtube],['facebook','Facebook'],['instagram','Instagram'],['tiktok','TikTok'],['telegram','Telegram']].map(([network,label])=>`<a href="${c[network]}" target="_blank" rel="noopener noreferrer">${label} ↗</a>`).join('')}</div><button type="button" class="pv-tg-later">${t.close}</button><small class="pv-tg-note">${t.note}</small>`;
+      dialog.innerHTML=`<button type="button" class="pv-tg-close" aria-label="${t.dismiss}">×</button><div class="pv-support-heart" aria-hidden="true">♡</div><h2 id="pv-support-title">${t.title}</h2><p id="pv-support-copy">${t.copy}</p><a class="pv-tg-join pv-support-paypal" href="${paypal.href}" target="_blank" rel="noopener noreferrer">${t.donate} ↗</a><small class="pv-support-email">pariuverdero@gmail.com</small><p class="pv-support-social-copy">${t.social}</p><div class="pv-support-socials">${[['youtube',t.youtube],['facebook','Facebook'],['instagram','Instagram'],['tiktok','TikTok'],['telegram','Telegram']].map(([network,label])=>`<a href="${c[network]}" target="_blank" rel="noopener noreferrer">${label} ↗</a>`).join('')}</div><button type="button" class="pv-tg-later">${t.close}</button><small class="pv-tg-note">${t.note}</small>`;
       document.body.appendChild(dialog);
       // Count visible browsing time across pages in this tab, separately per site.
       const key=`pvSupportSession:v1:${location.hostname}`;
