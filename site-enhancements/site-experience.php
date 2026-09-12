@@ -93,6 +93,18 @@ add_action('wp_footer', function () {
       .pv-tg-actions{display:flex;gap:11px;justify-content:center;flex-wrap:wrap}.pv-tg-join,.pv-tg-later{border:0;border-radius:999px;padding:13px 22px;font-weight:800;font-size:15px;cursor:pointer;text-decoration:none!important}.pv-tg-join{background:#20d276;color:#032116!important}.pv-tg-later{background:transparent;color:#d8e9e2;border:1px solid rgba(255,255,255,.25)}.pv-tg-close{position:absolute;right:14px;top:12px;border:0;background:transparent;color:#fff;font-size:27px;line-height:1;cursor:pointer;padding:5px}.pv-tg-note{display:block;margin-top:18px;font-size:11px;opacity:.62}
       @media(max-width:767px){.bilet-pariu{display:block;width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}.bilet-pariu th,.bilet-pariu td{min-width:105px;white-space:nowrap}.bilet-pariu th:first-child,.bilet-pariu td:first-child{min-width:170px}.bilet-pariu .pick-reason{min-width:220px;white-space:normal}.single-post .pv-ticket-video{width:100%;margin:22px auto}.single-post .pv-ticket-video .wp-block-embed__wrapper{border-radius:10px}}
       @media(max-width:520px){.pv-tg-card{padding:31px 20px 24px}.pv-tg-actions{display:grid}.pv-tg-join,.pv-tg-later{width:100%}}
+      .pv-support-open{overflow:hidden}
+      .pv-support-dialog *{box-sizing:border-box}
+      dialog.pv-support-dialog{position:fixed;inset:0;margin:auto;box-sizing:border-box;width:min(500px,calc(100% - 28px));max-height:calc(100dvh - 28px);overflow-y:auto;padding:34px 26px 24px}
+      .pv-support-dialog::backdrop{background:rgba(4,15,12,.76);backdrop-filter:blur(5px)}
+      .pv-support-heart{font-size:48px;color:#20d276;line-height:1;margin-bottom:16px}
+      .pv-support-paypal{display:block;background:#ffc439;color:#172c50!important}
+      .pv-support-email{display:block;margin:10px 0 22px;color:#d8e9e2;overflow-wrap:anywhere}
+      .pv-tg-card .pv-support-social-copy{font-size:14px;margin-bottom:12px}
+      .pv-support-socials{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-bottom:22px}
+      .pv-support-socials a{padding:10px 12px;border:1px solid #527065;border-radius:10px;color:#fff!important;text-decoration:none;font-size:14px}
+      .pv-support-dialog :is(a,button):focus-visible{outline:3px solid #ffc439;outline-offset:4px}
+      @media(max-width:380px){dialog.pv-support-dialog{padding:34px 16px 20px}.pv-support-dialog h2{font-size:23px!important}}
     </style>
     <script id="pv-site-experience-js">
     (() => {
@@ -113,16 +125,62 @@ add_action('wp_footer', function () {
       };
       addSocial('instagram',c.instagram,'#c13584','M224.1 141c-63.6 0-114.9 51.3-114.9 114.9s51.3 114.9 114.9 114.9S339 319.5 339 255.9 287.7 141 224.1 141zm0 189.6c-41.1 0-74.7-33.5-74.7-74.7s33.5-74.7 74.7-74.7 74.7 33.5 74.7 74.7-33.6 74.7-74.7 74.7zm146.4-194.3c0 14.9-12 26.8-26.8 26.8-14.9 0-26.8-12-26.8-26.8s12-26.8 26.8-26.8 26.8 12 26.8 26.8zm76.1 27.2c-1.7-35.9-9.9-67.7-36.2-93.9-26.2-26.2-58-34.4-93.9-36.2-37-2.1-147.9-2.1-184.9 0-35.8 1.7-67.6 9.9-93.9 36.1s-34.4 58-36.2 93.9c-2.1 37-2.1 147.9 0 184.9 1.7 35.9 9.9 67.7 36.2 93.9s58 34.4 93.9 36.2c37 2.1 147.9 2.1 184.9 0 35.9-1.7 67.7-9.9 93.9-36.2 26.2-26.2 34.4-58 36.2-93.9 2.1-37 2.1-147.8 0-184.8z');
       addSocial('tiktok',c.tiktok,'#111','M448 209.9a210.1 210.1 0 0 1-122.8-39.3v178.7A162.6 162.6 0 1 1 185 188v89.9a74.6 74.6 0 1 0 52.2 71.3V0h88a121.2 121.2 0 0 0 1.9 22.2A122.2 122.2 0 0 0 381 102.4a121.4 121.4 0 0 0 67 20.1z');
-      if(!document.body.classList.contains('home')) return;
-      const key=`pvTelegramInvite:${location.hostname}`;
-      const last=Number(localStorage.getItem(key)||0);
-      if(Date.now()-last < 7*24*60*60*1000) return;
-      const overlay=document.createElement('div'); overlay.className='pv-tg-overlay'; overlay.setAttribute('role','dialog'); overlay.setAttribute('aria-modal','true'); overlay.setAttribute('aria-label',c.title);
-      overlay.innerHTML=`<div class="pv-tg-card"><button class="pv-tg-close" aria-label="Close">×</button><div class="pv-tg-icon">➤</div><h2>${c.title}</h2><p>${c.copy}</p><div class="pv-tg-actions"><a class="pv-tg-join" href="${c.telegram}" target="_blank" rel="noopener noreferrer">${c.join}</a><button class="pv-tg-later">${c.later}</button></div><small class="pv-tg-note">${c.brand}</small></div>`;
-      document.body.appendChild(overlay);
-      const close=()=>{localStorage.setItem(key,String(Date.now()));overlay.classList.remove('is-open');setTimeout(()=>overlay.remove(),250)};
-      overlay.querySelector('.pv-tg-close').addEventListener('click',close); overlay.querySelector('.pv-tg-later').addEventListener('click',close); overlay.querySelector('.pv-tg-join').addEventListener('click',close); overlay.addEventListener('click',e=>{if(e.target===overlay)close()});
-      setTimeout(()=>overlay.classList.add('is-open'),1100);
+      if (document.getElementById('pv-support-dialog')) return;
+      const en=c.brand==='GreenBetTips.com';
+      const t=en ? {
+        title:'Help keep GreenBetTips free',
+        copy:'If our analysis helps you, support the work behind it with a donation. Every contribution helps keep the site free for everyone.',
+        donate:'Donate with PayPal', social:'You can also help for free: subscribe, follow us or like our posts.',
+        youtube:'Subscribe on YouTube', close:'Continue browsing', dismiss:'Close', note:'Optional support. Choose any amount on PayPal.'
+      } : {
+        title:'Ajută-ne să păstrăm PariuVerde gratuit',
+        copy:'Îți sunt utile analizele noastre? Susține munca din spatele lor printr-o donație. Orice contribuție ne ajută să păstrăm site-ul gratuit pentru toată lumea.',
+        donate:'Donează prin PayPal', social:'Ne poți ajuta și gratuit: abonează-te, urmărește-ne sau dă un like postărilor noastre.',
+        youtube:'Abonează-te pe YouTube', close:'Continuă pe site', dismiss:'Închide', note:'Sprijin opțional. Alegi orice sumă pe PayPal.'
+      };
+      const paypal=new URL('https://www.paypal.com/cgi-bin/webscr');
+      paypal.search=new URLSearchParams({cmd:'_donations',business:'radujit@hotmail.com',currency_code:'EUR',item_name:`Support ${c.brand}`}).toString();
+      const dialog=document.createElement('dialog');
+      dialog.id='pv-support-dialog'; dialog.className='pv-support-dialog pv-tg-card';
+      dialog.setAttribute('aria-labelledby','pv-support-title');
+      dialog.setAttribute('aria-describedby','pv-support-copy');
+      dialog.innerHTML=`<button type="button" class="pv-tg-close" aria-label="${t.dismiss}">×</button><div class="pv-support-heart" aria-hidden="true">♡</div><h2 id="pv-support-title">${t.title}</h2><p id="pv-support-copy">${t.copy}</p><a class="pv-tg-join pv-support-paypal" href="${paypal.href}" target="_blank" rel="noopener noreferrer">${t.donate} ↗</a><small class="pv-support-email">radujit@hotmail.com</small><p class="pv-support-social-copy">${t.social}</p><div class="pv-support-socials">${[['youtube',t.youtube],['facebook','Facebook'],['instagram','Instagram'],['tiktok','TikTok'],['telegram','Telegram']].map(([network,label])=>`<a href="${c[network]}" target="_blank" rel="noopener noreferrer">${label} ↗</a>`).join('')}</div><button type="button" class="pv-tg-later">${t.close}</button><small class="pv-tg-note">${t.note}</small>`;
+      document.body.appendChild(dialog);
+      // Count visible browsing time across pages in this tab, separately per site.
+      const key=`pvSupportSession:v1:${location.hostname}`;
+      let state={elapsed:0,next:0};
+      try {
+        const saved=JSON.parse(sessionStorage.getItem(key));
+        if(saved && Number.isFinite(saved.elapsed) && saved.elapsed>=0 && Number.isInteger(saved.next) && saved.next>=0 && saved.next<=3) state=saved;
+      } catch (_) { /* Private browsing may disable storage; keep an in-memory timer. */ }
+      const thresholds=[5,15,30].map(minutes=>minutes*60000);
+      const save=()=>{try{sessionStorage.setItem(key,JSON.stringify(state));}catch(_){}};
+      let last=performance.now(), visible=!document.hidden, previousFocus;
+      const close=()=>dialog.close();
+      dialog.querySelector('.pv-tg-close').addEventListener('click',close);
+      dialog.querySelector('.pv-tg-later').addEventListener('click',close);
+      dialog.querySelectorAll('a').forEach(a=>a.addEventListener('click',close));
+      dialog.addEventListener('click',e=>{
+        const rect=dialog.getBoundingClientRect();
+        if(e.target===dialog && (e.clientX<rect.left || e.clientX>rect.right || e.clientY<rect.top || e.clientY>rect.bottom)) close();
+      });
+      dialog.addEventListener('close',()=>{document.documentElement.classList.remove('pv-support-open');previousFocus?.focus();});
+      const tick=()=>{
+        const now=performance.now();
+        if(visible) state.elapsed+=Math.max(0,now-last);
+        last=now; visible=!document.hidden;
+        if(visible && !dialog.open && state.next<thresholds.length && state.elapsed>=thresholds[state.next]) {
+          // Consume overdue milestones together, never stack dialogs.
+          while(state.next<thresholds.length && state.elapsed>=thresholds[state.next]) state.next++;
+          previousFocus=document.activeElement;
+          dialog.showModal(); document.documentElement.classList.add('pv-support-open');
+        }
+        save();
+      };
+      setInterval(tick,1000);
+      document.addEventListener('visibilitychange',tick);
+      window.addEventListener('pagehide',()=>{tick();visible=false;});
+      window.addEventListener('pageshow',()=>{last=performance.now();visible=!document.hidden;});
     })();
     </script>
     <?php

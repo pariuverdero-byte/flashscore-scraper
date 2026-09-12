@@ -18,7 +18,7 @@ if (!listResponse.ok) throw new Error(`Could not list snippets: HTTP ${listRespo
 const existing = (await listResponse.json()).find(item => item.name === snippetName);
 const body = JSON.stringify({
   name: snippetName,
-  desc: "Temporary newsletter hide, verified social links and branded Telegram invitation.",
+  desc: "Shared site enhancements, social links and optional PayPal support at 5, 15 and 30 minutes of visible browsing.",
   code,
   scope: "front-end",
   tags: ["pariuverde-network", "managed-by-github"],
