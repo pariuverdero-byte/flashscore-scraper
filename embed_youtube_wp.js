@@ -1,5 +1,4 @@
 import fs from "fs/promises";
-import fetch from "node-fetch";
 
 const { WP_URL, WP_USER, WP_APP_PASS } = process.env;
 const LANG = String(process.env.LANG || "ro").toLowerCase();
@@ -85,6 +84,14 @@ for (const [ticketType, ticket] of Object.entries(mapping)) {
   if (!post) {
     console.log(`[WP-EMBED] ${ticketType}: no newly published WordPress post`);
     continue;
+  }
+  const payload = await readJson(`output/${ticketType}/shorts_payload.json`);
+  if (payload.status === "skipped") {
+    console.log(`[WP-EMBED] ${ticketType}: video skipped (${payload.reason || "no suitable video"})`);
+    continue;
+  }
+  if (payload.status !== "ready") {
+    throw new Error(`Unexpected Shorts payload status for ${ticketType}: ${payload.status}`);
   }
   const distribution = await readJson(`output/${ticketType}/distribution_results.json`);
   const youtubeUrl = distribution?.youtube?.url;
