@@ -20,6 +20,7 @@ const COTA2 = {
 };
 const ZI = {
   min: Number(process.env.PV_ZI_MIN || 3.50),
+  fallbackMin: Number(process.env.PV_ZI_FALLBACK_MIN || 3.00),
   max: Number(process.env.PV_ZI_MAX || 7.00),
   target: Number(process.env.PV_TARGET_ZI || 5.00),
   minSize: 2,
@@ -194,12 +195,18 @@ function buildBundles(pool) {
   const c2Strict = enumerate(pool, 2, 2, COTA2.min, COTA2.max, COTA2.target, 25);
   const c2Singles = enumerate(pool, 1, 1, COTA2.min, COTA2.max, COTA2.target, 25);
   const c2Fallback = mergeTickets(c2Strict, c2Singles, 40);
-  const day = enumerate(pool, ZI.minSize, ZI.maxSize, ZI.min, ZI.max, ZI.target, 40);
+  const dayStrict = enumerate(pool, ZI.minSize, ZI.maxSize, ZI.min, ZI.max, ZI.target, 40);
+  const day = dayStrict.length
+    ? dayStrict
+    : enumerate(pool, ZI.minSize, ZI.maxSize, Math.min(ZI.min, ZI.fallbackMin), ZI.max, ZI.target, 40);
 
   console.log(`[GENERATOR] verifier-compatible pool: ${pool.length}`);
   console.log(`[GENERATOR] Cota2 strict 2-pick candidates: ${c2Strict.length}`);
   console.log(`[GENERATOR] Cota2 single-pick fallback candidates: ${c2Singles.length}`);
   console.log(`[GENERATOR] Biletul Zilei candidates: ${day.length}`);
+  if (!dayStrict.length && day.length) {
+    console.log(`[GENERATOR] Biletul Zilei relaxed minimum: ${Math.min(ZI.min, ZI.fallbackMin).toFixed(2)}`);
+  }
 
   // Level 1: preserve the original preference — Cota 2 has two selections and
   // the two tickets use completely different matches.
@@ -920,8 +927,10 @@ async function askAI(bundles, prematchContext = new Map()) {
   }));
   const compactBundles = eligibleBundles.map(b => ({
     bundle_id: b.id,
-    cota2_total: Number(b.cota2.product.toFixed(3)), cota2_selection_ids: b.cota2.selections.map(s => s.__sid),
-    day_total: Number(b.day.product.toFixed(3)), day_selection_ids: b.day.selections.map(s => s.__sid)
+    cota2_total: b.cota2 ? Number(b.cota2.product.toFixed(3)) : null,
+    cota2_selection_ids: b.cota2?.selections.map(s => s.__sid) || [],
+    day_total: b.day ? Number(b.day.product.toFixed(3)) : null,
+    day_selection_ids: b.day?.selections.map(s => s.__sid) || []
   }));
   const schema = {
     type: "object", additionalProperties: false,
@@ -1063,6 +1072,7 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
     }
 
     let chosen = bundles[0], annotations = [], aiUsed = false, aiError = null;
+    let partialEvidenceUsed = false;
     let prematchContext = new Map();
     try {
       prematchContext = await collectPrematchContext(pool);
@@ -1094,12 +1104,22 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
       const evidencePool = pool.filter(selection => selection.__analysisEvidence?.usable === true);
       const evidenceBundles = buildBundles(evidencePool);
       console.log(`[AI-STATS] evidence-ready selections=${evidencePool.length}/${pool.length}; bundles=${evidenceBundles.length}`);
-      if (evidenceBundles.length) {
-        bundles = evidenceBundles;
+      const hasDay = evidenceBundles.some(bundle => bundle.day);
+      const safePool = pool.filter(selection => selection.__analysisEvidence?.blocked_by_contradiction !== true);
+      const safeBundles = hasDay ? [] : buildBundles(safePool);
+      const selectedBundles = hasDay || !safeBundles.some(bundle => bundle.day)
+        ? evidenceBundles
+        : safeBundles;
+      if (selectedBundles === safeBundles) {
+        partialEvidenceUsed = true;
+        console.log(`[AI-STATS] day-ticket fallback: ${safePool.length} selections without contradictory evidence`);
+      }
+      if (selectedBundles.length) {
+        bundles = selectedBundles;
         chosen = bundles[0];
       }
 
-      const ai = evidenceBundles.length
+      const ai = selectedBundles.length && selectedBundles === evidenceBundles
         ? await askAI(bundles, prematchContext)
         : null;
       if (ai) {
@@ -1128,7 +1148,11 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
       ai_used: aiUsed,
       ai_model: aiUsed ? OPENAI_MODEL : null,
       ai_error: aiError,
-      analysis_source: aiUsed ? "openai_from_flashscore_evidence" : "local_from_flashscore_evidence",
+      analysis_source: aiUsed
+        ? "openai_from_flashscore_evidence"
+        : partialEvidenceUsed ? "local_with_partial_evidence" : "local_from_flashscore_evidence",
+      partial_evidence_used: partialEvidenceUsed,
+      ticket_of_day_relaxed: Boolean(chosen.day && chosen.day.product < ZI.min),
       statistics_collected_at: new Date().toISOString(),
       bilet_cota2: decorate(chosen.cota2, annotations),
       biletul_zilei: decorate(chosen.day, annotations)

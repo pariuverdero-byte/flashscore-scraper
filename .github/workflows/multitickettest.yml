@@ -23,6 +23,7 @@ jobs:
       PV_COTA2_TOL: "0.00"
 
       PV_ZI_MIN: "3.50"
+      PV_ZI_FALLBACK_MIN: "3.00"
       PV_ZI_MAX: "7.00"
       PV_TARGET_ZI: "5.00"
       PV_ZI_TOL: "0.00"
