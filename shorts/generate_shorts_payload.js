@@ -1,5 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
+import { englishMarketLabel } from "../scripts/market-translation.js";
 
 /*
  * =========================================================
@@ -1249,9 +1250,9 @@ function selectionToPayload(
     );
 
   const market =
-    localizeMarket(
-      marketOriginal
-    );
+    LANG === "en"
+      ? englishMarketLabel(marketOriginal, selection.market_raw || selection.market)
+      : localizeMarket(marketOriginal);
 
   return {
     index:

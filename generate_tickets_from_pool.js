@@ -2,6 +2,7 @@ import fs from "fs/promises";
 import * as cheerio from "cheerio";
 import { matchEventToFlashscore } from "./engine/matcher_core.js";
 import { fetchPrematchData } from "./live-betting/lib/prematch.js";
+import { englishMarketLabel } from "./scripts/market-translation.js";
 
 const POOL_FILE = "master_pool.json";
 const MATCHES_FILE = "matches.json";
@@ -892,18 +893,6 @@ function localEvidenceReason(selection, language = "ro") {
   return "";
 }
 
-function fallbackEnglish(raw) {
-  let x = safe(raw);
-  const reps = [
-    [/șans[ăa] dubl[ăa]/gi, "Double chance"], [/ambele echipe marcheaz[ăa]/gi, "Both teams to score"],
-    [/victorie gazde/gi, "Home win"], [/victorie oaspe[tț]i/gi, "Away win"], [/\begal\b/gi, "Draw"],
-    [/peste/gi, "Over"], [/sub/gi, "Under"], [/goluri/gi, "goals"], [/gol/gi, "goal"],
-    [/cornere/gi, "corners"], [/cartona[sș]e/gi, "cards"], [/prima repriz[ăa]/gi, "1st half"], [/\bsi\b|\bși\b/gi, "&"]
-  ];
-  for (const [a, b] of reps) x = x.replace(a, b);
-  return x.replace(/\s+/g, " ").trim();
-}
-
 function responseText(body) {
   if (safe(body?.output_text)) return safe(body.output_text);
   for (const item of body?.output || []) for (const c of item?.content || []) if (c?.type === "output_text" && safe(c.text)) return safe(c.text);
@@ -1036,7 +1025,7 @@ function decorate(ticket, annotations) {
       delete out.__analysisEvidence;
       out.ai = {
         label_ro: safe(a.label_ro) || safe(out.market_raw),
-        label_en: safe(a.label_en) || fallbackEnglish(out.market_raw),
+        label_en: englishMarketLabel(a.label_en, out.market_raw),
         reason_ro: cleanReason(a.reason_ro, s.__analysisEvidence) || localEvidenceReason(s, "ro"),
         reason_en: cleanReason(a.reason_en, s.__analysisEvidence) || localEvidenceReason(s, "en"),
       };

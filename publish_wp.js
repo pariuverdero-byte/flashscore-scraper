@@ -5,6 +5,7 @@
 import fs from "fs/promises";
 import fetch from "node-fetch";
 import { findPublishedTicket, ticketSlug } from "./scripts/ticket-publication-guard.js";
+import { englishMarketLabel } from "./scripts/market-translation.js";
 
 const { WP_URL, WP_USER, WP_APP_PASS } = process.env;
 const LANG = (process.env.LANG || "ro").toLowerCase();
@@ -184,7 +185,9 @@ function verifiedPostTitle(ticket, ticketType, ticketDateLabel) {
   const base = ticketType === "cota-2" ? T.cota2_title : T.zi_title;
   const first = ticket?.selections?.[0] || {};
   const teams = cleanTitlePart(first.teams, 48) || base;
-  const aiLabel = LANG === "en" ? first.ai?.label_en : first.ai?.label_ro;
+  const aiLabel = LANG === "en"
+    ? englishMarketLabel(first.ai?.label_en, first.market_raw || first.market)
+    : first.ai?.label_ro;
   const rawLabel = LANG === "en"
     ? ""
     : (first.meta?.bet_text || first.meta?.market_text || first.market_raw || first.market);
@@ -363,9 +366,6 @@ async function publish({
 
   const content = `
 <p><strong>${excerpt}</strong></p>
-<p><em>${T.ticket_date_label}: ${formatTicketDate(
-    ticketDate
-  )}</em></p>
 <!--more-->
 ${cleanHtml}
 `.trim();

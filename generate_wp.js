@@ -1,11 +1,11 @@
 import fs from "fs/promises";
+import { englishMarketLabel } from "./scripts/market-translation.js";
 
 const TICKETS_FILE = "tickets.json";
 const LANG = process.env.LANG || "ro";
 
 function translateBetText(sel) {
   const aiLabel = LANG === "en" ? sel.ai?.label_en : sel.ai?.label_ro;
-  if (aiLabel) return aiLabel;
   const raw =
     sel.meta?.bet_text ||
     sel.meta?.market_text ||
@@ -13,65 +13,9 @@ function translateBetText(sel) {
     sel.market ||
     "Pariu special";
 
-  if (LANG !== "en") return raw;
-
-  const t = raw.toLowerCase();
-  let m;
-
-  if (t.includes("ambele echipe marchează") && t.includes("nu")) {
-    return "Both teams to score – NO";
-  }
-  if (t.includes("ambele echipe marchează")) {
-    return "Both teams to score";
-  }
-
-  if ((m = t.match(/(.+?) minim (\d+) goluri/))) {
-    return `${capitalize(m[1])} to score at least ${m[2]} goals`;
-  }
-
-  if ((m = t.match(/peste (\d+(\.\d+)?) goluri.*prima repriz/))) {
-    return `Over ${m[1]} goals (1st half)`;
-  }
-  if ((m = t.match(/sub (\d+(\.\d+)?) goluri.*prima repriz/))) {
-    return `Under ${m[1]} goals (1st half)`;
-  }
-
-  if ((m = t.match(/peste (\d+(\.\d+)?)/))) {
-    return `Over ${m[1]} goals`;
-  }
-  if ((m = t.match(/sub (\d+(\.\d+)?)/))) {
-    return `Under ${m[1]} goals`;
-  }
-
-  if ((m = t.match(/interval (\d+)\s*-\s*(\d+).*prima repriz/))) {
-    return `Total goals 1st half: ${m[1]}–${m[2]}`;
-  }
-
-  if ((m = t.match(/interval (\d+)\s*-\s*(\d+).*meci/))) {
-    return `Total goals: ${m[1]}–${m[2]}`;
-  }
-
-  if (t.includes("șansă dublă")) {
-    if (t.includes("1x")) return "Double chance 1X";
-    if (t.includes("x2")) return "Double chance X2";
-    if (t.includes("12")) return "Double chance 12";
-  }
-
-  if (t.includes("victorie gazde")) return "Home win";
-  if (t === "egal") return "Draw";
-  if (t.includes("victorie oaspeți")) return "Away win";
-
-  if (t.includes("pauză") && t.includes("final")) {
-    return raw
-      .replace(/pauză/gi, "Half-time")
-      .replace(/final/gi, "Full-time");
-  }
-
+  if (LANG === "en") return englishMarketLabel(aiLabel, raw);
+  if (aiLabel) return aiLabel;
   return raw;
-}
-
-function capitalize(s = "") {
-  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
 function formatTicketDate(isoDate) {
