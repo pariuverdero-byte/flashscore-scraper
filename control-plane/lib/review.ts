@@ -46,7 +46,7 @@ export async function runMonthlyReview(now = new Date()) {
       COALESCE(SUM(stake), 0)::float AS stake,
       COALESCE(SUM(profit), 0)::float AS profit
     FROM bet_transactions
-    WHERE kind = 'live' AND status = 'settled' AND submitted_at >= ${start.toISOString()} AND submitted_at < ${end.toISOString()}
+    WHERE kind = 'live' AND status IN ('settled', 'simulated_won', 'simulated_lost', 'simulated_void') AND submitted_at >= ${start.toISOString()} AND submitted_at < ${end.toISOString()}
     GROUP BY market_text, confidence_bucket ORDER BY market_text, confidence_bucket`;
   const sampleSize = buckets.reduce((sum, row) => sum + Number(row.bets), 0);
   const recommendations = buckets.map((row) => ({
@@ -74,3 +74,4 @@ export async function runMonthlyReview(now = new Date()) {
   }
   return { periodStart: start.toISOString(), periodEnd: end.toISOString(), sampleSize, recommendations };
 }
+

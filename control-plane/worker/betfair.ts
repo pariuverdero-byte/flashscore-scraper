@@ -4,6 +4,7 @@ import type { BetCandidate, ExecutionIntent } from "./types";
 import { chooseMarket, type CatalogueMarket } from "./market-matcher";
 
 type RpcResponse<T> = { result?: T; error?: { message: string; data?: unknown } };
+export type MarketOutcome = { marketId: string; status: string; runners: Array<{ selectionId: number; status: string }> };
 
 export class BetfairClient {
   private sessionToken: string | null = null;
@@ -78,6 +79,14 @@ export class BetfairClient {
     const report = await this.rpc<{ clearedOrders?: Array<{ betId?: string; profit?: number; settledDate?: string }> }>("listClearedOrders", { betStatus: "SETTLED", settledDateRange: { from: from.toISOString(), to: new Date().toISOString() }, groupBy: "BET", fromRecord: 0, recordCount: 1000 });
     return (report.clearedOrders ?? []).filter((order): order is { betId: string; profit?: number; settledDate?: string } => Boolean(order.betId)).map((order) => ({ betId: order.betId, profit: Number(order.profit ?? 0), settledAt: order.settledDate }));
   }
+
+  async getMarketOutcomes(marketIds: string[]): Promise<MarketOutcome[]> {
+    const outcomes: MarketOutcome[] = [];
+    for (let index = 0; index < marketIds.length; index += 40) {
+      outcomes.push(...await this.rpc<MarketOutcome[]>("listMarketBook", { marketIds: marketIds.slice(index, index + 40) }));
+    }
+    return outcomes;
+  }
 }
 function requireEnv(name: string): string { const value = process.env[name]; if (!value) throw new Error(`Missing ${name}`); return value; }
 
@@ -111,3 +120,4 @@ async function certificateLogin(agent: Agent, appKey: string, username: string, 
     req.on("error", reject); req.end(payload);
   });
 }
+

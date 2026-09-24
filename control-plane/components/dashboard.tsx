@@ -5,7 +5,7 @@ import { bettingConfigSchema, defaultConfig, type BettingConfig } from "@/lib/co
 import type { WorkerStatus } from "@/lib/store";
 
 const emptyStatus: WorkerStatus = { lastHeartbeat: null, mode: "dry-run", pnlToday: 0, betsToday: 0, lastMessage: "Not connected" };
-const emptyPnl = { today: 0, month: 0, year: 0, forever: 0 };
+const emptyPnl = { today: 0, month: 0, year: 0, forever: 0, simulated: { today: 0, month: 0, year: 0, forever: 0, open: 0, settled: 0, wins: 0, winRate: 0, stake: 0, roi: 0 } };
 type SaveSection = "algorithm" | "risk";
 type SaveFeedback = { section: SaveSection; kind: "pending" | "success" | "error"; text: string } | null;
 type TicketStatus = { date: string; receivedAt: string; cota2: number; ticketOfDay: number } | null;
@@ -164,6 +164,15 @@ export default function Dashboard() {
         <article><span>Today&apos;s tickets</span><strong>{ticketStatus?.date === today ? "Received" : "Not received"}</strong><small>{ticketStatus ? `Cota 2: ${ticketStatus.cota2} selections · Ticket of day: ${ticketStatus.ticketOfDay} selections · ${ticketStatus.receivedAt}` : "Waiting for ticket input"}</small></article>
       </div>
       <div className="workerMessage"><span>Latest worker result</span><p>{status.lastMessage}</p></div>
+      {status.recentChecks?.some((item) => item.kind === "ticket") ? <div className="checkResults"><h3>Today&apos;s ticket checks</h3><div className="tableWrap"><table><thead><tr><th>Event</th><th>Selection</th><th>Betfair odds</th><th>Result</th><th>Reason</th></tr></thead><tbody>{status.recentChecks.filter((item) => item.kind === "ticket").map((item) => <tr key={item.id}><td>{item.eventName}</td><td>{item.selectionText}</td><td>{item.availableOdds ?? "—"}</td><td><span className={`resultBadge ${item.result}`}>{item.result.replaceAll("_", " ")}</span></td><td>{item.reason}</td></tr>)}</tbody></table></div></div> : null}
+    </section>
+    <section className="panel"><div className="panelTitle"><div><h2>Dry-run performance</h2><p>Hypothetical bets settled against actual Betfair market outcomes.</p></div></div>
+      <div className="statusGrid simulationGrid">
+        <article><span>Simulated P&amp;L today</span><strong className={pnl.simulated.today < 0 ? "negative" : "online"}>{pnl.simulated.today.toFixed(2)} RON</strong></article>
+        <article><span>Simulated P&amp;L forever</span><strong className={pnl.simulated.forever < 0 ? "negative" : "online"}>{pnl.simulated.forever.toFixed(2)} RON</strong></article>
+        <article><span>Open simulations</span><strong>{pnl.simulated.open}</strong></article>
+        <article><span>Settled simulations</span><strong>{pnl.simulated.settled}</strong><small>{pnl.simulated.settled ? `${(pnl.simulated.winRate * 100).toFixed(1)}% win rate · ${(pnl.simulated.roi * 100).toFixed(1)}% ROI` : "Waiting for completed markets"}</small></article>
+      </div>
     </section>
     <section className="panel"><div className="panelTitle"><div><h2>Algorithm controls</h2><p>Execution-window changes apply without rewriting the signal generator.</p></div><label className="switch"><input type="checkbox" checked={config.algorithmAutopilot} onChange={(event) => setConfig({ ...config, algorithmAutopilot: event.target.checked })} /><span>Autopilot {config.algorithmAutopilot ? "on" : "off"}</span></label></div>
       <div className="grid">{numberField("liveMinMinute", "Earliest live minute", 1)}{numberField("liveMaxMinute", "Latest live minute", 1)}{numberField("approvalWindowDays", "Auto-approval delay (1–5 days)", 1)}</div><div className="saveRow"><button className="primary" onClick={() => save("algorithm")} disabled={savingSection !== null}>{savingSection === "algorithm" ? "Saving…" : "Save algorithm controls"}</button>{saveStatus("algorithm")}</div>
@@ -173,7 +182,7 @@ export default function Dashboard() {
       <div className="grid">{numberField("stakePerBet", "Stake per selection (RON)", .01)}{numberField("minLiveOdds", "Minimum live odds", .01)}{numberField("minLiveConfidence", "Minimum live confidence (%)", 1)}{numberField("maxDailyLoss", "Maximum daily loss (RON)", 1)}{numberField("dailyTakeProfit", "Daily take-profit (RON)", 1)}{numberField("maxSignalAgeSeconds", "Maximum signal age (seconds)", 1)}</div>
       <div className="saveRow"><button className="primary" onClick={() => save("risk")} disabled={savingSection !== null}>{savingSection === "risk" ? "Saving…" : "Save risk limits"}</button>{saveStatus("risk")}</div>
     </section>
-    <section className="panel"><div className="panelTitle"><div><h2>Transactions</h2><p>Submitted and settled Betfair singles.</p></div></div>
+    <section className="panel"><div className="panelTitle"><div><h2>Transactions</h2><p>Real and simulated Betfair singles.</p></div></div>
       <div className="filters"><label><span>From</span><input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label><label><span>To</span><input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label><label><span>Type</span><select value={kind} onChange={(event) => setKind(event.target.value)}><option value="all">All</option><option value="live">Live</option><option value="ticket">Tickets</option></select></label><button onClick={loadTransactions}>Apply filter</button></div>
       <div className="tableWrap"><table><thead><tr><th>Date</th><th>Type</th><th>Event</th><th>Selection</th><th>Confidence</th><th>Odds</th><th>Stake</th><th>Status</th><th>P&amp;L</th></tr></thead><tbody>{transactions.map((row) => <tr key={String(row.id)}><td>{String(row.submitted_at ?? "").slice(0, 16).replace("T", " ")}</td><td>{String(row.kind ?? "")}</td><td>{String(row.event_name ?? "")}</td><td>{String(row.selection_text ?? "")}</td><td>{row.confidence == null ? "—" : `${row.confidence}%`}</td><td>{String(row.available_odds ?? "")}</td><td>{String(row.stake ?? "")} RON</td><td>{String(row.status ?? "")}</td><td>{row.profit == null ? "—" : `${row.profit} RON`}</td></tr>)}</tbody></table></div>
     </section>

@@ -12,6 +12,18 @@ export type WorkerStatus = {
   pnlToday: number;
   betsToday: number;
   lastMessage: string;
+  recentChecks?: WorkerCheck[];
+};
+
+export type WorkerCheck = {
+  id: string;
+  kind: "live" | "ticket";
+  eventName: string;
+  selectionText: string;
+  result: "matched" | "rejected" | "missing_or_ambiguous" | "submitted" | "error";
+  reason: string;
+  availableOdds: number | null;
+  checkedAt: string;
 };
 
 export type NativeInputSnapshot = {
@@ -72,3 +84,4 @@ export async function saveNativeInput(source: "live" | "tickets", payload: unkno
   await writeState(source === "live" ? NATIVE_LIVE_KEY : NATIVE_TICKETS_KEY, snapshot);
   return snapshot;
 }
+
