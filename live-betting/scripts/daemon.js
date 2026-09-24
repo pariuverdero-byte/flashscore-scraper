@@ -36,7 +36,16 @@ async function tick() {
 
   try {
     await runScript('live-betting/scripts/run-once.js');
-    await runScript('live-betting/scripts/publish-wordpress.js');
+    if (process.env.CONTROL_PLANE_URL && process.env.CONTROL_API_TOKEN) {
+      await runScript('control-plane/scripts/publish-native-inputs.mjs');
+    }
+    if ((process.env.PV_LIVE_ENDPOINT && process.env.PV_LIVE_TOKEN) || (process.env.GBT_LIVE_ENDPOINT && process.env.GBT_LIVE_TOKEN)) {
+      await runScript('live-betting/scripts/publish-wordpress.js');
+    }
+    if ((process.env.TELEGRAM_PV_BOT_TOKEN && process.env.TELEGRAM_PV_CHAT_ID) || (process.env.TELEGRAM_GBT_BOT_TOKEN && process.env.TELEGRAM_GBT_CHAT_ID)) {
+      await runScript('live-betting/scripts/publish-telegram.js');
+    }
+    console.log(`[live] Cycle completed at ${new Date().toISOString()}.`);
   } catch (error) {
     console.error(`[live] Cycle failed: ${error.message}`);
   } finally {
