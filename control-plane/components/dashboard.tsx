@@ -9,6 +9,7 @@ const emptyPnl = { today: 0, month: 0, year: 0, forever: 0, simulated: { today: 
 type SaveSection = "algorithm" | "risk";
 type SaveFeedback = { section: SaveSection; kind: "pending" | "success" | "error"; text: string } | null;
 type TicketStatus = { date: string; receivedAt: string; cota2: number; ticketOfDay: number } | null;
+type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
 function errorMessage(body: unknown, status: number) {
   if (!body || typeof body !== "object") return `Request failed (${status})`;
@@ -25,8 +26,9 @@ function errorMessage(body: unknown, status: number) {
 }
 
 export default function Dashboard() {
-  const [token, setToken] = useState(() => typeof window === "undefined" ? "" : sessionStorage.getItem("control-token") ?? "");
-  const [activeToken, setActiveToken] = useState(() => typeof window === "undefined" ? "" : sessionStorage.getItem("control-token") ?? "");
+  const [token, setToken] = useState("");
+  const [activeToken, setActiveToken] = useState("");
+  const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
   const [config, setConfig] = useState<BettingConfig>(defaultConfig);
   const [status, setStatus] = useState<WorkerStatus>(emptyStatus);
   const [message, setMessage] = useState("Enter the control token to load settings.");
@@ -79,11 +81,26 @@ export default function Dashboard() {
       setReviews(nextReviews);
       setProposals(nextProposals);
       setPnl(nextPnl);
+      setConnectionState("connected");
       if (announce) setMessage("Controls loaded. Status refreshes automatically.");
     } catch (error) {
+      setConnectionState("error");
+      setWorkerOnline(false);
       if (announce) setMessage(error instanceof Error ? error.message : "Unable to load");
     }
   }, [request]);
+
+  useEffect(() => {
+    const savedToken = localStorage.getItem("control-token") ?? sessionStorage.getItem("control-token") ?? "";
+    if (!savedToken) return;
+    const restoreConnection = window.setTimeout(() => {
+      localStorage.setItem("control-token", savedToken);
+      setToken(savedToken);
+      setConnectionState("connecting");
+      setActiveToken(savedToken);
+    }, 0);
+    return () => window.clearTimeout(restoreConnection);
+  }, []);
 
   useEffect(() => {
     if (!activeToken) return;
@@ -96,9 +113,28 @@ export default function Dashboard() {
   }, [activeToken, refreshDashboard]);
 
   async function load() {
-    sessionStorage.setItem("control-token", token);
-    setActiveToken(token);
-    await refreshDashboard(token, true);
+    const nextToken = token.trim();
+    if (!nextToken) {
+      setConnectionState("error");
+      setMessage("Enter the control token first.");
+      return;
+    }
+    localStorage.setItem("control-token", nextToken);
+    sessionStorage.setItem("control-token", nextToken);
+    setConnectionState("connecting");
+    setActiveToken(nextToken);
+    await refreshDashboard(nextToken, true);
+  }
+
+  function disconnect() {
+    localStorage.removeItem("control-token");
+    sessionStorage.removeItem("control-token");
+    setToken("");
+    setActiveToken("");
+    setConnectionState("disconnected");
+    setWorkerOnline(false);
+    setStatus(emptyStatus);
+    setMessage("Disconnected. Enter the control token to load settings.");
   }
 
   async function save(section: SaveSection) {
@@ -145,21 +181,25 @@ export default function Dashboard() {
     <label><span>{label}</span><input type="number" step={step} value={String(config[key])} onChange={(event) => setConfig({ ...config, [key]: Number(event.target.value) })} /></label>
   );
 
+  const workerLabel = connectionState === "connected" ? (workerOnline ? "Online" : "Offline") : "Not connected";
+  const workerClass = connectionState === "connected" ? (workerOnline ? "online" : "negative") : "dryRunText";
+
   return <main>
     <header><div><p className="eyebrow">BETFAIR AUTOMATION</p><h1>LiveEdge Control</h1><p className="muted">One disciplined control surface for live execution.</p></div><div className={`mode ${status.mode}`}>{status.mode}</div></header>
+    <section className="panel auth"><div><h2>Connection</h2><p className="muted">{connectionState === "connected" ? "Connected. Live status refreshes every 15 seconds." : connectionState === "connecting" ? "Connecting…" : "Connect once; this browser will reconnect automatically after refresh."}</p></div><label><span>Control token</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="••••••••••••" /></label><button onClick={load} disabled={connectionState === "connecting"}>{connectionState === "connecting" ? "Connecting…" : "Connect"}</button>{connectionState === "connected" ? <button className="secondary" onClick={disconnect}>Disconnect</button> : null}</section>
     <section className="metrics">
       <article><span>P&amp;L today</span><strong className={pnl.today < 0 ? "negative" : ""}>{pnl.today.toFixed(2)} RON</strong></article>
       <article><span>P&amp;L this month</span><strong className={pnl.month < 0 ? "negative" : ""}>{pnl.month.toFixed(2)} RON</strong></article>
       <article><span>P&amp;L this year</span><strong className={pnl.year < 0 ? "negative" : ""}>{pnl.year.toFixed(2)} RON</strong></article>
       <article><span>P&amp;L forever</span><strong className={pnl.forever < 0 ? "negative" : ""}>{pnl.forever.toFixed(2)} RON</strong></article>
       <article><span>Bets today</span><strong>{status.betsToday}</strong></article>
-      <article><span>Worker</span><strong className={workerOnline ? "online" : "negative"}>{workerOnline ? "Online" : "Offline"}</strong></article>
+      <article><span>Worker</span><strong className={workerClass}>{workerLabel}</strong></article>
     </section>
     <section className="panel systemStatus">
       <div className="panelTitle"><div><h2>System status</h2><p>Updated automatically every 15 seconds.</p></div></div>
       <div className="statusGrid">
         <article><span>Automation</span><strong className={config.enabled ? "online" : "negative"}>{config.enabled ? "Enabled" : "Paused"}</strong></article>
-        <article><span>Worker</span><strong className={workerOnline ? "online" : "negative"}>{workerOnline ? "Online" : "Offline"}</strong><small>Heartbeat: {heartbeatLabel}</small></article>
+        <article><span>Worker</span><strong className={workerClass}>{workerLabel}</strong><small>{connectionState === "connected" ? `Heartbeat: ${heartbeatLabel}` : "Connect the dashboard to read heartbeat data"}</small></article>
         <article><span>Execution mode</span><strong className={status.mode === "live" ? "negative" : "dryRunText"}>{status.mode === "live" ? "LIVE" : "DRY-RUN"}</strong><small>{status.mode === "live" ? "Real orders may be submitted" : "No real bets can be placed"}</small></article>
         <article><span>Today&apos;s tickets</span><strong>{ticketStatus?.date === today ? "Received" : "Not received"}</strong><small>{ticketStatus ? `Cota 2: ${ticketStatus.cota2} selections · Ticket of day: ${ticketStatus.ticketOfDay} selections · ${ticketStatus.receivedAt}` : "Waiting for ticket input"}</small></article>
       </div>
@@ -177,7 +217,6 @@ export default function Dashboard() {
     <section className="panel"><div className="panelTitle"><div><h2>Algorithm controls</h2><p>Execution-window changes apply without rewriting the signal generator.</p></div><label className="switch"><input type="checkbox" checked={config.algorithmAutopilot} onChange={(event) => setConfig({ ...config, algorithmAutopilot: event.target.checked })} /><span>Autopilot {config.algorithmAutopilot ? "on" : "off"}</span></label></div>
       <div className="grid">{numberField("liveMinMinute", "Earliest live minute", 1)}{numberField("liveMaxMinute", "Latest live minute", 1)}{numberField("approvalWindowDays", "Auto-approval delay (1–5 days)", 1)}</div><div className="saveRow"><button className="primary" onClick={() => save("algorithm")} disabled={savingSection !== null}>{savingSection === "algorithm" ? "Saving…" : "Save algorithm controls"}</button>{saveStatus("algorithm")}</div>
     </section>
-    <section className="panel auth"><h2>Connection</h2><label><span>Control token</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="••••••••••••" /></label><button onClick={load}>Connect</button></section>
     <section className="panel"><div className="panelTitle"><div><h2>Risk limits</h2><p>Applied before every order, including imported tickets.</p></div><label className="switch"><input type="checkbox" checked={config.enabled} onChange={(event) => setConfig({ ...config, enabled: event.target.checked })} /><span>{config.enabled ? "Enabled" : "Paused"}</span></label></div>
       <div className="grid">{numberField("stakePerBet", "Stake per selection (RON)", .01)}{numberField("minLiveOdds", "Minimum live odds", .01)}{numberField("minLiveConfidence", "Minimum live confidence (%)", 1)}{numberField("maxDailyLoss", "Maximum daily loss (RON)", 1)}{numberField("dailyTakeProfit", "Daily take-profit (RON)", 1)}{numberField("maxSignalAgeSeconds", "Maximum signal age (seconds)", 1)}</div>
       <div className="saveRow"><button className="primary" onClick={() => save("risk")} disabled={savingSection !== null}>{savingSection === "risk" ? "Saving…" : "Save risk limits"}</button>{saveStatus("risk")}</div>
