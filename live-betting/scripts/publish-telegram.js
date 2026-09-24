@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 
 const feedFile = process.env.LIVE_FEED_FILE || "live-betting/data/live_feed.json";
 const stateFile = process.env.LIVE_TELEGRAM_STATE_FILE || "live-betting/data/telegram_sent.json";
+const maxSignalsPerDay = Math.max(0, Number(process.env.LIVE_TELEGRAM_MAX_SIGNALS_PER_DAY || 4));
 const targets = [
   { lang: "ro", token: process.env.TELEGRAM_PV_BOT_TOKEN, chatId: process.env.TELEGRAM_PV_CHAT_ID, site: "https://pariuverde.ro", telegram: "https://t.me/pariuverde" },
   { lang: "en", token: process.env.TELEGRAM_GBT_BOT_TOKEN, chatId: process.env.TELEGRAM_GBT_CHAT_ID, site: "https://greenbettips.com", telegram: "https://t.me/greenbettips_com" },
@@ -21,9 +22,9 @@ const social = {
 };
 
 const feed = JSON.parse(await fs.readFile(feedFile, "utf8"));
-let state = { sent: { ro: [], en: [] }, lastPromotion: { ro: 0, en: 0 }, promotionIndex: { ro: 0, en: 0 } };
+let state = { sent: { ro: [], en: [] }, daily: {}, lastPromotion: { ro: 0, en: 0 }, promotionIndex: { ro: 0, en: 0 } };
 try { state = { ...state, ...JSON.parse(await fs.readFile(stateFile, "utf8")) }; } catch {}
-state.sent ||= { ro: [], en: [] }; state.lastPromotion ||= { ro: 0, en: 0 }; state.promotionIndex ||= { ro: 0, en: 0 };
+state.sent ||= { ro: [], en: [] }; state.daily ||= {}; state.lastPromotion ||= { ro: 0, en: 0 }; state.promotionIndex ||= { ro: 0, en: 0 };
 
 function esc(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -42,10 +43,18 @@ async function send(target, text, options = {}) {
 
 for (const target of targets) {
   state.sent[target.lang] ||= [];
+  const today = new Date().toISOString().slice(0, 10);
+  if (state.daily[target.lang]?.date !== today) state.daily[target.lang] = { date: today, count: 0 };
   const sent = new Set(state.sent[target.lang]);
+  let dailyCount = Number(state.daily[target.lang].count || 0);
+  let dailyLimitReached = false;
   for (const match of feed.matches || []) {
     for (const signal of match.signals || []) {
       if (!signal.id || sent.has(signal.id)) continue;
+      if (dailyCount >= maxSignalsPerDay) {
+        dailyLimitReached = true;
+        break;
+      }
       const title = signal.title?.[target.lang] || "";
       const reason = signal.reason?.[target.lang] || "";
       const score = `${match.score?.home ?? 0}-${match.score?.away ?? 0}`;
@@ -66,10 +75,14 @@ for (const target of targets) {
       ].filter(Boolean).join("\n");
       await send(target, text);
       sent.add(signal.id);
+      dailyCount += 1;
       console.log(`[LIVE-TELEGRAM] ${target.lang}: sent ${signal.id}`);
     }
+    if (dailyLimitReached) break;
   }
   state.sent[target.lang] = [...sent].slice(-500);
+  state.daily[target.lang] = { date: today, count: dailyCount };
+  if (dailyLimitReached) console.log(`[LIVE-TELEGRAM] ${target.lang}: daily signal limit reached (${maxSignalsPerDay})`);
 
   const now = Date.now();
   if (now - Number(state.lastPromotion[target.lang] || 0) >= 72 * 60 * 60 * 1000) {

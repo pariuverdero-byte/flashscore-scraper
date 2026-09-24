@@ -27,6 +27,7 @@ $env:CONTROL_API_TOKEN = Convert-Secret $saved.ControlApiToken
 $env:CONTROL_PLANE_URL = 'https://liveedge-control.vercel.app'
 $env:INPUT_SOURCE = 'live'
 $env:LIVE_POLL_SECONDS = '75'
+$env:LIVE_TELEGRAM_MAX_SIGNALS_PER_DAY = '4'
 
 foreach ($mapping in @(
   @{ Property = 'TelegramPvBotToken'; Environment = 'TELEGRAM_PV_BOT_TOKEN' },
@@ -57,7 +58,7 @@ catch {
 }
 finally {
   Pop-Location -ErrorAction SilentlyContinue
-  foreach ($name in @('CONTROL_API_TOKEN','CONTROL_PLANE_URL','INPUT_SOURCE','LIVE_POLL_SECONDS','TELEGRAM_PV_BOT_TOKEN','TELEGRAM_PV_CHAT_ID','TELEGRAM_GBT_BOT_TOKEN','TELEGRAM_GBT_CHAT_ID')) {
+  foreach ($name in @('CONTROL_API_TOKEN','CONTROL_PLANE_URL','INPUT_SOURCE','LIVE_POLL_SECONDS','LIVE_TELEGRAM_MAX_SIGNALS_PER_DAY','TELEGRAM_PV_BOT_TOKEN','TELEGRAM_PV_CHAT_ID','TELEGRAM_GBT_BOT_TOKEN','TELEGRAM_GBT_CHAT_ID')) {
     Remove-Item "Env:$name" -ErrorAction SilentlyContinue
   }
 }
