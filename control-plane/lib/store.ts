@@ -3,6 +3,8 @@ import { ensureSchema, getSql } from "@/lib/db";
 
 const CONFIG_KEY = "live-betting:config";
 const STATUS_KEY = "live-betting:status";
+const NATIVE_LIVE_KEY = "native-input:live";
+const NATIVE_TICKETS_KEY = "native-input:tickets";
 
 export type WorkerStatus = {
   lastHeartbeat: string | null;
@@ -10,6 +12,11 @@ export type WorkerStatus = {
   pnlToday: number;
   betsToday: number;
   lastMessage: string;
+};
+
+export type NativeInputSnapshot = {
+  receivedAt: string;
+  payload: unknown;
 };
 
 const defaultStatus: WorkerStatus = {
@@ -50,4 +57,18 @@ export async function getStatus(): Promise<WorkerStatus> {
 
 export async function saveStatus(status: WorkerStatus): Promise<void> {
   await writeState(STATUS_KEY, status);
+}
+
+export async function getNativeInputs(): Promise<{ live: NativeInputSnapshot | null; tickets: NativeInputSnapshot | null }> {
+  const [live, tickets] = await Promise.all([
+    readState<NativeInputSnapshot>(NATIVE_LIVE_KEY),
+    readState<NativeInputSnapshot>(NATIVE_TICKETS_KEY),
+  ]);
+  return { live, tickets };
+}
+
+export async function saveNativeInput(source: "live" | "tickets", payload: unknown): Promise<NativeInputSnapshot> {
+  const snapshot = { receivedAt: new Date().toISOString(), payload };
+  await writeState(source === "live" ? NATIVE_LIVE_KEY : NATIVE_TICKETS_KEY, snapshot);
+  return snapshot;
 }

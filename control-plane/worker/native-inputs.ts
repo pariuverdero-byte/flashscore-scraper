@@ -6,6 +6,7 @@ import type { ExecutionIntent } from "./types";
 type LiveMatch = { id: string; teams?: string; home?: string; away?: string };
 type LiveSignal = { id: string; matchId: string; type: string; status: string; createdAt: string; expiresAt?: string; minute?: number; line?: number; scoreAtSignal?: { home?: number; away?: number }; recommendedMinimumOdd?: number; confidence?: number };
 type TicketSelection = { match_id?: string; id?: string; teams?: string; market_raw?: string; bet_text_ro?: string; odd?: number };
+type TicketsFile = { date?: string; status?: string; bilet_cota2?: { selections?: TicketSelection[] }; biletul_zilei?: { selections?: TicketSelection[] } };
 
 async function json<T>(file: string, fallback: T): Promise<T> {
   try { return JSON.parse(await readFile(file, "utf8")) as T; } catch { return fallback; }
@@ -25,6 +26,11 @@ export async function readNativeIntents(repositoryRoot: string): Promise<Executi
   const dataDir = path.join(repositoryRoot, "live-betting", "data");
   const liveMatches = await json<{ matches?: LiveMatch[] }>(path.join(dataDir, "live_matches.json"), {});
   const liveSignals = await json<LiveSignal[]>(path.join(dataDir, "signals.json"), []);
+  const tickets = await json<TicketsFile>(path.join(repositoryRoot, "tickets.json"), {});
+  return nativeIntentsFromData(liveMatches, liveSignals, tickets);
+}
+
+export function nativeIntentsFromData(liveMatches: { matches?: LiveMatch[] } = {}, liveSignals: LiveSignal[] = [], tickets: TicketsFile = {}): ExecutionIntent[] {
   const matches = new Map((liveMatches.matches ?? []).map((match) => [match.id, match]));
   const now = Date.now();
   const intents: ExecutionIntent[] = [];
@@ -36,7 +42,6 @@ export async function readNativeIntents(repositoryRoot: string): Promise<Executi
     intents.push({ id: `live:${signal.id}`, kind: "live", eventName: match.teams ?? `${match.home} v ${match.away}`, ...mapping, createdAt: signal.createdAt, recommendedMinimumOdds: signal.recommendedMinimumOdd, confidence: signal.confidence, minute: Number(signal.minute) || undefined });
   }
 
-  const tickets = await json<{ date?: string; status?: string; bilet_cota2?: { selections?: TicketSelection[] }; biletul_zilei?: { selections?: TicketSelection[] } }>(path.join(repositoryRoot, "tickets.json"), {});
   if (tickets.status === "ok") {
     for (const [ticketType, ticket] of [["bilet_cota2", tickets.bilet_cota2], ["biletul_zilei", tickets.biletul_zilei]] as const) {
       for (const selection of ticket?.selections ?? []) {

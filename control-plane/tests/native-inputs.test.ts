@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { __test, readNativeIntents } from "../worker/native-inputs";
+import { __test, nativeIntentsFromData, readNativeIntents } from "../worker/native-inputs";
 
 describe("native live signal mapping", () => {
   const match = { id: "abc", teams: "Team A – Team B", home: "Team A", away: "Team B" };
@@ -11,6 +11,16 @@ describe("native live signal mapping", () => {
   });
   it("maps next-goal runner to the native home team", () => {
     expect(__test.liveMarket({ id: "s", matchId: "abc", type: "home_next_goal", status: "active", createdAt: "2026-01-01T00:00:00Z" }, match)?.selectionText).toBe("Team A");
+  });
+
+  it("uses the same mapping for remotely published native payloads", () => {
+    const now = new Date();
+    const intents = nativeIntentsFromData(
+      { matches: [match] },
+      [{ id: "remote-signal", matchId: "abc", type: "goal_over_1_5_match", status: "active", createdAt: now.toISOString(), expiresAt: new Date(now.getTime() + 60_000).toISOString(), confidence: 81, minute: 55 }],
+      {},
+    );
+    expect(intents).toMatchObject([{ id: "live:remote-signal", kind: "live", eventName: "Team A – Team B", selectionText: "Over 1.5 Goals" }]);
   });
 });
 

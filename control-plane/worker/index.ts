@@ -1,7 +1,7 @@
 import path from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import { BetfairClient } from "./betfair";
-import { readNativeIntents } from "./native-inputs";
+import { nativeIntentsFromData, readNativeIntents } from "./native-inputs";
 import { assess, liveInterlockEnabled, type DailyLedger } from "./risk";
 import type { BettingConfig } from "../lib/config";
 
@@ -13,6 +13,11 @@ const live = liveInterlockEnabled();
 const ledger: DailyLedger = { date: today(), pnl: 0, bets: 0, signalIds: new Set<string>() };
 const dryRunSeen = new Set<string>();
 let client: BetfairClient | null = null;
+
+type RemoteInputs = {
+  live: { payload?: { liveMatches?: Parameters<typeof nativeIntentsFromData>[0]; liveSignals?: Parameters<typeof nativeIntentsFromData>[1] } } | null;
+  tickets: { payload?: { tickets?: Parameters<typeof nativeIntentsFromData>[2] } } | null;
+};
 
 async function readProcessed(): Promise<string[]> {
   try { const body = JSON.parse(await readFile(stateFile, "utf8")) as { date?: string; ids?: string[] }; return body.date === today() ? body.ids ?? [] : []; }
@@ -34,7 +39,17 @@ async function cycle() {
     if (!client.isAuthenticated()) await client.login();
     ledger.pnl = await client.getSettledPnlToday();
     await control("/api/transactions", { method: "PATCH", body: JSON.stringify({ settlements: await client.getSettlementsToday() }) });
-    for (const intent of await readNativeIntents(repositoryRoot)) {
+    const [localIntents, remote] = await Promise.all([
+      readNativeIntents(repositoryRoot),
+      control<RemoteInputs>("/api/inputs"),
+    ]);
+    const remoteIntents = nativeIntentsFromData(
+      remote.live?.payload?.liveMatches,
+      remote.live?.payload?.liveSignals,
+      remote.tickets?.payload?.tickets,
+    );
+    const intents = [...new Map([...localIntents, ...remoteIntents].map((intent) => [intent.id, intent])).values()];
+    for (const intent of intents) {
       if (ledger.signalIds.has(intent.id)) continue;
       if (!live && dryRunSeen.has(intent.id)) continue;
       const candidate = await client.resolveIntent(intent);
