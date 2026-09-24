@@ -61,6 +61,10 @@ async function cycle() {
 
 async function main() {
   ledger.signalIds = new Set(await readProcessed());
+  if (process.argv.includes("--once")) {
+    await cycle();
+    return;
+  }
   const interval = Math.max(5000, Number(process.env.POLL_INTERVAL_MS ?? 15000));
   for (;;) { try { await cycle(); } catch (error) { console.error(new Date().toISOString(), error); } await new Promise((resolve) => setTimeout(resolve, interval)); }
 }

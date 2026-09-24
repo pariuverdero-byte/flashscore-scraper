@@ -9,6 +9,7 @@ Personal Betfair live-betting automation with a Vercel control plane and a separ
 - Native inputs: reads the existing `../live-betting/data/signals.json`, `../live-betting/data/live_matches.json`, and `../tickets.json` artifacts without changing either algorithm.
 - Worker: resolves native live signals and every generated ticket selection to Betfair, applies risk checks, and optionally calls `placeOrders`. Ticket selections are Exchange singles, not an accumulator.
 - Betfair credentials and client certificates stay only on the worker.
+- Existing GitHub Actions workflows can invoke the same worker once, directly after they generate `signals.json` or `tickets.json`; no scraper or second ticket pipeline is involved.
 
 Vercel Functions are not suitable for permanent in-play polling. Run `pnpm worker` on a persistent process (a private server/container) and deploy only the Next.js control plane to Vercel.
 
@@ -33,6 +34,14 @@ LIVE_BETTING_ACK=I_ACCEPT_LIVE_BETTING_RISK
 ```
 
 Keep the dashboard's `Enabled` switch off until dry-run market matching has been manually validated. Betfair availability, licensing, and API access depend on account and jurisdiction.
+
+## Existing GitHub Actions integration
+
+Both existing generation workflows contain an optional Betfair dry-run step. It is skipped unless the repository secret `BETFAIR_AUTOMATION_CONFIGURED` is exactly `true`. The step reuses the generated files already present on the runner and invokes `worker/index.ts --once`.
+
+Required GitHub repository secrets are `BETFAIR_APP_KEY`, `BETFAIR_USERNAME`, `BETFAIR_PASSWORD`, `BETFAIR_CERT_B64`, `BETFAIR_KEY_B64`, and `CONTROL_API_TOKEN`. Store the certificate and private key as base64 values. The runner decodes them into a temporary directory and removes that directory on exit.
+
+The committed workflow forces `LIVE_BETTING_ENABLED=false`; therefore it cannot place an order even when the dashboard is enabled. The five-minute GitHub schedule is suitable for integration dry-runs, but not for latency-sensitive production in-play execution. Keep the persistent worker architecture for eventual live operation.
 
 ## Verification
 
