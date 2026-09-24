@@ -1,11 +1,27 @@
 "use client";
 
 import { useState } from "react";
-import { defaultConfig, type BettingConfig } from "@/lib/config";
+import { bettingConfigSchema, defaultConfig, type BettingConfig } from "@/lib/config";
 import type { WorkerStatus } from "@/lib/store";
 
 const emptyStatus: WorkerStatus = { lastHeartbeat: null, mode: "dry-run", pnlToday: 0, betsToday: 0, lastMessage: "Not connected" };
 const emptyPnl = { today: 0, month: 0, year: 0, forever: 0 };
+type SaveSection = "algorithm" | "risk";
+type SaveFeedback = { section: SaveSection; kind: "pending" | "success" | "error"; text: string } | null;
+
+function errorMessage(body: unknown, status: number) {
+  if (!body || typeof body !== "object") return `Request failed (${status})`;
+  const error = (body as { error?: unknown }).error;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    const fieldErrors = (error as { fieldErrors?: Record<string, string[]> }).fieldErrors;
+    const firstFieldError = fieldErrors && Object.values(fieldErrors).flat().find(Boolean);
+    if (firstFieldError) return firstFieldError;
+    const formErrors = (error as { formErrors?: string[] }).formErrors;
+    if (formErrors?.[0]) return formErrors[0];
+  }
+  return `Request failed (${status})`;
+}
 
 export default function Dashboard() {
   const [token, setToken] = useState(() => typeof window === "undefined" ? "" : sessionStorage.getItem("control-token") ?? "");
@@ -19,11 +35,13 @@ export default function Dashboard() {
   const [reviews, setReviews] = useState<Array<Record<string, unknown>>>([]);
   const [proposals, setProposals] = useState<Array<Record<string, unknown>>>([]);
   const [pnl, setPnl] = useState(emptyPnl);
+  const [savingSection, setSavingSection] = useState<SaveSection | null>(null);
+  const [saveFeedback, setSaveFeedback] = useState<SaveFeedback>(null);
 
   async function request(path: string, init?: RequestInit) {
     const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...init?.headers } });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error ?? `Request failed (${response.status})`);
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(errorMessage(body, response.status));
     return body;
   }
 
@@ -35,12 +53,35 @@ export default function Dashboard() {
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load"); }
   }
 
-  async function save() {
+  async function save(section: SaveSection) {
+    const parsed = bettingConfigSchema.safeParse(config);
+    if (!parsed.success) {
+      const text = parsed.error.issues[0]?.message ?? "Please check the entered values.";
+      setSaveFeedback({ section, kind: "error", text });
+      setMessage(text);
+      return;
+    }
+
+    setSavingSection(section);
+    setSaveFeedback({ section, kind: "pending", text: "Saving…" });
     try {
-      const saved = await request("/api/config", { method: "PUT", body: JSON.stringify(config) });
-      setConfig(saved); setMessage(config.enabled ? "Saved. Worker enabled subject to server safety interlock." : "Saved. Worker paused.");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save"); }
+      const saved = await request("/api/config", { method: "PUT", body: JSON.stringify(parsed.data) });
+      const savedAt = new Date().toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      setConfig(saved);
+      setSaveFeedback({ section, kind: "success", text: `Saved successfully at ${savedAt}.` });
+      setMessage(saved.enabled ? "Saved. Worker enabled subject to server safety interlock." : "Saved. Worker paused.");
+    } catch (error) {
+      const text = error instanceof Error ? error.message : "Unable to save";
+      setSaveFeedback({ section, kind: "error", text });
+      setMessage(text);
+    } finally {
+      setSavingSection(null);
+    }
   }
+
+  const saveStatus = (section: SaveSection) => saveFeedback?.section === section ? (
+    <span className={`saveFeedback ${saveFeedback.kind}`} role="status" aria-live="polite">{saveFeedback.text}</span>
+  ) : null;
 
   async function loadTransactions() {
     try { setTransactions(await request(`/api/transactions?from=${from}&to=${to}&kind=${kind}`)); setMessage("Transactions loaded."); }
@@ -67,12 +108,12 @@ export default function Dashboard() {
       <article><span>Worker</span><strong>{status.lastHeartbeat ? "Online" : "Offline"}</strong></article>
     </section>
     <section className="panel"><div className="panelTitle"><div><h2>Algorithm controls</h2><p>Execution-window changes apply without rewriting the signal generator.</p></div><label className="switch"><input type="checkbox" checked={config.algorithmAutopilot} onChange={(event) => setConfig({ ...config, algorithmAutopilot: event.target.checked })} /><span>Autopilot {config.algorithmAutopilot ? "on" : "off"}</span></label></div>
-      <div className="grid">{numberField("liveMinMinute", "Earliest live minute", 1)}{numberField("liveMaxMinute", "Latest live minute", 1)}{numberField("approvalWindowDays", "Auto-approval delay (1–5 days)", 1)}</div><button className="primary" onClick={save}>Save algorithm controls</button>
+      <div className="grid">{numberField("liveMinMinute", "Earliest live minute", 1)}{numberField("liveMaxMinute", "Latest live minute", 1)}{numberField("approvalWindowDays", "Auto-approval delay (1–5 days)", 1)}</div><div className="saveRow"><button className="primary" onClick={() => save("algorithm")} disabled={savingSection !== null}>{savingSection === "algorithm" ? "Saving…" : "Save algorithm controls"}</button>{saveStatus("algorithm")}</div>
     </section>
     <section className="panel auth"><h2>Connection</h2><label><span>Control token</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="••••••••••••" /></label><button onClick={load}>Connect</button></section>
     <section className="panel"><div className="panelTitle"><div><h2>Risk limits</h2><p>Applied before every order, including imported tickets.</p></div><label className="switch"><input type="checkbox" checked={config.enabled} onChange={(event) => setConfig({ ...config, enabled: event.target.checked })} /><span>{config.enabled ? "Enabled" : "Paused"}</span></label></div>
       <div className="grid">{numberField("stakePerBet", "Stake per selection (RON)", .01)}{numberField("minLiveOdds", "Minimum live odds", .01)}{numberField("minLiveConfidence", "Minimum live confidence (%)", 1)}{numberField("maxDailyLoss", "Maximum daily loss (RON)", 1)}{numberField("dailyTakeProfit", "Daily take-profit (RON)", 1)}{numberField("maxSignalAgeSeconds", "Maximum signal age (seconds)", 1)}</div>
-      <button className="primary" onClick={save}>Save controls</button>
+      <div className="saveRow"><button className="primary" onClick={() => save("risk")} disabled={savingSection !== null}>{savingSection === "risk" ? "Saving…" : "Save risk limits"}</button>{saveStatus("risk")}</div>
     </section>
     <section className="panel"><div className="panelTitle"><div><h2>Transactions</h2><p>Submitted and settled Betfair singles.</p></div></div>
       <div className="filters"><label><span>From</span><input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label><label><span>To</span><input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label><label><span>Type</span><select value={kind} onChange={(event) => setKind(event.target.value)}><option value="all">All</option><option value="live">Live</option><option value="ticket">Tickets</option></select></label><button onClick={loadTransactions}>Apply filter</button></div>
@@ -82,3 +123,4 @@ export default function Dashboard() {
     <section className="notice"><span>STATUS</span><p>{message}</p><small>{status.lastMessage}</small></section>
   </main>;
 }
+
