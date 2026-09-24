@@ -12,6 +12,9 @@ export const bettingConfigSchema = z.object({
   algorithmAutopilot: z.boolean(),
   approvalWindowDays: z.number().int().min(1).max(5),
   enabled: z.boolean(),
+}).refine((config) => config.liveMinMinute < config.liveMaxMinute, {
+  message: "Latest live minute must be after earliest live minute.",
+  path: ["liveMaxMinute"],
 });
 
 export type BettingConfig = z.infer<typeof bettingConfigSchema>;
@@ -29,3 +32,4 @@ export const defaultConfig: BettingConfig = {
   approvalWindowDays: 5,
   enabled: false,
 };
+
