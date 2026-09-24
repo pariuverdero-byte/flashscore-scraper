@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 const feedFile = process.env.LIVE_FEED_FILE || "live-betting/data/live_feed.json";
 const stateFile = process.env.LIVE_TELEGRAM_STATE_FILE || "live-betting/data/telegram_sent.json";
 const maxSignalsPerDay = Math.max(0, Number(process.env.LIVE_TELEGRAM_MAX_SIGNALS_PER_DAY || 4));
+const localDay = () => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Bucharest" }).format(new Date());
 const targets = [
   { lang: "ro", token: process.env.TELEGRAM_PV_BOT_TOKEN, chatId: process.env.TELEGRAM_PV_CHAT_ID, site: "https://pariuverde.ro", telegram: "https://t.me/pariuverde" },
   { lang: "en", token: process.env.TELEGRAM_GBT_BOT_TOKEN, chatId: process.env.TELEGRAM_GBT_CHAT_ID, site: "https://greenbettips.com", telegram: "https://t.me/greenbettips_com" },
@@ -43,7 +44,7 @@ async function send(target, text, options = {}) {
 
 for (const target of targets) {
   state.sent[target.lang] ||= [];
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDay();
   if (state.daily[target.lang]?.date !== today) state.daily[target.lang] = { date: today, count: 0 };
   const sent = new Set(state.sent[target.lang]);
   let dailyCount = Number(state.daily[target.lang].count || 0);
