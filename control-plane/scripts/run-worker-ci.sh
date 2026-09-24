@@ -32,5 +32,5 @@ chmod 600 "$credential_dir/client.crt" "$credential_dir/client.key"
 export BETFAIR_CERT_PATH="$credential_dir/client.crt"
 export BETFAIR_KEY_PATH="$credential_dir/client.key"
 
-corepack pnpm --dir control-plane install --frozen-lockfile
-corepack pnpm --dir control-plane exec tsx worker/index.ts --once
+npx --yes pnpm@10.28.2 --dir control-plane install --frozen-lockfile
+npx --yes pnpm@10.28.2 --dir control-plane exec tsx worker/index.ts --once
