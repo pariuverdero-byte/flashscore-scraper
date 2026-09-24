@@ -66,6 +66,13 @@ jobs:
       - name: Build live feed
         run: node live-betting/scripts/run-once.js
 
+      - name: Publish live signals to control plane
+        env:
+          CONTROL_API_TOKEN: ${{ secrets.CONTROL_API_TOKEN }}
+          CONTROL_PLANE_URL: https://liveedge-control.vercel.app
+          INPUT_SOURCE: live
+        run: node control-plane/scripts/publish-native-inputs.mjs
+
       - name: Publish live feed to both WordPress sites
         run: node live-betting/scripts/publish-wordpress.js
 
