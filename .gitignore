@@ -1,0 +1,8 @@
+node_modules/
+.next/
+control-plane/node_modules/
+control-plane/.next/
+control-plane/.env*.local
+control-plane/worker-state.json
+*.pem
+*.key

@@ -1,0 +1,12 @@
+node_modules/
+.next/
+.vercel/
+.env*.local
+coverage/
+*.pem
+*.key
+worker-state.json
+pnpm-debug.log*
+
+.vercel
+.env*
