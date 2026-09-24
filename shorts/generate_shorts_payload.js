@@ -1,5 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
+import { englishMarketLabel } from "../scripts/market-translation.js";
 
 /*
  * =========================================================
@@ -26,6 +27,12 @@ const LANG =
   )
     .trim()
     .toLowerCase();
+
+const REQUIRE_EVIDENCE =
+  String(
+    process.env.SHORTS_REQUIRE_EVIDENCE ??
+    "true"
+  ).toLowerCase() !== "false";
 
 /*
  * =========================================================
@@ -989,6 +996,21 @@ function replaceNumbersForSpeech(
   let result =
     clean(value);
 
+  // Ratios and percentages are common in the evidence-backed analysis. Spell
+  // them naturally before the generic number pass ("4/5" -> "patru din cinci").
+  result = result.replace(
+    /\b(\d+)\s*\/\s*(\d+)\b/g,
+    (_, numerator, denominator) =>
+      LANG === "ro"
+        ? `${integerToRomanian(Number(numerator))} din ${integerToRomanian(Number(denominator))}`
+        : `${integerToEnglish(Number(numerator))} out of ${integerToEnglish(Number(denominator))}`
+  );
+
+  result = result.replace(
+    /\b(\d+(?:\.\d+)?)\s*%/g,
+    "$1 " + (LANG === "ro" ? "la sută" : "percent")
+  );
+
   result =
     result.replace(
       /\b(\d+)\.(\d+)\b/g,
@@ -1228,9 +1250,9 @@ function selectionToPayload(
     );
 
   const market =
-    localizeMarket(
-      marketOriginal
-    );
+    LANG === "en"
+      ? englishMarketLabel(marketOriginal, selection.market_raw || selection.market)
+      : localizeMarket(marketOriginal);
 
   return {
     index:
@@ -1492,41 +1514,12 @@ function buildVoiceScript(
   const phrases =
     getVoicePhrases(random);
 
-  const introOptions =
-    phrases.intros[
-      TICKET_TYPE
-    ] ||
-    phrases.intros.biletul_zilei;
-
   const lines = [];
 
-  const intro =
-    pickRandom(
-      introOptions,
-      random
-    );
-
-  const mentionBrand =
-    random() >= 0.45;
-
-  lines.push(
-    capitalizeFirst(
-      intro
-    )
-  );
-
-  if (mentionBrand) {
-    lines.push(
-      `${capitalizeFirst(
-        pickRandom(
-          phrases.brandMentions,
-          random
-        )
-      )}.`
-    );
-  }
-
-  lines.push("");
+  /*
+   * The greeting and presenter introduction are recorded in the intro clip.
+   * Starting TTS directly with the first match avoids repeating that message.
+   */
 
   matches.forEach(
     (
@@ -1580,10 +1573,15 @@ function buildVoiceScript(
       }
 
       if (match.analysisReason) {
+        const spokenAnalysis =
+          replaceNumbersForSpeech(
+            match.analysisReason
+          );
+
         lines.push(
-          match.analysisReason.endsWith(".")
-            ? match.analysisReason
-            : `${match.analysisReason}.`
+          spokenAnalysis.endsWith(".")
+            ? spokenAnalysis
+            : `${spokenAnalysis}.`
         );
       }
 
@@ -1922,7 +1920,7 @@ async function writeSkippedPayload(
       "skipped",
 
     version:
-      4,
+      5,
 
     reason,
 
@@ -2017,6 +2015,17 @@ async function main() {
   const ticket =
     tickets[TICKET_TYPE];
 
+  // The WordPress step records existing tickets. Do not redistribute them on
+  // a later manual/scheduled run, even when newly generated selections differ.
+  if (process.env.SHORTS_RESPECT_PUBLICATION_GUARD === "true") {
+    const publication = JSON.parse(await fs.readFile("published_posts.json", "utf8"));
+    const type = TICKET_TYPE === "bilet_cota2" ? "cota-2" : "biletul-zilei";
+    if (publication.posts.some(post => post.ticket === type && post.alreadyPublished)) {
+      await writeSkippedPayload("Ticket already published; repeat distribution skipped.", tickets.date);
+      return;
+    }
+  }
+
   if (
     !ticket ||
     !Array.isArray(
@@ -2045,6 +2054,32 @@ async function main() {
     ticket.selections.map(
       selectionToPayload
     );
+
+  const missingAnalysis =
+    matches.filter(
+      (match) =>
+        !match.analysisReason ||
+        !/\d/.test(match.analysisReason)
+    );
+
+  if (
+    REQUIRE_EVIDENCE &&
+    (
+      missingAnalysis.length > 0
+    )
+  ) {
+    const reason =
+      LANG === "ro"
+        ? "Videoclip omis: nu există statistici recente verificabile pentru fiecare selecție."
+        : "Video skipped: verifiable recent statistics are unavailable for every selection.";
+
+    await writeSkippedPayload(
+      reason,
+      tickets.date
+    );
+
+    return;
+  }
 
   const totalOdds =
     displayOdd(
@@ -2127,7 +2162,7 @@ async function main() {
       "ready",
 
     version:
-      4,
+      5,
 
     generatedAt:
       new Date().toISOString(),
@@ -2231,8 +2266,8 @@ async function main() {
           .SHORTS_PRESENTER_FILE ||
         (
           LANG === "ro"
-            ? "assets/presenters/ro_presenter_01.mp4"
-            : "assets/presenters/presenter-01.mp4"
+            ? "assets/intros/ro/intro_01.mp4"
+            : "assets/intros/en/intro_01.mp4"
         ),
 
       presenterVariation,

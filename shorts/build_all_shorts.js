@@ -56,9 +56,13 @@ const DEFAULT_CONFIG =
           "https://pariuverde.ro",
 
         presenterFiles: [
-          "assets/presenters/ro_presenter_01.mp4",
-          "assets/presenters/ro_presenter_02.mp4",
-          "assets/presenters/ro_presenter_03.mp4"
+          "assets/intros/ro/intro_01.mp4",
+          "assets/intros/ro/intro_02.mp4",
+          "assets/intros/ro/intro_03.mp4",
+          "assets/intros/ro/intro_04.mp4",
+          "assets/intros/ro/intro_05.mp4",
+          "assets/intros/ro/intro_06.mp4",
+          "assets/intros/ro/intro_07.mp4"
         ],
 
         ttsVoice:
@@ -84,9 +88,14 @@ const DEFAULT_CONFIG =
           "https://greenbettips.com",
 
         presenterFiles: [
-          "assets/presenters/en_presenter_01.mp4",
-          "assets/presenters/en_presenter_02.mp4",
-          "assets/presenters/en_presenter_03.mp4"
+          "assets/intros/en/intro_01.mp4",
+          "assets/intros/en/intro_02.mp4",
+          "assets/intros/en/intro_03.mp4",
+          "assets/intros/en/intro_04.mp4",
+          "assets/intros/en/intro_05.mp4",
+          "assets/intros/en/intro_06.mp4",
+          "assets/intros/en/intro_07.mp4",
+          "assets/intros/en/intro_08.mp4"
         ],
 
         ttsVoice:
@@ -279,12 +288,21 @@ function buildVisualVariation(
       ""
     ).trim();
 
+  // Keep a common presenter identity, but reserve different recorded takes for
+  // the two daily products so they cannot open with the exact same clip.
+  const splitIndex = Math.max(1, Math.ceil(AVAILABLE_PRESENTERS.length / 2));
+  const presenterRange = ticketType === "biletul_zilei"
+    ? [splitIndex, AVAILABLE_PRESENTERS.length - 1]
+    : [0, splitIndex - 1];
+  const safePresenterRange = presenterRange[0] <= presenterRange[1]
+    ? presenterRange
+    : [0, AVAILABLE_PRESENTERS.length - 1];
   const presenterIndex =
     seededInteger(
       seed,
       "presenter",
-      0,
-      AVAILABLE_PRESENTERS.length - 1
+      safePresenterRange[0],
+      safePresenterRange[1]
     );
 
   const presenterFile =
@@ -922,26 +940,19 @@ function generateVoice({
    */
 
   runCommand(
-    "edge-tts",
-    [
-      "--voice",
-      TTS_VOICE,
-
-      `--rate=${TTS_RATE}`,
-
-      `--pitch=${TTS_PITCH}`,
-
-      "--volume=+0%",
-
-      "--file",
-      scriptFile,
-
-      "--write-media",
-      voiceFile,
-
-      "--write-subtitles",
-      subtitlesFile
-    ]
+    "node",
+    ["scripts/generate_voice.js"],
+    {
+      env: {
+        VOICE_SCRIPT_FILE: scriptFile,
+        VOICE_AUDIO_FILE: voiceFile,
+        VOICE_SUBTITLES_FILE: subtitlesFile,
+        VOICE_LANGUAGE: LANGUAGE,
+        EDGE_TTS_VOICE: TTS_VOICE,
+        EDGE_TTS_RATE: TTS_RATE,
+        EDGE_TTS_PITCH: TTS_PITCH
+      }
+    }
   );
 
   requireFile(

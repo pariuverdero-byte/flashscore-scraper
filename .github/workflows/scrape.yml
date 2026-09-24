@@ -7,10 +7,9 @@ concurrency:
 on:
   workflow_dispatch:
   schedule:
-    # GitHub Actions cron uses UTC.
-    # 13:30 UTC = 16:30 in Romania during daylight-saving time (summer).
-    # During winter, change this to "30 14 * * *" to keep 16:30 Romania time.
+    # Keep 13:30 Romanian local time throughout summer and winter.
     - cron: "30 13 * * *"
+      timezone: "Europe/Bucharest"
 
 jobs:
   scrape-build-publish:
@@ -24,6 +23,7 @@ jobs:
       DAY_OFFSET: "0"
       INCLUDE_LIVE: "true"
       LANG: "ro"
+      SHORTS_RESPECT_PUBLICATION_GUARD: "true"
 
       CLAUDIU_MIN_ODD: "1.15"
 
@@ -33,6 +33,7 @@ jobs:
       PV_COTA2_TOL: "0.00"
 
       PV_ZI_MIN: "3.50"
+      PV_ZI_FALLBACK_MIN: "3.00"
       PV_ZI_MAX: "7.00"
       PV_TARGET_ZI: "5.00"
       PV_ZI_TOL: "0.00"
@@ -51,11 +52,14 @@ jobs:
       # CONTENT ENGINE
       # ==================================================
       SHORTS_OUTPUT_ROOT: "output"
-      SHORTS_PRESENTER_FILES: "assets/presenters/ro_presenter_01.mp4,assets/presenters/ro_presenter_02.mp4,assets/presenters/ro_presenter_03.mp4"
+      SHORTS_PRESENTER_FILES: "assets/intros/ro/intro_01.mp4,assets/intros/ro/intro_02.mp4,assets/intros/ro/intro_03.mp4,assets/intros/ro/intro_04.mp4,assets/intros/ro/intro_05.mp4,assets/intros/ro/intro_06.mp4,assets/intros/ro/intro_07.mp4"
 
       SHORTS_TTS_VOICE: "ro-RO-EmilNeural"
       SHORTS_TTS_RATE: "+1%"
       SHORTS_TTS_PITCH: "+1Hz"
+      VOICE_PROVIDER: "piper"
+      PIPER_VOICE: "ro_RO-mihai-medium"
+      PIPER_DATA_DIR: ".cache/piper"
 
       SHORTS_PRESENTER_SCALE_MIN: "0.88"
       SHORTS_PRESENTER_SCALE_MAX: "1.02"
@@ -117,11 +121,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Edge TTS
+      - name: Restore Piper Romanian voice cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/piper
+          key: piper-ro-RO-mihai-medium-v1
+
+      - name: Install Romanian voice engines
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check --quiet edge-tts
+          python -m pip install --disable-pip-version-check --quiet edge-tts piper-tts
           edge-tts --version
 
       - name: Verify FFmpeg and fonts
@@ -409,10 +419,11 @@ jobs:
           set -euo pipefail
 
           REQUIRED_FILES=(
-            "assets/presenters/ro_presenter_01.mp4"
+            "assets/intros/ro/intro_01.mp4"
             "shorts/generate_shorts_payload.js"
             "shorts/build_all_shorts.js"
             "shorts/render_short.js"
+            "scripts/generate_voice.js"
             "publish/generate_manifest.js"
             "publish/platforms/youtube.js"
           )
@@ -433,7 +444,7 @@ jobs:
             -show_entries stream=codec_name,width,height,r_frame_rate \
             -show_entries format=duration,size \
             -of default=noprint_wrappers=1 \
-            assets/presenters/ro_presenter_01.mp4
+            assets/intros/ro/intro_01.mp4
 
       # ==================================================
       # 11) BUILD ALL AVAILABLE ROMANIAN SHORTS
@@ -839,6 +850,53 @@ jobs:
 
           cat output/publishing_summary.json
 
+      - name: Embed published PariuVerde videos in WordPress articles
+        if: success()
+        env:
+          WP_URL: https://pariuverde.ro
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+          LANG: ro
+        run: node embed_youtube_wp.js
+
+      - name: Publish PariuVerde tickets to Telegram
+        if: success()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_PV_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_PV_CHAT_ID }}
+          LANG: ro
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+            echo "Telegram PariuVerde is not configured; skipping."
+            exit 0
+          fi
+          for TICKET_TYPE in bilet_cota2 biletul_zilei; do
+            TICKET_TYPE="$TICKET_TYPE" node publish/platforms/telegram.js
+          done
+
+      - name: Publish alternating PariuVerde ticket through Buffer
+        if: success()
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_TARGET_SERVICES: tiktok,instagram,facebook
+          # Publish to every connected channel instead of failing the entire
+          # distribution when Buffer temporarily omits one integration.
+          BUFFER_REQUIRE_ALL_TARGETS: "false"
+          BUFFER_TIME_ZONE: Europe/Bucharest
+          WP_URL: https://pariuverde.ro
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${BUFFER_API_KEY:-}" ]; then
+            echo "Buffer is not configured; skipping."
+            exit 0
+          fi
+          node publish/platforms/buffer.js
+
       # ==================================================
       # 15) UPLOAD FINAL ARTIFACT
       # ==================================================
@@ -852,6 +910,7 @@ jobs:
 
             output/build_summary.json
             output/publishing_summary.json
+            output/buffer_publishing_summary.json
 
             output/bilet_cota2/shorts_payload.json
             output/bilet_cota2/voice_script.txt

@@ -4,6 +4,8 @@
 
 import fs from "fs/promises";
 import fetch from "node-fetch";
+import { findPublishedTicket, ticketSlug } from "./scripts/ticket-publication-guard.js";
+import { englishMarketLabel } from "./scripts/market-translation.js";
 
 const { WP_URL, WP_USER, WP_APP_PASS } = process.env;
 const LANG = (process.env.LANG || "ro").toLowerCase();
@@ -169,6 +171,47 @@ const I18N = {
 
 const T = I18N[LANG] || I18N.ro;
 
+function cleanTitlePart(value, maxLength = 72) {
+  return String(value || "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength)
+    .replace(/[\s:;,.–—-]+$/g, "");
+}
+
+function verifiedPostTitle(ticket, ticketType, ticketDateLabel) {
+  const base = ticketType === "cota-2" ? T.cota2_title : T.zi_title;
+  const first = ticket?.selections?.[0] || {};
+  const teams = cleanTitlePart(first.teams, 48) || base;
+  const aiLabel = LANG === "en"
+    ? englishMarketLabel(first.ai?.label_en, first.market_raw || first.market)
+    : first.ai?.label_ro;
+  const rawLabel = LANG === "en"
+    ? ""
+    : (first.meta?.bet_text || first.meta?.market_text || first.market_raw || first.market);
+  const selection = cleanTitlePart(aiLabel || rawLabel, 40) || (LANG === "en" ? "key selection" : "selecția principală");
+  const odds = cleanTitlePart(safeProduct(ticket), 12);
+  const seed = `${ticketDateLabel}|${ticketType}|${teams}`
+    .split("")
+    .reduce((sum, character) => sum + character.charCodeAt(0), 0) % 3;
+
+  const variants = LANG === "en"
+    ? [
+        `${base}: ${teams} — ${selection}, odds ${odds} (${ticketDateLabel})`,
+        `${teams}: ${selection} leads the ${base} at odds ${odds} (${ticketDateLabel})`,
+        `${base} at odds ${odds}: ${teams} — ${selection} (${ticketDateLabel})`,
+      ]
+    : [
+        `${base}: ${teams} — ${selection}, cota ${odds} (${ticketDateLabel})`,
+        `${teams}: ${selection} deschide ${base}, cota ${odds} (${ticketDateLabel})`,
+        `${base} la cota ${odds}: ${teams} — ${selection} (${ticketDateLabel})`,
+      ];
+
+  return variants[seed];
+}
+
 function buildJsonBody(payload) {
   return JSON.stringify(payload);
 }
@@ -177,6 +220,7 @@ function buildFormBody(payload) {
   const form = new URLSearchParams();
 
   form.set("title", payload.title);
+  form.set("slug", payload.slug);
   form.set("status", payload.status);
   form.set("content", payload.content);
   form.set("excerpt", payload.excerpt);
@@ -311,17 +355,24 @@ async function publish({
     };
   }
 
+  const existing = await findPublishedTicket({
+    endpoint: POSTS_ENDPOINT, auth, date: ticketDate,
+    type: categorySlug, categoryId: catId,
+  });
+  if (existing) {
+    console.log(`Already published ${ticketDate} / ${categorySlug}: ${existing.id}; skipped`);
+    return { skipped: true, alreadyPublished: true, success: true, id: existing.id, link: existing.link };
+  }
+
   const content = `
 <p><strong>${excerpt}</strong></p>
-<p><em>${T.ticket_date_label}: ${formatTicketDate(
-    ticketDate
-  )}</em></p>
 <!--more-->
 ${cleanHtml}
 `.trim();
 
   const payload = {
     title,
+    slug: ticketSlug(ticketDate, categorySlug),
     status: "publish",
     content,
     excerpt,
@@ -475,6 +526,16 @@ async function main() {
 
   if (tickets.status === "no_picks") {
     console.log("ℹ No picks today. Skip publish.");
+    await fs.writeFile(
+      "published_posts.json",
+      JSON.stringify({
+        generatedAt: new Date().toISOString(),
+        site: String(WP_URL).replace(/\/+$/, ""),
+        language: LANG,
+        posts: [],
+      }, null, 2),
+      "utf8"
+    );
     return;
   }
 
@@ -488,7 +549,7 @@ async function main() {
 
   if (cota2Html && tickets.bilet_cota2) {
     const result = await publish({
-      title: `${T.cota2_title} (${ticketDateLabel})`,
+      title: verifiedPostTitle(tickets.bilet_cota2, "cota-2", ticketDateLabel),
       html: cota2Html,
       excerpt: T.cota2_excerpt(tickets.bilet_cota2),
       categorySlug: "cota-2",
@@ -505,7 +566,7 @@ async function main() {
 
   if (ziHtml && tickets.biletul_zilei) {
     const result = await publish({
-      title: `${T.zi_title} (${ticketDateLabel})`,
+      title: verifiedPostTitle(tickets.biletul_zilei, "biletul-zilei", ticketDateLabel),
       html: ziHtml,
       excerpt: T.zi_excerpt(tickets.biletul_zilei),
       categorySlug: "biletul-zilei",
@@ -546,6 +607,23 @@ async function main() {
       `${failures.length} WordPress publication(s) failed`
     );
   }
+
+  await fs.writeFile(
+    "published_posts.json",
+    JSON.stringify(
+      {
+        generatedAt: new Date().toISOString(),
+        site: String(WP_URL).replace(/\/+$/, ""),
+        language: LANG,
+        posts: results,
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+
+  console.log("✅ WordPress post map saved to published_posts.json");
 }
 
 main().catch((error) => {

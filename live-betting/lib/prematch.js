@@ -59,7 +59,15 @@ function opponentFromRow(text, team, otherKnownTeam = '') {
 function tableRows($) {
   const rows = [];
   $('tr').each((_, row) => {
-    const cells = $(row).find('th,td').map((__, cell) => cleanText($(cell).text())).get().filter(Boolean);
+    const cells = $(row).find('th,td').map((__, cell) => {
+      const children = $(cell).children().map((___, child) => cleanText($(child).text())).get().filter(Boolean);
+      // Flashscore's H2H rows place date, teams and score in sibling elements
+      // without literal whitespace. Cheerio's cell.text() therefore produced
+      // strings such as "Manchester Utd2-2", which the score parser rejected.
+      return children.length > 1
+        ? cleanText(children.join(' | '))
+        : cleanText($(cell).text());
+    }).get().filter(Boolean);
     if (cells.length) rows.push({ cells, text: cleanText(cells.join(' | ')) });
   });
 

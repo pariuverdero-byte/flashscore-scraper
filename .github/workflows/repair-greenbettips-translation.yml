@@ -1,0 +1,19 @@
+name: Repair GreenBetTips market translation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Repair September 16 and 17 post text
+        env:
+          WP_URL: https://greenbettips.com
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
+        run: node scripts/repair-market-translation-wp.js

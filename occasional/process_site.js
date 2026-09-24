@@ -332,24 +332,19 @@ async function processPost({
   );
 
   run(
-    "edge-tts",
-    [
-      "--voice",
-      process.env.SHORTS_TTS_VOICE ||
-      site.ttsVoice,
-
-      `--rate=${normalizeRate(
-        variation.ttsRate
-      )}`,
-
-      "--volume=+0%",
-
-      "--file",
-      article.files.scriptFile,
-
-      "--write-media",
-      article.files.voiceFile
-    ]
+    "node",
+    ["scripts/generate_voice.js"],
+    {
+      env: {
+        VOICE_SCRIPT_FILE: article.files.scriptFile,
+        VOICE_AUDIO_FILE: article.files.voiceFile,
+        VOICE_SUBTITLES_FILE: article.files.subtitlesFile,
+        VOICE_LANGUAGE: site.language,
+        EDGE_TTS_VOICE: process.env.SHORTS_TTS_VOICE || site.ttsVoice,
+        EDGE_TTS_RATE: normalizeRate(variation.ttsRate),
+        EDGE_TTS_PITCH: "+0Hz"
+      }
+    }
   );
 
   renderArticleVideo({
@@ -357,6 +352,9 @@ async function processPost({
 
     voiceFile:
       article.files.voiceFile,
+
+    subtitlesFile:
+      article.files.subtitlesFile,
 
     titleFile:
       article.files.titleFile,

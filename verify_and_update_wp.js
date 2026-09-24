@@ -10,7 +10,6 @@
 // - log detaliat pentru rows / pending / parsed / finished / evaluated
 // - nu adauga <html><head><body> in continutul WordPress
 
-import fetch from "node-fetch";
 import * as cheerio from "cheerio";
 
 /* =========================================================
@@ -649,6 +648,27 @@ function parseBetText(text, teams = null) {
 
   if (!value) return null;
 
+  const home = teams
+    ? normalize(teams.home)
+    : "";
+
+  const away = teams
+    ? normalize(teams.away)
+    : "";
+
+  const homeMention =
+    home ? value.lastIndexOf(home) : -1;
+
+  const awayMention =
+    away ? value.lastIndexOf(away) : -1;
+
+  const mentionedTeamSide =
+    homeMention < 0 && awayMention < 0
+      ? null
+      : homeMention > awayMention
+        ? "home"
+        : "away";
+
   /* 1X2 */
 
   if (
@@ -681,6 +701,19 @@ function parseBetText(text, teams = null) {
     return {
       type: "1x2",
       side: "x"
+    };
+  }
+
+  if (
+    mentionedTeamSide &&
+    /\b(victorie|castiga|win|to win)\b/.test(value)
+  ) {
+    return {
+      type: "1x2",
+      side:
+        mentionedTeamSide === "home"
+          ? "1"
+          : "2"
     };
   }
 
@@ -720,6 +753,53 @@ function parseBetText(text, teams = null) {
       yes:
         !/\b(no|nu|ng)\b/i.test(value)
     };
+  }
+
+  /* Goals scored in a specific half. */
+
+  const halfMatch = value.match(
+    /\b(?:at least|cel putin|minim(?:um)?)\s*(\d+(?:[.,]\d+)?)\s*(?:gol|goal)/
+  );
+
+  if (
+    halfMatch &&
+    /\b(?:repriza|half)\b/.test(value)
+  ) {
+    const half =
+      /\b(?:a doua|secunda|second|2nd)\b/.test(value)
+        ? 2
+        : /\b(?:prima|first|1st)\b/.test(value)
+          ? 1
+          : null;
+
+    if (half) {
+      return {
+        type: "half_goals",
+        half,
+        min: Number(
+          halfMatch[1].replace(",", ".")
+        )
+      };
+    }
+  }
+
+  /* Team totals must be detected before generic totals. */
+
+  if (mentionedTeamSide) {
+    const minimumTeamGoals =
+      value.match(
+        /\b(?:at least|cel putin|minim(?:um)?|marcheaza(?: minimum)?)\s*(\d+(?:[.,]\d+)?)\s*(?:gol|goal)/
+      );
+
+    if (minimumTeamGoals) {
+      return {
+        type: "team_goals_min",
+        side: mentionedTeamSide,
+        min: Number(
+          minimumTeamGoals[1].replace(",", ".")
+        )
+      };
+    }
   }
 
   /* over / under */
@@ -821,18 +901,7 @@ function parseBetText(text, teams = null) {
    */
 
   if (teams) {
-    const home = normalize(teams.home);
-    const away = normalize(teams.away);
-
-    let teamSide = null;
-
-    if (home && value.includes(home)) {
-      teamSide = "home";
-    }
-
-    if (away && value.includes(away)) {
-      teamSide = "away";
-    }
+    const teamSide = mentionedTeamSide;
 
     if (teamSide) {
       const teamMatch =
@@ -1003,7 +1072,7 @@ function extractFinishedScore(html) {
     );
 
   const finished =
-    /\bFinished\b|\bFT\b|\bAET\b|After Penalties|After Extra Time|Final/i.test(
+    /Finished|Full Time|\bFT\b|\bAET\b|After Penalties|After Extra Time|Final/i.test(
       body
     );
 
@@ -1015,11 +1084,30 @@ function extractFinishedScore(html) {
    * Look for score patterns.
    */
 
+  const splitScore = body.match(
+    /(\d{1,2})\s*[-:]\s*(\d{1,2})\s*\(\s*(\d{1,2})\s*[-:]\s*(\d{1,2})\s*,\s*(\d{1,2})\s*[-:]\s*(\d{1,2})\s*\)\s*(?:Finished|Full Time|After Extra Time|After Penalties|Final|AET|FT)/i
+  );
+
+  if (splitScore) {
+    return {
+      ft: {
+        h: Number(splitScore[1]),
+        a: Number(splitScore[2])
+      },
+      ht: {
+        h: Number(splitScore[3]),
+        a: Number(splitScore[4])
+      },
+      secondHalf: {
+        h: Number(splitScore[5]),
+        a: Number(splitScore[6])
+      }
+    };
+  }
+
   const scorePatterns = [
-    /Finished.*?(\d+)\s*[-:]\s*(\d+)/i,
-    /\bFT\b.*?(\d+)\s*[-:]\s*(\d+)/i,
-    /(\d+)\s*[-:]\s*(\d+).*?\bFinished\b/i,
-    /(\d+)\s*[-:]\s*(\d+).*?\bFT\b/i
+    /(\d{1,2})\s*[-:]\s*(\d{1,2})(?:\s*\([^)]*\))?\s*(?:Finished|Full Time|After Extra Time|After Penalties|Final|AET|FT)/i,
+    /(?:Finished|Full Time|After Extra Time|After Penalties|Final|AET|FT)[^0-9]{0,120}(\d{1,2})\s*[-:]\s*(\d{1,2})/i
   ];
 
   for (const pattern of scorePatterns) {
@@ -1027,8 +1115,10 @@ function extractFinishedScore(html) {
 
     if (match) {
       return {
-        h: Number(match[1]),
-        a: Number(match[2])
+        ft: {
+          h: Number(match[1]),
+          a: Number(match[2])
+        }
       };
     }
   }
@@ -1037,7 +1127,11 @@ function extractFinishedScore(html) {
    * Last-resort fallback.
    */
 
-  return parseScore(body);
+  const fallback = parseScore(body);
+
+  return fallback
+    ? { ft: fallback }
+    : null;
 }
 
 async function fetchFlashscore(matchId) {
@@ -1051,10 +1145,10 @@ async function fetchFlashscore(matchId) {
     const html =
       await fetchHtml(scoreUrl);
 
-    const ft =
+    const scoreData =
       extractFinishedScore(html);
 
-    if (!ft) {
+    if (!scoreData?.ft) {
       return null;
     }
 
@@ -1080,7 +1174,7 @@ async function fetchFlashscore(matchId) {
     }
 
     console.log(
-      `[FS] ${matchId}: FT ${ft.h}-${ft.a}` +
+      `[FS] ${matchId}: FT ${scoreData.ft.h}-${scoreData.ft.a}` +
       (
         stats.corners !== null
           ? ` | corners=${stats.corners}`
@@ -1094,7 +1188,7 @@ async function fetchFlashscore(matchId) {
     );
 
     return {
-      ft,
+      ...scoreData,
       ...stats
     };
   } catch (error) {
@@ -1209,6 +1303,32 @@ function evalBet(bet, data) {
     );
   }
 
+  if (bet.type === "team_goals_min") {
+    const goals =
+      bet.side === "home"
+        ? ft.h
+        : ft.a;
+
+    return goals >= bet.min
+      ? WIN
+      : LOSS;
+  }
+
+  if (bet.type === "half_goals") {
+    const score =
+      bet.half === 1
+        ? data.ht
+        : data.secondHalf;
+
+    if (!score) {
+      return null;
+    }
+
+    return score.h + score.a >= bet.min
+      ? WIN
+      : LOSS;
+  }
+
   if (bet.type === "corners") {
     if (
       !Number.isFinite(
@@ -1263,6 +1383,114 @@ function evalBet(bet, data) {
   }
 
   return null;
+}
+
+function runSelfTests() {
+  const assertEqual =
+    (actual, expected, label) => {
+      if (
+        JSON.stringify(actual) !==
+        JSON.stringify(expected)
+      ) {
+        throw new Error(
+          `[SELF TEST] ${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`
+        );
+      }
+    };
+
+  assertEqual(
+    parseBetText(
+      "Victorie Haka",
+      {
+        home: "Haka",
+        away: "SJK Akatemia"
+      }
+    ),
+    {
+      type: "1x2",
+      side: "1"
+    },
+    "named home win"
+  );
+
+  assertEqual(
+    parseBetText(
+      "Frosinone - Juventus - Juventus marcheaza minimum 2 goluri",
+      {
+        home: "Frosinone",
+        away: "Juventus"
+      }
+    ),
+    {
+      type: "team_goals_min",
+      side: "away",
+      min: 2
+    },
+    "team minimum goals"
+  );
+
+  const halfBet =
+    parseBetText(
+      "Cel putin 1 gol in repriza secunda",
+      {
+        home: "Betis",
+        away: "Real Sociedad"
+      }
+    );
+
+  assertEqual(
+    halfBet,
+    {
+      type: "half_goals",
+      half: 2,
+      min: 1
+    },
+    "second-half goals"
+  );
+
+  const matchData =
+    extractFinishedScore(`
+      <body>
+        <h3>Betis - Real Sociedad</h3>
+        <div>1-0 (0-0,1-0)</div>
+        <div>Finished</div>
+      </body>
+    `);
+
+  assertEqual(
+    matchData,
+    {
+      ft: { h: 1, a: 0 },
+      ht: { h: 0, a: 0 },
+      secondHalf: { h: 1, a: 0 }
+    },
+    "Flashscore split score"
+  );
+
+  assertEqual(
+    evalBet(halfBet, matchData),
+    WIN,
+    "second-half evaluation"
+  );
+
+  assertEqual(
+    evalBet(
+      {
+        type: "team_goals_min",
+        side: "away",
+        min: 2
+      },
+      {
+        ft: { h: 0, a: 1 }
+      }
+    ),
+    LOSS,
+    "team minimum evaluation"
+  );
+
+  console.log(
+    "[SELF TEST] All validator tests passed."
+  );
 }
 
 /* =========================================================
@@ -1902,8 +2130,19 @@ async function main() {
  * RUN
  * ========================================================= */
 
-main()
+const execution =
+  /^(1|true|yes)$/i.test(
+    process.env.VERIFY_SELF_TEST || ""
+  )
+    ? Promise.resolve(
+        runSelfTests()
+      )
+    : main();
+
+execution
   .then((summary) => {
+    if (!summary) return;
+
     console.log(
       `[VERIFY] Final status: ${
         summary?.status ||

@@ -1,0 +1,187 @@
+/**
+ * PariuVerde / GreenBetTips temporary homepage enhancements.
+ * Installed through Code Snippets; intentionally contains no opening PHP tag.
+ */
+add_filter('the_content', function ($content) {
+    if (is_admin() || !is_string($content) || $content === '') return $content;
+
+    // Homepage ticket cards must remain compact: ticket table only. Some
+    // themes render the full post content even when a <!--more--> marker is
+    // present, so remove article-only material server-side as well as in CSS.
+    if (is_front_page() || is_home()) {
+        $content = preg_replace(
+            '/<!--\s*pv-ticket-youtube:start\s*-->[\s\S]*?<!--\s*pv-ticket-youtube:end\s*-->/i',
+            '',
+            $content
+        );
+        $content = preg_replace(
+            '/<section\b[^>]*class=(?:"[^"]*\bpv-ticket-video\b[^"]*"|\'[^\']*\bpv-ticket-video\b[^\']*\')[^>]*>[\s\S]*?<\/section>/i',
+            '',
+            $content
+        );
+        $content = preg_replace(
+            '/<div\b[^>]*class=(?:"[^"]*\bpick-reason\b[^"]*"|\'[^\']*\bpick-reason\b[^\']*\')[^>]*>[\s\S]*?<\/div>/i',
+            '',
+            $content
+        );
+        $content = preg_replace(
+            '/<section\b[^>]*class=(?:"[^"]*\bticket-analysis\b[^"]*"|\'[^\']*\bticket-analysis\b[^\']*\')[^>]*>[\s\S]*?<\/section>/i',
+            '',
+            $content
+        );
+        return $content;
+    }
+
+    // REST-created Gutenberg embed blocks can be left as a plain YouTube URL
+    // by themes that do not run the oEmbed callback. Convert only our marked
+    // ticket videos to a real privacy-enhanced responsive player.
+    return preg_replace_callback(
+        '/(<section\b[^>]*class=(?:"[^"]*\bpv-ticket-video\b[^"]*"|\'[^\']*\bpv-ticket-video\b[^\']*\')[^>]*>[\s\S]*?<div\b[^>]*class="wp-block-embed__wrapper"[^>]*>)\s*(?:<p>)?https?:\/\/(?:www\.)?youtube\.com\/watch\?v=([A-Za-z0-9_-]{6,20})(?:[^<\s]*)(?:<\/p>)?\s*(<\/div>)/i',
+        function ($match) {
+            $id = esc_attr($match[2]);
+            $title = esc_attr__('Video analysis', 'pv-site-experience');
+            $iframe = '<iframe src="https://www.youtube-nocookie.com/embed/' . $id . '" title="' . $title . '" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>';
+            return $match[1] . $iframe . $match[3];
+        },
+        $content
+    );
+}, 99);
+
+add_action('wp_footer', function () {
+    if (is_admin()) return;
+
+    $is_en = stripos((string) home_url(), 'greenbettips') !== false;
+    $config = $is_en ? [
+        'brand' => 'GreenBetTips.com',
+        'telegram' => 'https://t.me/greenbettips_com',
+        'facebook' => 'https://www.facebook.com/profile.php?id=61593989710772',
+        'instagram' => 'https://www.instagram.com/nick_verde_2025/',
+        'tiktok' => 'https://www.tiktok.com/@greenbtps',
+        'youtube' => 'https://www.youtube.com/@GreenBetTips',
+        'title' => 'Get today’s picks instantly',
+        'copy' => 'Join our Telegram channel for the daily tickets and clearly marked LIVE betting signals.',
+        'join' => 'Join Telegram',
+        'later' => 'Maybe later',
+    ] : [
+        'brand' => 'PariuVerde.ro',
+        'telegram' => 'https://t.me/pariuverde',
+        'facebook' => 'https://www.facebook.com/profile.php?id=61594437740933',
+        'instagram' => 'https://www.instagram.com/nick_verde_2025/',
+        'tiktok' => 'https://www.tiktok.com/@nicu_pariuverde',
+        'youtube' => 'https://www.youtube.com/@pontverde',
+        'title' => 'Primește ponturile imediat',
+        'copy' => 'Intră pe canalul nostru de Telegram pentru biletele zilei și semnalele de pariere marcate clar LIVE.',
+        'join' => 'Intră pe Telegram',
+        'later' => 'Poate mai târziu',
+    ];
+
+    $json = wp_json_encode($config, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    ?>
+    <style id="pv-site-experience-css">
+      body.home .elementor-element[data-id="1fe2321b"]{display:none!important}
+      body.home .pv-ticket-video,body.blog .pv-ticket-video,body.home .pick-reason,body.blog .pick-reason,body.home .ticket-analysis,body.blog .ticket-analysis{display:none!important}
+      .single-post .pv-ticket-video{width:min(100%,460px);margin:28px auto}
+      .single-post .pv-ticket-video h2{text-align:center;margin-bottom:14px}
+      .single-post .pv-ticket-video .wp-block-embed__wrapper{position:relative;width:100%;aspect-ratio:9/16;overflow:hidden;border-radius:14px;background:#07130f;box-shadow:0 12px 34px rgba(0,0,0,.16)}
+      .single-post .pv-ticket-video iframe{position:absolute;inset:0;width:100%!important;height:100%!important;border:0}
+      .elementor-element[data-id="6079c56f"] .elementor-social-icon{width:50px!important;height:50px!important;min-width:50px!important;min-height:50px!important;padding:0!important;border-radius:6px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;font-size:21px!important;line-height:1!important}
+      .elementor-element[data-id="6079c56f"] .elementor-social-icon svg{width:21px!important;height:21px!important;display:block!important}
+      .elementor-element[data-id="6079c56f"] .elementor-grid-item{display:inline-flex!important;align-items:center!important;justify-content:center!important}
+      .pv-tg-overlay{position:fixed;inset:0;z-index:999999;background:rgba(4,15,12,.72);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:20px;opacity:0;visibility:hidden;transition:.22s ease}
+      .pv-tg-overlay.is-open{opacity:1;visibility:visible}.pv-tg-card{position:relative;width:min(460px,100%);border:1px solid rgba(43,213,119,.35);border-radius:22px;padding:34px 30px 28px;background:linear-gradient(145deg,#071b15,#0b2c20);color:#fff;box-shadow:0 25px 80px rgba(0,0,0,.45);text-align:center}
+      .pv-tg-icon{width:66px;height:66px;border-radius:18px;margin:0 auto 18px;display:grid;place-items:center;background:#25a7e8;box-shadow:0 10px 30px rgba(37,167,232,.3);font-size:34px}.pv-tg-card h2{color:#fff!important;font-size:27px!important;line-height:1.2!important;margin:0 0 12px!important}.pv-tg-card p{color:#d8e9e2!important;font-size:16px;line-height:1.55;margin:0 auto 23px;max-width:370px}
+      .pv-tg-actions{display:flex;gap:11px;justify-content:center;flex-wrap:wrap}.pv-tg-join,.pv-tg-later{border:0;border-radius:999px;padding:13px 22px;font-weight:800;font-size:15px;cursor:pointer;text-decoration:none!important}.pv-tg-join{background:#20d276;color:#032116!important}.pv-tg-later{background:transparent;color:#d8e9e2;border:1px solid rgba(255,255,255,.25)}.pv-tg-close{position:absolute;right:14px;top:12px;border:0;background:transparent;color:#fff;font-size:27px;line-height:1;cursor:pointer;padding:5px}.pv-tg-note{display:block;margin-top:18px;font-size:11px;opacity:.62}
+      @media(max-width:767px){.bilet-pariu{display:block;width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}.bilet-pariu th,.bilet-pariu td{min-width:105px;white-space:nowrap}.bilet-pariu th:first-child,.bilet-pariu td:first-child{min-width:170px}.bilet-pariu .pick-reason{min-width:220px;white-space:normal}.single-post .pv-ticket-video{width:100%;margin:22px auto}.single-post .pv-ticket-video .wp-block-embed__wrapper{border-radius:10px}}
+      @media(max-width:520px){.pv-tg-card{padding:31px 20px 24px}.pv-tg-actions{display:grid}.pv-tg-join,.pv-tg-later{width:100%}}
+      .pv-support-open{overflow:hidden}
+      .pv-support-dialog *{box-sizing:border-box}
+      dialog.pv-support-dialog{position:fixed;inset:0;margin:auto;box-sizing:border-box;width:min(500px,calc(100% - 28px));max-height:calc(100dvh - 28px);overflow-y:auto;padding:34px 26px 24px}
+      .pv-support-dialog::backdrop{background:rgba(4,15,12,.76);backdrop-filter:blur(5px)}
+      .pv-support-heart{font-size:48px;color:#20d276;line-height:1;margin-bottom:16px}
+      .pv-support-paypal{display:block;background:#ffc439;color:#172c50!important}
+      .pv-support-email{display:block;margin:10px 0 22px;color:#d8e9e2;overflow-wrap:anywhere}
+      .pv-tg-card .pv-support-social-copy{font-size:14px;margin-bottom:12px}
+      .pv-support-socials{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-bottom:22px}
+      .pv-support-socials a{padding:10px 12px;border:1px solid #527065;border-radius:10px;color:#fff!important;text-decoration:none;font-size:14px}
+      .pv-support-dialog :is(a,button):focus-visible{outline:3px solid #ffc439;outline-offset:4px}
+      @media(max-width:380px){dialog.pv-support-dialog{padding:34px 16px 20px}.pv-support-dialog h2{font-size:23px!important}}
+    </style>
+    <script id="pv-site-experience-js">
+    (() => {
+      const c = <?php echo $json; ?>;
+      const links = {facebook:c.facebook, instagram:c.instagram, youtube:c.youtube, telegram:c.telegram};
+      Object.entries(links).forEach(([network,url]) => {
+        document.querySelectorAll(`a.elementor-social-icon-${network}, a.ast-${network}`).forEach(a => {
+          a.href=url; a.target='_blank'; a.rel='noopener noreferrer';
+        });
+      });
+      document.querySelectorAll('a.elementor-social-icon-x-twitter:not([href]),a.elementor-social-icon-whatsapp:not([href])').forEach(a => a.closest('.elementor-grid-item')?.remove());
+      const socialWrap=document.querySelector('.elementor-element[data-id="6079c56f"] .elementor-social-icons-wrapper');
+      const addSocial=(network,url,color,path)=>{
+        if(!socialWrap || socialWrap.querySelector(`.pv-social-${network}`) || socialWrap.querySelector(`.elementor-social-icon-${network}`)) return;
+        const item=document.createElement('span'); item.className=`elementor-grid-item pv-social-${network}`; item.setAttribute('role','listitem');
+        item.innerHTML=`<a class="elementor-icon elementor-social-icon" href="${url}" target="_blank" rel="noopener noreferrer" aria-label="${network[0].toUpperCase()+network.slice(1)}" style="background:${color};color:#fff"><span class="elementor-screen-only">${network}</span><svg aria-hidden="true" viewBox="0 0 448 512" xmlns="http://www.w3.org/2000/svg" style="width:1em;height:1em;fill:currentColor"><path d="${path}"></path></svg></a>`;
+        socialWrap.appendChild(item);
+      };
+      addSocial('instagram',c.instagram,'#c13584','M224.1 141c-63.6 0-114.9 51.3-114.9 114.9s51.3 114.9 114.9 114.9S339 319.5 339 255.9 287.7 141 224.1 141zm0 189.6c-41.1 0-74.7-33.5-74.7-74.7s33.5-74.7 74.7-74.7 74.7 33.5 74.7 74.7-33.6 74.7-74.7 74.7zm146.4-194.3c0 14.9-12 26.8-26.8 26.8-14.9 0-26.8-12-26.8-26.8s12-26.8 26.8-26.8 26.8 12 26.8 26.8zm76.1 27.2c-1.7-35.9-9.9-67.7-36.2-93.9-26.2-26.2-58-34.4-93.9-36.2-37-2.1-147.9-2.1-184.9 0-35.8 1.7-67.6 9.9-93.9 36.1s-34.4 58-36.2 93.9c-2.1 37-2.1 147.9 0 184.9 1.7 35.9 9.9 67.7 36.2 93.9s58 34.4 93.9 36.2c37 2.1 147.9 2.1 184.9 0 35.9-1.7 67.7-9.9 93.9-36.2 26.2-26.2 34.4-58 36.2-93.9 2.1-37 2.1-147.8 0-184.8z');
+      addSocial('tiktok',c.tiktok,'#111','M448 209.9a210.1 210.1 0 0 1-122.8-39.3v178.7A162.6 162.6 0 1 1 185 188v89.9a74.6 74.6 0 1 0 52.2 71.3V0h88a121.2 121.2 0 0 0 1.9 22.2A122.2 122.2 0 0 0 381 102.4a121.4 121.4 0 0 0 67 20.1z');
+      if (document.getElementById('pv-support-dialog')) return;
+      const en=c.brand==='GreenBetTips.com';
+      const t=en ? {
+        title:'Help keep GreenBetTips free',
+        copy:'If our analysis helps you, support the work behind it with a donation. Every contribution helps keep the site free for everyone.',
+        donate:'Donate with PayPal', social:'You can also help for free: subscribe, follow us or like our posts.',
+        youtube:'Subscribe on YouTube', close:'Continue browsing', dismiss:'Close', note:'Optional support. Choose any amount on PayPal.'
+      } : {
+        title:'Ajută-ne să păstrăm PariuVerde gratuit',
+        copy:'Îți sunt utile analizele noastre? Susține munca din spatele lor printr-o donație. Orice contribuție ne ajută să păstrăm site-ul gratuit pentru toată lumea.',
+        donate:'Donează prin PayPal', social:'Ne poți ajuta și gratuit: abonează-te, urmărește-ne sau dă un like postărilor noastre.',
+        youtube:'Abonează-te pe YouTube', close:'Continuă pe site', dismiss:'Închide', note:'Sprijin opțional. Alegi orice sumă pe PayPal.'
+      };
+      const paypal=new URL('https://www.paypal.com/cgi-bin/webscr');
+      paypal.search=new URLSearchParams({cmd:'_donations',business:'pariuverdero@gmail.com',currency_code:'EUR',item_name:`Support ${c.brand}`}).toString();
+      const dialog=document.createElement('dialog');
+      dialog.id='pv-support-dialog'; dialog.className='pv-support-dialog pv-tg-card';
+      dialog.setAttribute('aria-labelledby','pv-support-title');
+      dialog.setAttribute('aria-describedby','pv-support-copy');
+      dialog.innerHTML=`<button type="button" class="pv-tg-close" aria-label="${t.dismiss}">×</button><div class="pv-support-heart" aria-hidden="true">♡</div><h2 id="pv-support-title">${t.title}</h2><p id="pv-support-copy">${t.copy}</p><a class="pv-tg-join pv-support-paypal" href="${paypal.href}" target="_blank" rel="noopener noreferrer">${t.donate} ↗</a><small class="pv-support-email">pariuverdero@gmail.com</small><p class="pv-support-social-copy">${t.social}</p><div class="pv-support-socials">${[['youtube',t.youtube],['facebook','Facebook'],['instagram','Instagram'],['tiktok','TikTok'],['telegram','Telegram']].map(([network,label])=>`<a href="${c[network]}" target="_blank" rel="noopener noreferrer">${label} ↗</a>`).join('')}</div><button type="button" class="pv-tg-later">${t.close}</button><small class="pv-tg-note">${t.note}</small>`;
+      document.body.appendChild(dialog);
+      // Count visible browsing time across pages in this tab, separately per site.
+      const key=`pvSupportSession:v1:${location.hostname}`;
+      let state={elapsed:0,next:0};
+      try {
+        const saved=JSON.parse(sessionStorage.getItem(key));
+        if(saved && Number.isFinite(saved.elapsed) && saved.elapsed>=0 && Number.isInteger(saved.next) && saved.next>=0 && saved.next<=3) state=saved;
+      } catch (_) { /* Private browsing may disable storage; keep an in-memory timer. */ }
+      const thresholds=[5,15,30].map(minutes=>minutes*60000);
+      const save=()=>{try{sessionStorage.setItem(key,JSON.stringify(state));}catch(_){}};
+      let last=performance.now(), visible=!document.hidden, previousFocus;
+      const close=()=>dialog.close();
+      dialog.querySelector('.pv-tg-close').addEventListener('click',close);
+      dialog.querySelector('.pv-tg-later').addEventListener('click',close);
+      dialog.querySelectorAll('a').forEach(a=>a.addEventListener('click',close));
+      dialog.addEventListener('click',e=>{
+        const rect=dialog.getBoundingClientRect();
+        if(e.target===dialog && (e.clientX<rect.left || e.clientX>rect.right || e.clientY<rect.top || e.clientY>rect.bottom)) close();
+      });
+      dialog.addEventListener('close',()=>{document.documentElement.classList.remove('pv-support-open');previousFocus?.focus();});
+      const tick=()=>{
+        const now=performance.now();
+        if(visible) state.elapsed+=Math.max(0,now-last);
+        last=now; visible=!document.hidden;
+        if(visible && !dialog.open && state.next<thresholds.length && state.elapsed>=thresholds[state.next]) {
+          // Consume overdue milestones together, never stack dialogs.
+          while(state.next<thresholds.length && state.elapsed>=thresholds[state.next]) state.next++;
+          previousFocus=document.activeElement;
+          dialog.showModal(); document.documentElement.classList.add('pv-support-open');
+        }
+        save();
+      };
+      setInterval(tick,1000);
+      document.addEventListener('visibilitychange',tick);
+      window.addEventListener('pagehide',()=>{tick();visible=false;});
+      window.addEventListener('pageshow',()=>{last=performance.now();visible=!document.hidden;});
+    })();
+    </script>
+    <?php
+}, 100);

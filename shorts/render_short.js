@@ -14,11 +14,19 @@ const PAYLOAD_FILE =
 
 const PRESENTER_FILE =
   process.env.SHORTS_PRESENTER_FILE ||
-  "assets/presenters/presenter-01.mp4";
+  (
+    String(process.env.LANG || "en").toLowerCase() === "ro"
+      ? "assets/intros/ro/intro_01.mp4"
+      : "assets/intros/en/intro_01.mp4"
+  );
 
 const AUDIO_FILE =
   process.env.SHORTS_AUDIO_FILE ||
   "output/voice.mp3";
+
+const TICKET_BACKGROUND_FILE =
+  process.env.SHORTS_TICKET_BACKGROUND_FILE ||
+  "assets/backgrounds/football_ticket_stadium_v1.png";
 
 const OUTPUT_FILE =
   process.env.SHORTS_VIDEO_FILE ||
@@ -47,6 +55,7 @@ const FONT_BOLD =
  */
 
 const INTRO_DURATION = 3;
+const TRANSITION_DURATION = 0.65;
 const OUTRO_DURATION = 3;
 
 /*
@@ -841,41 +850,41 @@ function getTicketLayout(
   ) {
     return {
       cardX:
-        35,
+        55,
 
       cardY:
-        35,
+        115,
 
       cardWidth:
-        1010,
+        970,
 
       cardHeight:
-        560,
+        1220,
 
       headlineY:
-        63,
+        170,
 
       headlineFontSize:
-        39,
+        54,
 
       oddsY:
-        120,
+        255,
 
       oddsFontSize:
-        33,
+        46,
 
       selectionFontSize:
-        21,
+        34,
 
       selectionY: [
-        180,
-        270,
-        360,
-        450
+        400,
+        630,
+        860,
+        1090
       ],
 
       selectionMaxLength:
-        54
+        42
     };
   }
 
@@ -886,41 +895,41 @@ function getTicketLayout(
 
   return {
     cardX:
-      45,
+      65,
 
     cardY:
-      40,
+      170,
 
     cardWidth:
-      990,
+      950,
 
     cardHeight:
-      455,
+      1110,
 
     headlineY:
-      70,
+      235,
 
     headlineFontSize:
-      42,
+      58,
 
     oddsY:
-      130,
+      330,
 
     oddsFontSize:
-      36,
+      48,
 
     selectionFontSize:
-      23,
+      38,
 
     selectionY: [
-      190,
-      290,
-      390,
-      490
+      505,
+      800,
+      1095,
+      1390
     ],
 
     selectionMaxLength:
-      52
+      38
   };
 }
 
@@ -941,6 +950,10 @@ function main() {
 
   requireFile(
     AUDIO_FILE
+  );
+
+  requireFile(
+    TICKET_BACKGROUND_FILE
   );
 
   requireFile(
@@ -1051,6 +1064,8 @@ function main() {
 
   const finalDuration =
     INTRO_DURATION +
+    presenterDuration +
+    TRANSITION_DURATION +
     audioDuration +
     OUTRO_DURATION;
 
@@ -1419,10 +1434,10 @@ function main() {
       language
     );
 
+  // Preserve the product name in the generic: Bilet Cota 2 / Biletul Zilei
+  // (and the corresponding English label supplied by the payload).
   const introTitle =
-    language === "ro"
-      ? ticketTitle
-      : `TODAY'S ${ticketTitle}`;
+    ticketTitle;
 
   const mainOddsText =
     `${combinedOddsLabel}: ${totalOdds}`;
@@ -1462,6 +1477,13 @@ function main() {
       "intro_odds.txt",
       totalOdds
     );
+
+  const analystLowerThirdPath = escapeFilterPath(writeTextFile(
+    "analyst_lower_third.txt",
+    language === "ro"
+      ? "Mihai - analist pariuverde.ro"
+      : "Mike - analyst at greenbettips.com"
+  ));
 
   const introFooterFile =
     writeTextFile(
@@ -1641,23 +1663,6 @@ function main() {
     OUTRO_DURATION -
     0.35;
 
-  const presenterWidth =
-    Math.round(
-      1080 *
-      presenterZoom
-    );
-
-  const presenterHeight =
-    Math.round(
-      1920 *
-      presenterZoom
-    );
-
-  const horizontalFlipFilter =
-    presenterFlipped
-      ? ",hflip"
-      : "";
-
   /*
    * =========================================================
    * SELECTION DRAW FILTERS
@@ -1806,57 +1811,57 @@ function main() {
 
       "[intro_a]",
 
-    /*
-     * =====================================================
-     * PRESENTER
-     * =====================================================
-     */
-
+    /* The recorded presenter is a self-contained introduction segment. */
     "[0:v]" +
-
-      "scale=1080:1920:" +
-      "force_original_aspect_ratio=decrease," +
-
-      "pad=1080:1920:" +
-      "(ow-iw)/2:" +
-      "(oh-ih)/2:" +
-      "color=0x00FF00," +
-
+      "scale=1080:1920:force_original_aspect_ratio=increase," +
+      "crop=1080:1920," +
       "fps=30," +
+      `trim=duration=${presenterDuration.toFixed(3)},` +
+      "setpts=PTS-STARTPTS," +
+      "drawbox=x=90:y=1510:w=900:h=155:color=black@0.72:t=fill," +
+      "drawbox=x=90:y=1510:w=12:h=155:color=0x38E878:t=fill," +
+      `drawtext=fontfile='${boldFont}':textfile='${introTitlePath}':` +
+      "fontcolor=white:fontsize=52:x=(w-text_w)/2:y=1558," +
+      "format=yuv420p,setsar=1" +
+      "[presenter_intro_v]",
 
-      "chromakey=" +
-      "0x00FF00:" +
-      "0.18:" +
-      "0.08," +
+    "[0:a]" +
+      "aresample=48000," +
+      "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo," +
+      `atrim=duration=${presenterDuration.toFixed(3)},` +
+      "loudnorm=I=-16:TP=-1.5:LRA=11," +
+      `afade=t=out:st=${Math.max(0, presenterDuration - 0.18).toFixed(3)}:d=0.18,` +
+      "asetpts=PTS-STARTPTS" +
+      "[presenter_intro_a]",
 
-      "format=rgba," +
+    /* Short green broadcast slash between presenter and ticket. */
+    "color=c=0x38E878:s=1080x1920:r=30:" +
+      `d=${TRANSITION_DURATION}` +
+      ",drawbox=x=720:y=0:w=360:h=1920:color=0x072B1A:t=fill" +
+      ",format=yuv420p,setsar=1,setpts=PTS-STARTPTS" +
+      "[transition_v]",
 
-      `scale=${presenterWidth}:${presenterHeight}` +
+    /* A restrained audio sting makes the narrator change intentional. */
+    "anoisesrc=color=pink:sample_rate=48000:" +
+      `d=${TRANSITION_DURATION},` +
+      "highpass=f=450," +
+      "lowpass=f=4800," +
+      "volume=0.10," +
+      "afade=t=in:st=0:d=0.05," +
+      `afade=t=out:st=0.25:d=${Math.max(0.1, TRANSITION_DURATION - 0.25).toFixed(2)},` +
+      "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo," +
+      "asetpts=PTS-STARTPTS" +
+      "[transition_a]",
 
-      horizontalFlipFilter +
-
-      "[person]",
-
-    /*
-     * =====================================================
-     * PERIODIC RANDOM BACKGROUND
-     * =====================================================
-     */
-
-    ...periodicBackground.filters,
-
-    /*
-     * =====================================================
-     * PRESENTER OVER BACKGROUND
-     * =====================================================
-     */
-
-    "[main_bg][person]" +
-
-      `overlay=(W-w)/2+${presenterXOffset}:` +
-      `(H-h)/2+${presenterYOffset}:` +
-      "shortest=1" +
-
+    /* Original football broadcast artwork enriches the ticket desk while the
+     * dark central area keeps every selection readable. */
+    "[2:v]" +
+      "scale=1080:1920:force_original_aspect_ratio=increase," +
+      "crop=1080:1920," +
+      "fps=30," +
+      "eq=brightness=-0.10:saturation=0.78," +
+      `trim=duration=${audioDuration.toFixed(3)},` +
+      "setpts=PTS-STARTPTS" +
       "[main_base]",
 
     /*
@@ -1899,6 +1904,12 @@ function main() {
 
       "," +
 
+      // Analyst identification stays below the selections and above the CTA.
+      "drawbox=x=65:y=1490:w=950:h=112:color=0x062D20@0.94:t=fill," +
+      "drawbox=x=65:y=1490:w=9:h=112:color=0x38E878:t=fill," +
+      `drawtext=fontfile='${boldFont}':textfile='${analystLowerThirdPath}':` +
+      "fontcolor=white:fontsize=42:x=(w-text_w)/2:y=1525," +
+
       "drawbox=" +
       "x=45:" +
       "y=1765:" +
@@ -1939,6 +1950,10 @@ function main() {
       "sample_rates=48000:" +
       "channel_layouts=stereo," +
 
+      "loudnorm=I=-16:TP=-1.5:LRA=11," +
+
+      "afade=t=in:st=0:d=0.14," +
+
       `atrim=duration=${audioDuration.toFixed(
         3
       )},` +
@@ -1977,17 +1992,17 @@ function main() {
       "y=410," +
 
       "drawbox=" +
-      "x=165:" +
+      "x=120:" +
       "y=565:" +
-      "w=750:" +
+      "w=840:" +
       "h=180:" +
       "color=0x38E878@0.16:" +
       "t=fill," +
 
       "drawbox=" +
-      "x=165:" +
+      "x=120:" +
       "y=565:" +
-      "w=750:" +
+      "w=840:" +
       "h=180:" +
       "color=0x38E878@0.75:" +
       "t=4," +
@@ -1995,7 +2010,7 @@ function main() {
       `drawtext=fontfile='${boldFont}':` +
       `textfile='${outroSubscribePath}':` +
       "fontcolor=0x38E878:" +
-      "fontsize=100:" +
+      "fontsize=78:" +
       "x=(w-text_w)/2:" +
       "y=600," +
 
@@ -2065,11 +2080,13 @@ function main() {
      */
 
     "[intro_v][intro_a]" +
+      "[presenter_intro_v][presenter_intro_a]" +
+      "[transition_v][transition_a]" +
       "[main_v][main_a]" +
       "[outro_v][outro_a]" +
 
       "concat=" +
-      "n=3:" +
+      "n=5:" +
       "v=1:" +
       "a=1" +
 
@@ -2085,26 +2102,16 @@ function main() {
   const ffmpegArguments = [
     "-y",
 
-    /*
-     * Start prezentator dintr-un punct variabil.
-     */
-    "-ss",
-    presenterStartOffset.toFixed(
-      2
-    ),
-
-    /*
-     * Repetă prezentatorul dacă video-ul lui
-     * este mai scurt decât vocea.
-     */
-    "-stream_loop",
-    "-1",
-
     "-i",
     PRESENTER_FILE,
 
     "-i",
     AUDIO_FILE,
+
+    "-loop",
+    "1",
+    "-i",
+    TICKET_BACKGROUND_FILE,
 
     "-filter_complex",
     filter,

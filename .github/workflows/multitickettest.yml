@@ -3,7 +3,7 @@ name: Scrape + WordPress + Test Multi-Ticket Shorts Engine
 on:
   workflow_dispatch:
   schedule:
-    - cron: "35 11 * * *" # 14:35 RO during daylight saving time
+    - cron: "35 7 * * *" # 10:35 RO during daylight-saving time
 
 jobs:
   scrape:
@@ -23,6 +23,7 @@ jobs:
       PV_COTA2_TOL: "0.00"
 
       PV_ZI_MIN: "3.50"
+      PV_ZI_FALLBACK_MIN: "3.00"
       PV_ZI_MAX: "7.00"
       PV_TARGET_ZI: "5.00"
       PV_ZI_TOL: "0.00"
@@ -293,9 +294,10 @@ jobs:
           set -euo pipefail
 
           REQUIRED_FILES=(
-            "assets/presenters/presenter-01.mp4"
+            "assets/intros/en/intro_01.mp4"
             "shorts/build_all_shorts.js"
             "shorts/render_short.js"
+            "scripts/generate_voice.js"
             "publish/generate_manifest.js"
           )
 
@@ -315,7 +317,7 @@ jobs:
             -show_entries stream=codec_name,width,height,r_frame_rate \
             -show_entries format=duration,size \
             -of default=noprint_wrappers=1 \
-            assets/presenters/presenter-01.mp4
+            assets/intros/en/intro_01.mp4
 
       # ------------------
       # 13) RUN MULTI-TICKET SHORTS ENGINE
@@ -325,7 +327,7 @@ jobs:
         timeout-minutes: 30
         env:
           SHORTS_OUTPUT_ROOT: output
-          SHORTS_PRESENTER_FILE: assets/presenters/presenter-01.mp4
+          SHORTS_PRESENTER_FILE: assets/intros/en/intro_01.mp4
 
           SHORTS_TTS_VOICE: en-US-GuyNeural
           SHORTS_TTS_RATE: "+5%"

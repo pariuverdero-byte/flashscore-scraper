@@ -1,12 +1,16 @@
 import fs from "fs/promises";
+import * as cheerio from "cheerio";
 import { matchEventToFlashscore } from "./engine/matcher_core.js";
 import { fetchPrematchData } from "./live-betting/lib/prematch.js";
+import { englishMarketLabel } from "./scripts/market-translation.js";
 
 const POOL_FILE = "master_pool.json";
 const MATCHES_FILE = "matches.json";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
-const AI_PREMATCH_MAX = Math.max(0, Number(process.env.AI_PREMATCH_MAX || 12));
+// Enrich the candidate pool before the model chooses a ticket. The old limit
+// could leave the ultimately selected bundle outside the enriched set.
+const AI_PREMATCH_MAX = Math.max(0, Number(process.env.AI_PREMATCH_MAX || 48));
 const AI_PREMATCH_CONCURRENCY = Math.max(1, Number(process.env.AI_PREMATCH_CONCURRENCY || 4));
 
 const COTA2 = {
@@ -16,6 +20,7 @@ const COTA2 = {
 };
 const ZI = {
   min: Number(process.env.PV_ZI_MIN || 3.50),
+  fallbackMin: Number(process.env.PV_ZI_FALLBACK_MIN || 3.00),
   max: Number(process.env.PV_ZI_MAX || 7.00),
   target: Number(process.env.PV_TARGET_ZI || 5.00),
   minSize: 2,
@@ -190,12 +195,18 @@ function buildBundles(pool) {
   const c2Strict = enumerate(pool, 2, 2, COTA2.min, COTA2.max, COTA2.target, 25);
   const c2Singles = enumerate(pool, 1, 1, COTA2.min, COTA2.max, COTA2.target, 25);
   const c2Fallback = mergeTickets(c2Strict, c2Singles, 40);
-  const day = enumerate(pool, ZI.minSize, ZI.maxSize, ZI.min, ZI.max, ZI.target, 40);
+  const dayStrict = enumerate(pool, ZI.minSize, ZI.maxSize, ZI.min, ZI.max, ZI.target, 40);
+  const day = dayStrict.length
+    ? dayStrict
+    : enumerate(pool, ZI.minSize, ZI.maxSize, Math.min(ZI.min, ZI.fallbackMin), ZI.max, ZI.target, 40);
 
   console.log(`[GENERATOR] verifier-compatible pool: ${pool.length}`);
   console.log(`[GENERATOR] Cota2 strict 2-pick candidates: ${c2Strict.length}`);
   console.log(`[GENERATOR] Cota2 single-pick fallback candidates: ${c2Singles.length}`);
   console.log(`[GENERATOR] Biletul Zilei candidates: ${day.length}`);
+  if (!dayStrict.length && day.length) {
+    console.log(`[GENERATOR] Biletul Zilei relaxed minimum: ${Math.min(ZI.min, ZI.fallbackMin).toFixed(2)}`);
+  }
 
   // Level 1: preserve the original preference — Cota 2 has two selections and
   // the two tickets use completely different matches.
@@ -516,20 +527,14 @@ function cleanReason(reason, evidence) {
   return banned.some(rule => rule.test(text)) ? "" : text;
 }
 
-async function collectPrematchContext(bundles) {
-  if (!OPENAI_API_KEY || AI_PREMATCH_MAX <= 0) return new Map();
+async function collectPrematchContext(selections) {
+  if (AI_PREMATCH_MAX <= 0) return new Map();
 
   const unique = new Map();
 
-  for (const b of bundles.slice(0, 30)) {
-    for (const t of [b.cota2, b.day].filter(Boolean)) {
-      for (const s of t.selections) {
-        if (unique.size >= AI_PREMATCH_MAX) break;
-        if (!unique.has(s.match_id)) unique.set(s.match_id, s);
-      }
-      if (unique.size >= AI_PREMATCH_MAX) break;
-    }
+  for (const s of selections) {
     if (unique.size >= AI_PREMATCH_MAX) break;
+    if (!unique.has(s.match_id)) unique.set(s.match_id, s);
   }
 
   const jobs = [...unique.values()];
@@ -565,16 +570,334 @@ async function collectPrematchContext(bundles) {
   return result;
 }
 
-function fallbackEnglish(raw) {
-  let x = safe(raw);
-  const reps = [
-    [/șans[ăa] dubl[ăa]/gi, "Double chance"], [/ambele echipe marcheaz[ăa]/gi, "Both teams to score"],
-    [/victorie gazde/gi, "Home win"], [/victorie oaspe[tț]i/gi, "Away win"], [/\begal\b/gi, "Draw"],
-    [/peste/gi, "Over"], [/sub/gi, "Under"], [/goluri/gi, "goals"], [/gol/gi, "goal"],
-    [/cornere/gi, "corners"], [/cartona[sș]e/gi, "cards"], [/prima repriz[ăa]/gi, "1st half"], [/\bsi\b|\bși\b/gi, "&"]
+function evidenceSupportsSelection(selection, evidence) {
+  if (evidence?.usable !== true) return false;
+  if (evidence.type === "verified_web_source") return true;
+
+  if (evidence.type === "double_chance_goals") {
+    return evidenceSupportsSelection(selection, evidence.result) &&
+      evidenceSupportsSelection(selection, evidence.goals);
+  }
+
+  if (evidence.type === "goals") {
+    const averages = [Number(evidence.home_avg_total_goals), Number(evidence.away_avg_total_goals)];
+    if (!averages.every(Number.isFinite)) return false;
+    const rates = Number.isFinite(evidence.home_hits) && Number.isFinite(evidence.away_hits)
+      ? [evidence.home_hits / evidence.home_matches, evidence.away_hits / evidence.away_matches]
+      : null;
+    if (evidence.direction === "over") {
+      return averages.every(value => value > evidence.line) && (!rates || rates.every(value => value >= 0.6));
+    }
+    if (evidence.direction === "under") {
+      return averages.every(value => value < evidence.line + 0.25) && (!rates || rates.every(value => value >= 0.6));
+    }
+    return false;
+  }
+
+  if (evidence.type === "btts") {
+    return evidence.home_btts_rate >= 60 && evidence.away_btts_rate >= 60;
+  }
+
+  if (evidence.type === "result") {
+    const market = norm(selection.market_raw);
+    const home = evidence.home_form;
+    const away = evidence.away_form;
+    const standings = evidence.standings;
+    const homeBetter = standings && standings.home_position < standings.away_position;
+    const awayBetter = standings && standings.away_position < standings.home_position;
+
+    if (/(^| )x2( |$)/.test(market)) {
+      if (away && Number(away.losses) >= 3) return false;
+      return Boolean((away && home && away.losses <= 2 && home.wins <= 2) || awayBetter);
+    }
+    if (/(^| )1x( |$)/.test(market)) {
+      if (home && Number(home.losses) >= 3) return false;
+      return Boolean((home && away && home.losses <= 2 && away.wins <= 2) || homeBetter);
+    }
+    if (/(victorie gazde|home win)/.test(market)) {
+      return Boolean(home && away && home.wins >= 3 && away.losses >= 3);
+    }
+    if (/(victorie oaspeti|away win)/.test(market)) {
+      return Boolean(home && away && away.wins >= 3 && home.losses >= 3);
+    }
+    if (/(^| )(12)( |$)/.test(market)) {
+      return Boolean(home && away && home.draws <= 1 && away.draws <= 1);
+    }
+    return true;
+  }
+
+  return true;
+}
+
+function teamTokens(value) {
+  return norm(value).split(" ").filter(token => token.length >= 3 && !["club", "football", "bucuresti"].includes(token));
+}
+
+function mentionsTeam(text, team) {
+  const haystack = ` ${norm(text)} `;
+  const tokens = teamTokens(team);
+  if (!tokens.length) return false;
+  const hits = tokens.filter(token => haystack.includes(` ${token} `)).length;
+  // Articles often spell only one part of a club name (Rapid, Frankfurt) or use
+  // a different suffix (United/Utd). Requiring the opponent and exact date on
+  // the same page keeps the event identity strict while tolerating that alias.
+  return hits >= 1;
+}
+
+function dateVariants(date) {
+  const match = safe(date).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return [];
+  const [, year, month, day] = match;
+  const monthIndex = Number(month) - 1;
+  const dayNumber = String(Number(day));
+  const enMonths = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+  const roMonths = ["ianuarie", "februarie", "martie", "aprilie", "mai", "iunie", "iulie", "august", "septembrie", "octombrie", "noiembrie", "decembrie"];
+  return [
+    date,
+    `${day}.${month}.${year}`,
+    `${day}-${month}-${year}`,
+    `${day}/${month}/${year}`,
+    `${dayNumber} ${enMonths[monthIndex]} ${year}`,
+    `${enMonths[monthIndex]} ${dayNumber}, ${year}`,
+    `${dayNumber} ${roMonths[monthIndex]} ${year}`
   ];
-  for (const [a, b] of reps) x = x.replace(a, b);
-  return x.replace(/\s+/g, " ").trim();
+}
+
+async function fetchSourcePageEvidence(selection, eventDate, candidateUrl = "") {
+  const sourceUrl = safe(candidateUrl || selection.source_url || selection.meta?.source_url);
+  if (!/^https?:\/\//i.test(sourceUrl)) return null;
+
+  const confidence = Number(selection.meta?.flashscore_match_confidence || 0);
+  if (confidence < 0.88) return null;
+
+  const { home, away } = splitCanonicalTeams(selection.teams);
+  if (!home || !away) return null;
+
+  try {
+    const response = await fetch(sourceUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; PariuVerdeEvidenceBot/1.0)",
+        "Accept-Language": "ro,en;q=0.8"
+      },
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!response.ok) return null;
+
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    $("script,style,noscript,svg,nav,footer").remove();
+    const title = cleanReasonText($("title").first().text()).slice(0, 180);
+    const blocks = $("article p, main p, table tr, li, h1, h2, h3")
+      .map((_, element) => cleanReasonText($(element).text()))
+      .get()
+      .filter(text => text.length >= 25 && text.length <= 900);
+    const fullText = cleanReasonText($("body").text());
+
+    const exactEvent = mentionsTeam(fullText, home) && mentionsTeam(fullText, away);
+    const normalizedPage = norm(fullText);
+    const exactDate = dateVariants(eventDate).some(value =>
+      fullText.includes(value) || sourceUrl.includes(value) || normalizedPage.includes(norm(value))
+    );
+    if (!exactEvent || !exactDate) return null;
+
+    let excerpts = blocks.filter(text =>
+      (mentionsTeam(text, home) || mentionsTeam(text, away)) && /\d/.test(text)
+    ).slice(0, 5);
+
+    if (!excerpts.length) {
+      const normalizedHome = teamTokens(home)[0];
+      const index = normalizedHome ? norm(fullText).indexOf(normalizedHome) : -1;
+      if (index >= 0) excerpts = [fullText.slice(Math.max(0, index - 250), index + 900)];
+    }
+
+    excerpts = excerpts.map(value => value.slice(0, 700)).filter(value => /\d/.test(value));
+    if (!excerpts.length) return null;
+
+    return {
+      usable: true,
+      type: "verified_web_source",
+      market_class: marketClass(selection),
+      event_identity: {
+        home,
+        away,
+        date: eventDate,
+        flashscore_match_confidence: confidence
+      },
+      sources: [{
+        url: sourceUrl,
+        title,
+        retrieved_at: new Date().toISOString(),
+        excerpts
+      }]
+    };
+  } catch (error) {
+    console.warn(`[WEB-EVIDENCE] ${selection.teams}: ${error?.message || error}`);
+    return null;
+  }
+}
+
+function decodeSearchUrl(value) {
+  try {
+    const url = new URL(value, "https://html.duckduckgo.com");
+    if (/duckduckgo\.com$/i.test(url.hostname) && url.searchParams.get("uddg")) {
+      return decodeURIComponent(url.searchParams.get("uddg"));
+    }
+    if (/bing\.com$/i.test(url.hostname) && url.searchParams.get("url")) {
+      return url.searchParams.get("url");
+    }
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+async function discoverExactEventPages(selection, eventDate) {
+  const confidence = Number(selection.meta?.flashscore_match_confidence || 0);
+  if (confidence < 0.88) return [];
+  const { home, away } = splitCanonicalTeams(selection.teams);
+  if (!home || !away) return [];
+
+  const humanDate = dateVariants(eventDate).slice(4);
+  const queries = [
+    `"${home}" "${away}" ${eventDate} prediction`,
+    `"${home}" vs "${away}" ${eventDate} preview statistics`,
+    `"${home}" "${away}" ${eventDate} betting tips`,
+    `"${home}" v "${away}" "${humanDate[0] || eventDate}"`,
+    `"${home}" "${away}" "${humanDate[2] || eventDate}" analiză ponturi`
+  ];
+  const found = [];
+  const addResult = (urlValue, summaryValue) => {
+    const url = decodeSearchUrl(urlValue);
+    const summary = cleanReasonText(summaryValue);
+    if (!url || !mentionsTeam(summary, home) || !mentionsTeam(summary, away)) return;
+    if (!found.includes(url)) found.push(url);
+  };
+  for (const query of queries) {
+    try {
+      const searchUrl = `https://www.bing.com/search?format=rss&q=${encodeURIComponent(query)}`;
+      const response = await fetch(searchUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; PariuVerdeEvidenceBot/1.0)" },
+        signal: AbortSignal.timeout(12000)
+      });
+      if (!response.ok) continue;
+      const $ = cheerio.load(await response.text(), { xmlMode: true });
+      $("item").each((_, item) => {
+        addResult(
+          $(item).find("link").first().text(),
+          `${$(item).find("title").text()} ${$(item).find("description").text()}`
+        );
+      });
+    } catch (error) {
+      console.warn(`[WEB-SEARCH] ${selection.teams}: ${error?.message || error}`);
+    }
+
+    try {
+      const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+      const response = await fetch(searchUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; PariuVerdeEvidenceBot/1.0)" },
+        signal: AbortSignal.timeout(12000)
+      });
+      if (response.ok) {
+        const $ = cheerio.load(await response.text());
+        $(".result").each((_, item) => addResult(
+          $(item).find(".result__a").attr("href"),
+          `${$(item).find(".result__a").text()} ${$(item).find(".result__snippet").text()}`
+        ));
+      }
+    } catch (error) {
+      console.warn(`[WEB-SEARCH] DuckDuckGo ${selection.teams}: ${error?.message || error}`);
+    }
+    if (found.length >= 10) break;
+  }
+  return found.slice(0, 10);
+}
+
+async function fetchDiscoveredWebEvidence(selection, eventDate) {
+  const urls = await discoverExactEventPages(selection, eventDate);
+  for (const url of urls) {
+    const evidence = await fetchSourcePageEvidence(selection, eventDate, url);
+    if (evidence) {
+      console.log(`[WEB-EVIDENCE] exact event verified from discovered page: ${selection.teams} | ${url}`);
+      return evidence;
+    }
+  }
+  return null;
+}
+
+function cleanReasonText(value) {
+  return String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+}
+
+async function addVerifiedWebFallback(pool, eventDate) {
+  const missing = pool.filter(selection =>
+    selection.__analysisEvidence?.usable !== true &&
+    selection.__analysisEvidence?.blocked_by_contradiction !== true
+  );
+  const concurrency = 4;
+  let added = 0;
+  for (let start = 0; start < missing.length; start += concurrency) {
+    const batch = missing.slice(start, start + concurrency);
+    const evidence = await Promise.all(batch.map(async selection => {
+      const original = await fetchSourcePageEvidence(selection, eventDate);
+      return original || fetchDiscoveredWebEvidence(selection, eventDate);
+    }));
+    evidence.forEach((item, index) => {
+      if (!item) return;
+      batch[index].__analysisEvidence = item;
+      added += 1;
+    });
+  }
+  console.log(`[WEB-EVIDENCE] verified exact-event pages=${added}/${missing.length} (original source + web discovery)`);
+}
+
+function localEvidenceReason(selection, language = "ro") {
+  const evidence = selection?.__analysisEvidence;
+  if (evidence?.usable !== true) return "";
+
+  const ro = language === "ro";
+  const { home, away } = splitCanonicalTeams(selection.teams);
+  const formText = (form, team) => ro
+    ? `${team}: ${form.wins} victorii, ${form.draws} egaluri și ${form.losses} înfrângeri în ultimele ${form.matches} meciuri`
+    : `${team}: ${form.wins} wins, ${form.draws} draws and ${form.losses} losses in the last ${form.matches} matches`;
+
+  if (evidence.type === "goals") {
+    const direction = evidence.direction === "over" ? (ro ? "peste" : "over") : (ro ? "sub" : "under");
+    const hitText = Number.isFinite(evidence.home_hits) && Number.isFinite(evidence.away_hits)
+      ? (ro
+        ? ` Pragul a fost bifat în ${evidence.home_hits}/${evidence.home_matches}, respectiv ${evidence.away_hits}/${evidence.away_matches}.`
+        : ` The line landed in ${evidence.home_hits}/${evidence.home_matches} and ${evidence.away_hits}/${evidence.away_matches}, respectively.`)
+      : "";
+    return ro
+      ? `Meciurile recente ale lui ${home} au avut media de ${evidence.home_avg_total_goals} goluri, iar cele ale lui ${away} ${evidence.away_avg_total_goals}; cifrele susțin selecția ${direction} ${evidence.line}.${hitText}`
+      : `${home}'s recent matches averaged ${evidence.home_avg_total_goals} total goals and ${away}'s ${evidence.away_avg_total_goals}; the numbers support ${direction} ${evidence.line}.${hitText}`;
+  }
+
+  if (evidence.type === "btts") {
+    return ro
+      ? `Ambele au avut goluri de fiecare parte în ${evidence.home_btts}/${evidence.home_matches} și ${evidence.away_btts}/${evidence.away_matches} dintre ultimele meciuri.`
+      : `Both teams scored in ${evidence.home_btts}/${evidence.home_matches} and ${evidence.away_btts}/${evidence.away_matches} of their latest matches.`;
+  }
+
+  if (evidence.type === "result") {
+    const parts = [];
+    if (evidence.home_form && evidence.away_form) {
+      parts.push(formText(evidence.home_form, home), formText(evidence.away_form, away));
+    }
+    if (evidence.standings) {
+      parts.push(ro
+        ? `în clasament sunt pe locurile ${evidence.standings.home_position} și ${evidence.standings.away_position}`
+        : `their table positions are ${evidence.standings.home_position} and ${evidence.standings.away_position}`);
+    }
+    return parts.length ? `${parts.join("; ")}.` : "";
+  }
+
+  if (evidence.type === "double_chance_goals") {
+    const resultReason = localEvidenceReason({ ...selection, __analysisEvidence: evidence.result }, language);
+    const goalsReason = localEvidenceReason({ ...selection, __analysisEvidence: evidence.goals }, language);
+    return [resultReason, goalsReason].filter(Boolean).join(" ");
+  }
+
+  return "";
 }
 
 function responseText(body) {
@@ -585,7 +908,7 @@ function responseText(body) {
 
 async function askAI(bundles, prematchContext = new Map()) {
   if (!OPENAI_API_KEY || !bundles.length) return null;
-  const eligibleBundles = bundles.filter(b => b.cota2 && b.day);
+  const eligibleBundles = bundles.filter(b => b.cota2 || b.day);
   if (!eligibleBundles.length) return null;
 
   const selectionMap = new Map();
@@ -604,8 +927,10 @@ async function askAI(bundles, prematchContext = new Map()) {
   }));
   const compactBundles = eligibleBundles.map(b => ({
     bundle_id: b.id,
-    cota2_total: Number(b.cota2.product.toFixed(3)), cota2_selection_ids: b.cota2.selections.map(s => s.__sid),
-    day_total: Number(b.day.product.toFixed(3)), day_selection_ids: b.day.selections.map(s => s.__sid)
+    cota2_total: b.cota2 ? Number(b.cota2.product.toFixed(3)) : null,
+    cota2_selection_ids: b.cota2?.selections.map(s => s.__sid) || [],
+    day_total: b.day ? Number(b.day.product.toFixed(3)) : null,
+    day_selection_ids: b.day?.selections.map(s => s.__sid) || []
   }));
   const schema = {
     type: "object", additionalProperties: false,
@@ -640,12 +965,18 @@ MARKET-SPECIFIC RULES:
 - H2H is secondary and must never replace market-specific evidence.
 - Corners: comment only when historical corner statistics are explicitly supplied.
 - Cards: comment only when historical card statistics are explicitly supplied.
+- Verified web source fallback: event_identity has already matched both teams and the event date. Use only numerical claims explicitly present in sources[].excerpts and relate them to market_class. Never infer a statistic that is absent from the excerpts.
 
 QUALITY:
-- Every non-empty reason must contain at least one concrete number.
-- Prefer statistics for BOTH teams.
-- Explain how the numbers relate to the EXACT selected market.
-- Maximum 40 words and two sentences.
+- Write for an informed adult audience in the tone of a concise professional match analyst.
+- Every non-empty reason must contain at least two relevant concrete numbers whenever the evidence permits it.
+- Compare BOTH teams; do not merely list one isolated statistic.
+- First state the strongest statistical pattern, then explain why it supports the EXACT selected market.
+- Distinguish supporting evidence from certainty: use "susține", "înclină" or "oferă argument", never claim that a bet is guaranteed.
+- Prefer hit rates and sample sizes over vague adjectives. A percentage without its sample (for example 4/5) is incomplete.
+- Avoid repeating the team names, market or odds when they add no analytical value.
+- Use one or two information-dense sentences, normally 25-45 words so the complete ticket still fits a Short.
+- Do not use exclamation marks, hype, sales language or beginner explanations of what the market means.
 
 NEVER WRITE phrases equivalent to:
 - "no data available"
@@ -655,12 +986,17 @@ NEVER WRITE phrases equivalent to:
 - "the threshold is moderate"
 - "balanced selection"
 - "conservative pick"
+- "we expect an interesting match"
+- "both teams will give everything"
+- "anything can happen"
+- "looks like a good choice"
+- "this should be a safe bet"
 
 GOOD OVER 1.5 EXAMPLE:
-"Annagh's last five matches averaged 2.8 total goals and Rathfriland's 2.4; Over 1.5 landed in 4/5 for both teams."
+"Annagh's last five matches averaged 2.8 total goals and Rathfriland's 2.4, with Over 1.5 landing in 4/5 for each side. Two independent recent samples therefore support the selected line, without treating it as a certainty."
 
 GOOD DOUBLE CHANCE EXAMPLE:
-"Fenerbahce are unbeaten in 4 of their last 5 matches, while Sturm Graz lost 3 of 5; that supports the X2 protection."
+"Fenerbahce avoided defeat in 4 of their last 5 matches, while Sturm Graz lost 3 of 5. The contrast in recent W-D-L records gives a concrete basis for the double-chance protection."
 
 LANGUAGE:
 - label_ro/reason_ro: natural Romanian betting language.
@@ -698,10 +1034,11 @@ function decorate(ticket, annotations) {
       delete out.__analysisEvidence;
       out.ai = {
         label_ro: safe(a.label_ro) || safe(out.market_raw),
-        label_en: safe(a.label_en) || fallbackEnglish(out.market_raw),
-        reason_ro: cleanReason(a.reason_ro, s.__analysisEvidence),
-        reason_en: cleanReason(a.reason_en, s.__analysisEvidence),
+        label_en: englishMarketLabel(a.label_en, out.market_raw),
+        reason_ro: cleanReason(a.reason_ro, s.__analysisEvidence) || localEvidenceReason(s, "ro"),
+        reason_en: cleanReason(a.reason_en, s.__analysisEvidence) || localEvidenceReason(s, "en"),
       };
+      out.analysis_evidence = s.__analysisEvidence;
       return out;
     })
   };
@@ -723,7 +1060,7 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
     pool.forEach((s, i) => { s.__sid = `S${String(i + 1).padStart(3, "0")}`; });
 
     console.log(`[GENERATOR] canonical selections: ${canonical.length}`);
-    const bundles = buildBundles(pool);
+    let bundles = buildBundles(pool);
     if (!bundles.length) {
       await writeNoPicks(date, "No compatible Cota 2 or Biletul Zilei candidate after strict Flashscore matching", pool.length, {
         source_mode: poolData?.source_mode || "unknown",
@@ -735,22 +1072,56 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
     }
 
     let chosen = bundles[0], annotations = [], aiUsed = false, aiError = null;
+    let partialEvidenceUsed = false;
     let prematchContext = new Map();
     try {
-      prematchContext = await collectPrematchContext(bundles);
+      prematchContext = await collectPrematchContext(pool);
 
-      for (const bundle of bundles) {
-        for (const ticket of [bundle.cota2, bundle.day].filter(Boolean)) {
-          for (const selection of ticket.selections) {
-            selection.__analysisEvidence = buildAnalysisEvidence(
-              selection,
-              prematchContext.get(selection.match_id) || null
-            );
-          }
+      for (const selection of pool) {
+        selection.__analysisEvidence = buildAnalysisEvidence(
+          selection,
+          prematchContext.get(selection.match_id) || null
+        );
+        if (
+          selection.__analysisEvidence?.usable === true &&
+          !evidenceSupportsSelection(selection, selection.__analysisEvidence)
+        ) {
+          selection.__analysisEvidence = {
+            ...selection.__analysisEvidence,
+            usable: false,
+            blocked_by_contradiction: true,
+            rejection: "Recent numerical evidence does not support the selected market"
+          };
+          console.log(`[AI-STATS] rejected contradictory selection: ${selection.teams} | ${selection.market_raw}`);
         }
       }
 
-      const ai = await askAI(bundles, prematchContext);
+      await addVerifiedWebFallback(pool, date);
+
+      // Rebuild the ticket candidates from selections that have market-specific
+      // Flashscore evidence. OpenAI now curates and writes from this dossier; it
+      // is no longer expected to know current football facts by itself.
+      const evidencePool = pool.filter(selection => selection.__analysisEvidence?.usable === true);
+      const evidenceBundles = buildBundles(evidencePool);
+      console.log(`[AI-STATS] evidence-ready selections=${evidencePool.length}/${pool.length}; bundles=${evidenceBundles.length}`);
+      const hasDay = evidenceBundles.some(bundle => bundle.day);
+      const safePool = pool.filter(selection => selection.__analysisEvidence?.blocked_by_contradiction !== true);
+      const safeBundles = hasDay ? [] : buildBundles(safePool);
+      const selectedBundles = hasDay || !safeBundles.some(bundle => bundle.day)
+        ? evidenceBundles
+        : safeBundles;
+      if (selectedBundles === safeBundles) {
+        partialEvidenceUsed = true;
+        console.log(`[AI-STATS] day-ticket fallback: ${safePool.length} selections without contradictory evidence`);
+      }
+      if (selectedBundles.length) {
+        bundles = selectedBundles;
+        chosen = bundles[0];
+      }
+
+      const ai = selectedBundles.length && selectedBundles === evidenceBundles
+        ? await askAI(bundles, prematchContext)
+        : null;
       if (ai) {
         const found = bundles.find(b => b.id === ai.bundle_id);
         if (!found) throw new Error("AI selected unknown bundle");
@@ -777,6 +1148,12 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
       ai_used: aiUsed,
       ai_model: aiUsed ? OPENAI_MODEL : null,
       ai_error: aiError,
+      analysis_source: aiUsed
+        ? "openai_from_flashscore_evidence"
+        : partialEvidenceUsed ? "local_with_partial_evidence" : "local_from_flashscore_evidence",
+      partial_evidence_used: partialEvidenceUsed,
+      ticket_of_day_relaxed: Boolean(chosen.day && chosen.day.product < ZI.min),
+      statistics_collected_at: new Date().toISOString(),
       bilet_cota2: decorate(chosen.cota2, annotations),
       biletul_zilei: decorate(chosen.day, annotations)
     };
