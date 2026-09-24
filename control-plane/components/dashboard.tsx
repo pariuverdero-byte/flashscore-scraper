@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { bettingConfigSchema, defaultConfig, type BettingConfig } from "@/lib/config";
 import type { WorkerStatus } from "@/lib/store";
 
@@ -25,6 +25,7 @@ function errorMessage(body: unknown, status: number) {
 
 export default function Dashboard() {
   const [token, setToken] = useState(() => typeof window === "undefined" ? "" : sessionStorage.getItem("control-token") ?? "");
+  const [activeToken, setActiveToken] = useState(() => typeof window === "undefined" ? "" : sessionStorage.getItem("control-token") ?? "");
   const [config, setConfig] = useState<BettingConfig>(defaultConfig);
   const [status, setStatus] = useState<WorkerStatus>(emptyStatus);
   const [message, setMessage] = useState("Enter the control token to load settings.");
@@ -35,22 +36,52 @@ export default function Dashboard() {
   const [reviews, setReviews] = useState<Array<Record<string, unknown>>>([]);
   const [proposals, setProposals] = useState<Array<Record<string, unknown>>>([]);
   const [pnl, setPnl] = useState(emptyPnl);
+  const [workerOnline, setWorkerOnline] = useState(false);
   const [savingSection, setSavingSection] = useState<SaveSection | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<SaveFeedback>(null);
 
-  async function request(path: string, init?: RequestInit) {
-    const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...init?.headers } });
+  const request = useCallback(async (path: string, init?: RequestInit, authToken = activeToken) => {
+    const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}`, ...init?.headers } });
     const body = await response.json().catch(() => null);
     if (!response.ok) throw new Error(errorMessage(body, response.status));
     return body;
-  }
+  }, [activeToken]);
+
+  const refreshDashboard = useCallback(async (authToken: string, announce: boolean) => {
+    try {
+      const [nextConfig, nextStatus, nextReviews, nextProposals, nextPnl] = await Promise.all([
+        request("/api/config", undefined, authToken),
+        request("/api/status", undefined, authToken),
+        request("/api/reviews", undefined, authToken).catch(() => []),
+        request("/api/proposals", undefined, authToken).catch(() => []),
+        request("/api/pnl", undefined, authToken).catch(() => emptyPnl),
+      ]);
+      setConfig(nextConfig);
+      setStatus(nextStatus);
+      setWorkerOnline(Boolean(nextStatus.lastHeartbeat) && Date.now() - new Date(nextStatus.lastHeartbeat).getTime() < 60_000);
+      setReviews(nextReviews);
+      setProposals(nextProposals);
+      setPnl(nextPnl);
+      if (announce) setMessage("Controls loaded. Status refreshes automatically.");
+    } catch (error) {
+      if (announce) setMessage(error instanceof Error ? error.message : "Unable to load");
+    }
+  }, [request]);
+
+  useEffect(() => {
+    if (!activeToken) return;
+    const initialRefresh = window.setTimeout(() => void refreshDashboard(activeToken, true), 0);
+    const timer = window.setInterval(() => void refreshDashboard(activeToken, false), 15_000);
+    return () => {
+      window.clearTimeout(initialRefresh);
+      window.clearInterval(timer);
+    };
+  }, [activeToken, refreshDashboard]);
 
   async function load() {
-    try {
-      sessionStorage.setItem("control-token", token);
-      const [nextConfig, nextStatus, nextReviews, nextProposals, nextPnl] = await Promise.all([request("/api/config"), request("/api/status"), request("/api/reviews").catch(() => []), request("/api/proposals").catch(() => []), request("/api/pnl").catch(() => emptyPnl)]);
-      setConfig(nextConfig); setStatus(nextStatus); setReviews(nextReviews); setProposals(nextProposals); setPnl(nextPnl); setMessage("Controls loaded.");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load"); }
+    sessionStorage.setItem("control-token", token);
+    setActiveToken(token);
+    await refreshDashboard(token, true);
   }
 
   async function save(section: SaveSection) {
@@ -105,7 +136,7 @@ export default function Dashboard() {
       <article><span>P&amp;L this year</span><strong className={pnl.year < 0 ? "negative" : ""}>{pnl.year.toFixed(2)} RON</strong></article>
       <article><span>P&amp;L forever</span><strong className={pnl.forever < 0 ? "negative" : ""}>{pnl.forever.toFixed(2)} RON</strong></article>
       <article><span>Bets today</span><strong>{status.betsToday}</strong></article>
-      <article><span>Worker</span><strong>{status.lastHeartbeat ? "Online" : "Offline"}</strong></article>
+      <article><span>Worker</span><strong className={workerOnline ? "online" : "negative"}>{workerOnline ? "Online" : "Offline"}</strong></article>
     </section>
     <section className="panel"><div className="panelTitle"><div><h2>Algorithm controls</h2><p>Execution-window changes apply without rewriting the signal generator.</p></div><label className="switch"><input type="checkbox" checked={config.algorithmAutopilot} onChange={(event) => setConfig({ ...config, algorithmAutopilot: event.target.checked })} /><span>Autopilot {config.algorithmAutopilot ? "on" : "off"}</span></label></div>
       <div className="grid">{numberField("liveMinMinute", "Earliest live minute", 1)}{numberField("liveMaxMinute", "Latest live minute", 1)}{numberField("approvalWindowDays", "Auto-approval delay (1–5 days)", 1)}</div><div className="saveRow"><button className="primary" onClick={() => save("algorithm")} disabled={savingSection !== null}>{savingSection === "algorithm" ? "Saving…" : "Save algorithm controls"}</button>{saveStatus("algorithm")}</div>
