@@ -8,6 +8,7 @@ const emptyStatus: WorkerStatus = { lastHeartbeat: null, mode: "dry-run", pnlTod
 const emptyPnl = { today: 0, month: 0, year: 0, forever: 0 };
 type SaveSection = "algorithm" | "risk";
 type SaveFeedback = { section: SaveSection; kind: "pending" | "success" | "error"; text: string } | null;
+type TicketStatus = { date: string; receivedAt: string; cota2: number; ticketOfDay: number } | null;
 
 function errorMessage(body: unknown, status: number) {
   if (!body || typeof body !== "object") return `Request failed (${status})`;
@@ -30,6 +31,7 @@ export default function Dashboard() {
   const [status, setStatus] = useState<WorkerStatus>(emptyStatus);
   const [message, setMessage] = useState("Enter the control token to load settings.");
   const [transactions, setTransactions] = useState<Array<Record<string, unknown>>>([]);
+  const [today] = useState(() => new Date().toISOString().slice(0, 10));
   const [from, setFrom] = useState(() => new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
   const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [kind, setKind] = useState("all");
@@ -37,6 +39,8 @@ export default function Dashboard() {
   const [proposals, setProposals] = useState<Array<Record<string, unknown>>>([]);
   const [pnl, setPnl] = useState(emptyPnl);
   const [workerOnline, setWorkerOnline] = useState(false);
+  const [heartbeatLabel, setHeartbeatLabel] = useState("No heartbeat received");
+  const [ticketStatus, setTicketStatus] = useState<TicketStatus>(null);
   const [savingSection, setSavingSection] = useState<SaveSection | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<SaveFeedback>(null);
 
@@ -49,16 +53,29 @@ export default function Dashboard() {
 
   const refreshDashboard = useCallback(async (authToken: string, announce: boolean) => {
     try {
-      const [nextConfig, nextStatus, nextReviews, nextProposals, nextPnl] = await Promise.all([
+      const [nextConfig, nextStatus, nextReviews, nextProposals, nextPnl, nextInputs] = await Promise.all([
         request("/api/config", undefined, authToken),
         request("/api/status", undefined, authToken),
         request("/api/reviews", undefined, authToken).catch(() => []),
         request("/api/proposals", undefined, authToken).catch(() => []),
         request("/api/pnl", undefined, authToken).catch(() => emptyPnl),
+        request("/api/inputs", undefined, authToken).catch(() => null),
       ]);
       setConfig(nextConfig);
       setStatus(nextStatus);
       setWorkerOnline(Boolean(nextStatus.lastHeartbeat) && Date.now() - new Date(nextStatus.lastHeartbeat).getTime() < 60_000);
+      setHeartbeatLabel(nextStatus.lastHeartbeat
+        ? new Date(nextStatus.lastHeartbeat).toLocaleString("ro-RO", { dateStyle: "short", timeStyle: "medium" })
+        : "No heartbeat received");
+      const tickets = nextInputs?.tickets?.payload?.tickets;
+      setTicketStatus(tickets ? {
+        date: String(tickets.date ?? ""),
+        receivedAt: nextInputs.tickets.receivedAt
+          ? new Date(nextInputs.tickets.receivedAt).toLocaleString("ro-RO", { dateStyle: "short", timeStyle: "short" })
+          : "—",
+        cota2: tickets.bilet_cota2?.selections?.length ?? 0,
+        ticketOfDay: tickets.biletul_zilei?.selections?.length ?? 0,
+      } : null);
       setReviews(nextReviews);
       setProposals(nextProposals);
       setPnl(nextPnl);
@@ -137,6 +154,16 @@ export default function Dashboard() {
       <article><span>P&amp;L forever</span><strong className={pnl.forever < 0 ? "negative" : ""}>{pnl.forever.toFixed(2)} RON</strong></article>
       <article><span>Bets today</span><strong>{status.betsToday}</strong></article>
       <article><span>Worker</span><strong className={workerOnline ? "online" : "negative"}>{workerOnline ? "Online" : "Offline"}</strong></article>
+    </section>
+    <section className="panel systemStatus">
+      <div className="panelTitle"><div><h2>System status</h2><p>Updated automatically every 15 seconds.</p></div></div>
+      <div className="statusGrid">
+        <article><span>Automation</span><strong className={config.enabled ? "online" : "negative"}>{config.enabled ? "Enabled" : "Paused"}</strong></article>
+        <article><span>Worker</span><strong className={workerOnline ? "online" : "negative"}>{workerOnline ? "Online" : "Offline"}</strong><small>Heartbeat: {heartbeatLabel}</small></article>
+        <article><span>Execution mode</span><strong className={status.mode === "live" ? "negative" : "dryRunText"}>{status.mode === "live" ? "LIVE" : "DRY-RUN"}</strong><small>{status.mode === "live" ? "Real orders may be submitted" : "No real bets can be placed"}</small></article>
+        <article><span>Today&apos;s tickets</span><strong>{ticketStatus?.date === today ? "Received" : "Not received"}</strong><small>{ticketStatus ? `Cota 2: ${ticketStatus.cota2} selections · Ticket of day: ${ticketStatus.ticketOfDay} selections · ${ticketStatus.receivedAt}` : "Waiting for ticket input"}</small></article>
+      </div>
+      <div className="workerMessage"><span>Latest worker result</span><p>{status.lastMessage}</p></div>
     </section>
     <section className="panel"><div className="panelTitle"><div><h2>Algorithm controls</h2><p>Execution-window changes apply without rewriting the signal generator.</p></div><label className="switch"><input type="checkbox" checked={config.algorithmAutopilot} onChange={(event) => setConfig({ ...config, algorithmAutopilot: event.target.checked })} /><span>Autopilot {config.algorithmAutopilot ? "on" : "off"}</span></label></div>
       <div className="grid">{numberField("liveMinMinute", "Earliest live minute", 1)}{numberField("liveMaxMinute", "Latest live minute", 1)}{numberField("approvalWindowDays", "Auto-approval delay (1–5 days)", 1)}</div><div className="saveRow"><button className="primary" onClick={() => save("algorithm")} disabled={savingSection !== null}>{savingSection === "algorithm" ? "Saving…" : "Save algorithm controls"}</button>{saveStatus("algorithm")}</div>
