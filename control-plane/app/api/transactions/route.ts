@@ -37,6 +37,7 @@ export async function PATCH(request: Request) {
   const body = await request.json() as {
     settlements?: Array<{ betId: string; profit: number; settledAt?: string }>;
     simulatedSettlements?: Array<{ intentId: string; status: "simulated_won" | "simulated_lost" | "simulated_void"; profit: number; settledAt?: string }>;
+    auditCorrections?: Array<{ intentId: string; status: "simulated_won" | "simulated_lost" | "simulated_void"; profit: number; reason: string }>;
   };
   const sql = getSql();
   for (const item of body.settlements ?? []) {
@@ -45,6 +46,12 @@ export async function PATCH(request: Request) {
   for (const item of body.simulatedSettlements ?? []) {
     await sql`UPDATE bet_transactions SET status = ${item.status}, profit = ${item.profit}, settled_at = ${item.settledAt ?? new Date().toISOString()} WHERE intent_id = ${item.intentId} AND status = 'simulated_open'`;
   }
-  return Response.json({ updated: (body.settlements?.length ?? 0) + (body.simulatedSettlements?.length ?? 0) });
+  for (const item of body.auditCorrections ?? []) {
+    await sql`UPDATE bet_transactions
+      SET status = ${item.status}, profit = ${item.profit},
+          raw = COALESCE(raw, '{}'::jsonb) || jsonb_build_object('auditCorrection', jsonb_build_object('reason', ${item.reason}, 'correctedAt', ${new Date().toISOString()}))
+      WHERE intent_id = ${item.intentId} AND status LIKE 'simulated_%'`;
+  }
+  return Response.json({ updated: (body.settlements?.length ?? 0) + (body.simulatedSettlements?.length ?? 0) + (body.auditCorrections?.length ?? 0) });
 }
 
