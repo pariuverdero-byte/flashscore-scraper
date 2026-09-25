@@ -26,6 +26,8 @@ export type WorkerCheck = {
   checkedAt: string;
   minute?: number;
   confidence?: number;
+  marketId?: string;
+  selectionId?: number;
 };
 
 export type NativeInputSnapshot = {

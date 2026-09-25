@@ -72,7 +72,7 @@ async function cycle() {
         const decision = assess(candidate, config, ledger);
         if (!decision.allowed) {
           message = `${intent.eventName}: ${decision.reason}`;
-          recordCheck(intent, "rejected", decision.reason, candidate.availableOdds);
+          recordCheck(intent, "rejected", decision.reason, candidate.availableOdds, candidate);
           continue;
         }
         if (live) {
@@ -80,14 +80,14 @@ async function cycle() {
           await control("/api/transactions", { method: "POST", body: JSON.stringify({ intentId: intent.id, kind: intent.kind, eventName: intent.eventName, marketText: intent.marketText, selectionText: intent.selectionText, confidence: intent.confidence, requestedOdds: intent.recommendedMinimumOdds, availableOdds: candidate.availableOdds, stake: config.stakePerBet, marketId: candidate.marketId, selectionId: candidate.selectionId, betId: placed.betId, raw: placed.raw }) });
           ledger.bets += 1;
           message = `Submitted ${intent.kind} single: ${intent.eventName} @ ${candidate.availableOdds}`;
-          recordCheck(intent, "submitted", "order submitted", candidate.availableOdds);
+          recordCheck(intent, "submitted", "order submitted", candidate.availableOdds, candidate);
         }
         else {
           message = `DRY RUN ${intent.kind}: ${intent.eventName} @ ${candidate.availableOdds}`;
           dryRunSeen.add(intent.id);
           await control("/api/transactions", { method: "POST", body: JSON.stringify({ intentId: intent.id, kind: intent.kind, eventName: intent.eventName, marketText: intent.marketText, selectionText: intent.selectionText, confidence: intent.confidence, requestedOdds: intent.recommendedMinimumOdds, availableOdds: candidate.availableOdds, stake: config.stakePerBet, marketId: candidate.marketId, selectionId: candidate.selectionId, status: "simulated_open", raw: { simulation: true, betDelaySeconds: candidate.betDelaySeconds } }) });
           ledger.bets += 1;
-          recordCheck(intent, "matched", "eligible in dry-run", candidate.availableOdds);
+          recordCheck(intent, "matched", "eligible in dry-run", candidate.availableOdds, candidate);
         }
         if (live) {
           ledger.signalIds.add(intent.id);
@@ -119,8 +119,8 @@ async function settleSimulations(betfair: BetfairClient) {
   if (simulatedSettlements.length) await control("/api/transactions", { method: "PATCH", body: JSON.stringify({ simulatedSettlements }) });
 }
 
-function recordCheck(intent: { id: string; kind: "live" | "ticket"; eventName: string; selectionText: string }, result: WorkerCheck["result"], reason: string, availableOdds: number | null) {
-  recentChecks.set(intent.id, { ...intent, result, reason, availableOdds, checkedAt: new Date().toISOString() });
+function recordCheck(intent: { id: string; kind: "live" | "ticket"; eventName: string; selectionText: string }, result: WorkerCheck["result"], reason: string, availableOdds: number | null, candidate?: { marketId: string; selectionId: number }) {
+  recentChecks.set(intent.id, { ...intent, result, reason, availableOdds, marketId: candidate?.marketId, selectionId: candidate?.selectionId, checkedAt: new Date().toISOString() });
 }
 
 async function main() {
