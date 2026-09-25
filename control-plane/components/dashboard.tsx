@@ -11,6 +11,12 @@ type SaveFeedback = { section: SaveSection; kind: "pending" | "success" | "error
 type TicketStatus = { date: string; receivedAt: string; cota2: number; ticketOfDay: number } | null;
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
+function bucharestDate(value: Date | string = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Bucharest", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
 function errorMessage(body: unknown, status: number) {
   if (!body || typeof body !== "object") return `Request failed (${status})`;
   const error = (body as { error?: unknown }).error;
@@ -33,7 +39,7 @@ export default function Dashboard() {
   const [status, setStatus] = useState<WorkerStatus>(emptyStatus);
   const [message, setMessage] = useState("Enter the control token to load settings.");
   const [transactions, setTransactions] = useState<Array<Record<string, unknown>>>([]);
-  const [today] = useState(() => new Date().toISOString().slice(0, 10));
+  const [today] = useState(() => bucharestDate());
   const [from, setFrom] = useState(() => new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
   const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [kind, setKind] = useState("all");
@@ -183,6 +189,7 @@ export default function Dashboard() {
 
   const workerLabel = connectionState === "connected" ? (workerOnline ? "Online" : "Offline") : "Not connected";
   const workerClass = connectionState === "connected" ? (workerOnline ? "online" : "negative") : "dryRunText";
+  const liveChecksToday = (status.recentChecks ?? []).filter((item) => item.kind === "live" && bucharestDate(item.checkedAt) === today);
 
   return <main>
     <header><div><p className="eyebrow">BETFAIR AUTOMATION</p><h1>LiveEdge Control</h1><p className="muted">One disciplined control surface for live execution.</p></div><div className={`mode ${status.mode}`}>{status.mode}</div></header>
@@ -204,6 +211,7 @@ export default function Dashboard() {
         <article><span>Today&apos;s tickets</span><strong>{ticketStatus?.date === today ? "Received" : "Not received"}</strong><small>{ticketStatus ? `Cota 2: ${ticketStatus.cota2} selections · Ticket of day: ${ticketStatus.ticketOfDay} selections · ${ticketStatus.receivedAt}` : "Waiting for ticket input"}</small></article>
       </div>
       <div className="workerMessage"><span>Latest worker result</span><p>{status.lastMessage}</p></div>
+      {liveChecksToday.length ? <div className="checkResults"><h3>Today&apos;s live checks</h3><div className="tableWrap"><table><thead><tr><th>Checked</th><th>Event</th><th>Selection</th><th>Minute</th><th>Confidence</th><th>Betfair odds</th><th>Result</th><th>Reason</th></tr></thead><tbody>{liveChecksToday.map((item) => <tr key={item.id}><td>{new Date(item.checkedAt).toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" })}</td><td>{item.eventName}</td><td>{item.selectionText}</td><td>{item.minute ?? "—"}</td><td>{item.confidence == null ? "—" : `${item.confidence}%`}</td><td>{item.availableOdds ?? "—"}</td><td><span className={`resultBadge ${item.result}`}>{item.result.replaceAll("_", " ")}</span></td><td>{item.reason}</td></tr>)}</tbody></table></div></div> : <div className="workerMessage"><span>Today&apos;s live checks</span><p>No live signals have been evaluated yet.</p></div>}
       {status.recentChecks?.some((item) => item.kind === "ticket") ? <div className="checkResults"><h3>Today&apos;s ticket checks</h3><div className="tableWrap"><table><thead><tr><th>Event</th><th>Selection</th><th>Betfair odds</th><th>Result</th><th>Reason</th></tr></thead><tbody>{status.recentChecks.filter((item) => item.kind === "ticket").map((item) => <tr key={item.id}><td>{item.eventName}</td><td>{item.selectionText}</td><td>{item.availableOdds ?? "—"}</td><td><span className={`resultBadge ${item.result}`}>{item.result.replaceAll("_", " ")}</span></td><td>{item.reason}</td></tr>)}</tbody></table></div></div> : null}
     </section>
     <section className="panel"><div className="panelTitle"><div><h2>Dry-run performance</h2><p>Hypothetical bets settled against actual Betfair market outcomes.</p></div></div>

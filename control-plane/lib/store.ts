@@ -24,6 +24,8 @@ export type WorkerCheck = {
   reason: string;
   availableOdds: number | null;
   checkedAt: string;
+  minute?: number;
+  confidence?: number;
 };
 
 export type NativeInputSnapshot = {
