@@ -36,10 +36,17 @@ export async function PATCH(request: Request) {
   await ensureSchema();
   const body = await request.json() as {
     settlements?: Array<{ betId: string; profit: number; settledAt?: string }>;
+    reconciledBets?: Array<{ intentId: string; kind: "live" | "ticket"; eventName: string; marketText: string; selectionText: string; availableOdds: number; stake: number; marketId: string; selectionId: number; betId: string; status: "settled"; profit: number; submittedAt?: string; settledAt?: string; raw?: unknown }>;
     simulatedSettlements?: Array<{ intentId: string; status: "simulated_won" | "simulated_lost" | "simulated_void"; profit: number; settledAt?: string }>;
     auditCorrections?: Array<{ intentId: string; status: "simulated_won" | "simulated_lost" | "simulated_void"; profit: number; reason: string }>;
   };
   const sql = getSql();
+  for (const item of body.reconciledBets ?? []) {
+    await sql`INSERT INTO bet_transactions (intent_id, kind, event_name, market_text, selection_text, available_odds, stake, betfair_market_id, betfair_selection_id, betfair_bet_id, status, profit, submitted_at, settled_at, raw)
+      SELECT ${item.intentId}, ${item.kind}, ${item.eventName}, ${item.marketText}, ${item.selectionText}, ${item.availableOdds}, ${item.stake}, ${item.marketId}, ${item.selectionId}, ${item.betId}, 'settled', ${item.profit}, ${item.submittedAt ?? new Date().toISOString()}, ${item.settledAt ?? new Date().toISOString()}, ${JSON.stringify(item.raw ?? {})}::jsonb
+      WHERE NOT EXISTS (SELECT 1 FROM bet_transactions WHERE betfair_bet_id = ${item.betId})`;
+    await sql`UPDATE bet_transactions SET status = 'settled', profit = ${item.profit}, settled_at = ${item.settledAt ?? new Date().toISOString()} WHERE betfair_bet_id = ${item.betId}`;
+  }
   for (const item of body.settlements ?? []) {
     await sql`UPDATE bet_transactions SET status = 'settled', profit = ${item.profit}, settled_at = ${item.settledAt ?? new Date().toISOString()} WHERE betfair_bet_id = ${item.betId}`;
   }
@@ -52,6 +59,6 @@ export async function PATCH(request: Request) {
           raw = COALESCE(raw, '{}'::jsonb) || jsonb_build_object('auditCorrection', jsonb_build_object('reason', ${item.reason}::text, 'correctedAt', ${new Date().toISOString()}::text))
       WHERE intent_id = ${item.intentId} AND status LIKE 'simulated_%'`;
   }
-  return Response.json({ updated: (body.settlements?.length ?? 0) + (body.simulatedSettlements?.length ?? 0) + (body.auditCorrections?.length ?? 0) });
+  return Response.json({ updated: (body.reconciledBets?.length ?? 0) + (body.settlements?.length ?? 0) + (body.simulatedSettlements?.length ?? 0) + (body.auditCorrections?.length ?? 0) });
 }
 

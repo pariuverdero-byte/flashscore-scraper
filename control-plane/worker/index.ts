@@ -41,8 +41,7 @@ async function cycle() {
   if (config.enabled) {
     client ??= new BetfairClient(required("BETFAIR_APP_KEY"));
     if (!client.isAuthenticated()) await client.login();
-    const settlements = await client.getSettlementsToday();
-    if (settlements.length) await control("/api/transactions", { method: "PATCH", body: JSON.stringify({ settlements }) });
+    await reconcileSettledRealBets(client);
     if (live) {
       ledger.pnl = await client.getSettledPnlToday();
     }
@@ -120,6 +119,34 @@ async function settleSimulations(betfair: BetfairClient) {
     return [{ intentId: item.intent_id, status, profit: Math.round(profit * 100) / 100, settledAt: new Date().toISOString() }];
   });
   if (simulatedSettlements.length) await control("/api/transactions", { method: "PATCH", body: JSON.stringify({ simulatedSettlements }) });
+}
+
+async function reconcileSettledRealBets(betfair: BetfairClient) {
+  const orders = await betfair.getClearedOrdersTodayDetailed();
+  if (!orders.length) return;
+  const catalogues = await betfair.getMarketCatalogues([...new Set(orders.map((order) => order.marketId))]);
+  const byMarket = new Map(catalogues.map((market) => [market.marketId, market]));
+  const reconciledBets = orders.map((order) => {
+    const market = byMarket.get(order.marketId);
+    return {
+      intentId: `betfair-${order.betId}`,
+      kind: "live" as const,
+      eventName: market?.event?.name ?? `Betfair market ${order.marketId}`,
+      marketText: market?.marketName ?? order.marketId,
+      selectionText: market?.runners?.find((runner) => Number(runner.selectionId) === Number(order.selectionId))?.runnerName ?? `Selection ${order.selectionId}`,
+      availableOdds: Number(order.priceMatched ?? 0),
+      stake: Number(order.sizeSettled ?? 0),
+      marketId: order.marketId,
+      selectionId: order.selectionId,
+      betId: order.betId,
+      status: "settled",
+      profit: Number(order.profit ?? 0),
+      submittedAt: order.placedDate,
+      settledAt: order.settledDate,
+      raw: { source: "betfair-reconciliation", side: order.side },
+    };
+  });
+  await control("/api/transactions", { method: "PATCH", body: JSON.stringify({ reconciledBets }) });
 }
 
 function recordCheck(intent: { id: string; kind: "live" | "ticket"; eventName: string; selectionText: string }, result: WorkerCheck["result"], reason: string, availableOdds: number | null, candidate?: { marketId: string; selectionId: number }) {

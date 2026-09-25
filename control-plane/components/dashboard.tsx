@@ -53,6 +53,7 @@ export default function Dashboard() {
   const [saveFeedback, setSaveFeedback] = useState<SaveFeedback>(null);
   const [selectedChecks, setSelectedChecks] = useState<string[]>([]);
   const [preparedBatch, setPreparedBatch] = useState<string[]>([]);
+  const [statusNow, setStatusNow] = useState(0);
 
   const request = useCallback(async (path: string, init?: RequestInit, authToken = activeToken) => {
     const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}`, ...init?.headers } });
@@ -63,16 +64,18 @@ export default function Dashboard() {
 
   const refreshDashboard = useCallback(async (authToken: string, announce: boolean) => {
     try {
-      const [nextConfig, nextStatus, nextReviews, nextProposals, nextPnl, nextInputs] = await Promise.all([
+      const [nextConfig, nextStatus, nextReviews, nextProposals, nextPnl, nextInputs, nextTransactions] = await Promise.all([
         request("/api/config", undefined, authToken),
         request("/api/status", undefined, authToken),
         request("/api/reviews", undefined, authToken).catch(() => []),
         request("/api/proposals", undefined, authToken).catch(() => []),
         request("/api/pnl", undefined, authToken).catch(() => emptyPnl),
         request("/api/inputs", undefined, authToken).catch(() => null),
+        request(`/api/transactions?from=${from}&to=${to}&kind=${kind}`, undefined, authToken).catch(() => []),
       ]);
       setConfig(nextConfig);
       setStatus(nextStatus);
+      setStatusNow(Date.now());
       setWorkerOnline(Boolean(nextStatus.lastHeartbeat) && Date.now() - new Date(nextStatus.lastHeartbeat).getTime() < 60_000);
       setHeartbeatLabel(nextStatus.lastHeartbeat
         ? new Date(nextStatus.lastHeartbeat).toLocaleString("ro-RO", { dateStyle: "short", timeStyle: "medium" })
@@ -89,6 +92,7 @@ export default function Dashboard() {
       setReviews(nextReviews);
       setProposals(nextProposals);
       setPnl(nextPnl);
+      setTransactions(nextTransactions);
       setConnectionState("connected");
       if (announce) setMessage("Controls loaded. Status refreshes automatically.");
     } catch (error) {
@@ -96,7 +100,7 @@ export default function Dashboard() {
       setWorkerOnline(false);
       if (announce) setMessage(error instanceof Error ? error.message : "Unable to load");
     }
-  }, [request]);
+  }, [request, from, to, kind]);
 
   useEffect(() => {
     const savedToken = localStorage.getItem("control-token") ?? sessionStorage.getItem("control-token") ?? "";
@@ -191,8 +195,11 @@ export default function Dashboard() {
 
   const workerLabel = connectionState === "connected" ? (workerOnline ? "Online" : "Offline") : "Not connected";
   const workerClass = connectionState === "connected" ? (workerOnline ? "online" : "negative") : "dryRunText";
-  const liveChecksToday = (status.recentChecks ?? []).filter((item) => item.kind === "live" && bucharestDate(item.checkedAt) === today);
-  const preparedItems = liveChecksToday.filter((item) => preparedBatch.includes(item.id) && item.marketId);
+  const liveChecksToday = (status.recentChecks ?? [])
+    .filter((item) => item.kind === "live" && bucharestDate(item.checkedAt) === today)
+    .sort((left, right) => new Date(right.checkedAt).getTime() - new Date(left.checkedAt).getTime());
+  const isCheckEligible = (item: NonNullable<WorkerStatus["recentChecks"]>[number]) => item.result === "matched" && Boolean(item.marketId) && statusNow - new Date(item.checkedAt).getTime() <= config.maxSignalAgeSeconds * 1000;
+  const preparedItems = liveChecksToday.filter((item) => preparedBatch.includes(item.id) && isCheckEligible(item));
 
   return <main>
     <header><div><p className="eyebrow">BETFAIR AUTOMATION</p><h1>LiveEdge Control</h1><p className="muted">One disciplined control surface for live execution.</p></div><div className={`mode ${status.mode}`}>{status.mode}</div></header>
@@ -214,7 +221,7 @@ export default function Dashboard() {
         <article><span>Today&apos;s tickets</span><strong>{ticketStatus?.date === today ? "Received" : "Not received"}</strong><small>{ticketStatus ? `Cota 2: ${ticketStatus.cota2} selections · Ticket of day: ${ticketStatus.ticketOfDay} selections · ${ticketStatus.receivedAt}` : "Waiting for ticket input"}</small></article>
       </div>
       <div className="workerMessage"><span>Latest worker result</span><p>{status.lastMessage}</p></div>
-      {liveChecksToday.length ? <div className="checkResults"><h3>Today&apos;s live checks</h3><div className="tableWrap"><table><thead><tr><th>Batch</th><th>Checked</th><th>Event</th><th>Selection</th><th>Minute</th><th>Confidence</th><th>Betfair odds</th><th>Result</th><th>Reason</th></tr></thead><tbody>{liveChecksToday.map((item) => { const eligible = item.result === "matched" && Boolean(item.marketId); return <tr key={item.id}><td><input aria-label={`Select ${item.eventName}`} type="checkbox" disabled={!eligible} checked={selectedChecks.includes(item.id)} onChange={(event) => setSelectedChecks(event.target.checked ? [...selectedChecks, item.id] : selectedChecks.filter((id) => id !== item.id))} /></td><td>{new Date(item.checkedAt).toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" })}</td><td>{item.eventName}</td><td>{item.selectionText}</td><td>{item.minute ?? "—"}</td><td>{item.confidence == null ? "—" : `${item.confidence}%`}</td><td>{item.availableOdds ?? "—"}</td><td><span className={`resultBadge ${item.result}`}>{item.result.replaceAll("_", " ")}</span></td><td>{item.reason}</td></tr>; })}</tbody></table></div><div className="saveRow"><button className="primary" disabled={!selectedChecks.length} onClick={() => setPreparedBatch(selectedChecks)}>Prepare selected batch</button><span>{selectedChecks.length} eligible selection(s) selected</span></div>{preparedItems.length ? <div className="workerMessage"><span>Prepared batch</span><p>{preparedItems.length} selection(s). Open each verified Betfair market and complete the final placement manually.</p><div className="saveRow">{preparedItems.map((item) => <a className="button secondary" key={item.id} href={`https://www.betfair.ro/exchange/plus/market/${item.marketId}`} target="_blank" rel="noreferrer">{item.eventName} — {item.selectionText}</a>)}</div></div> : null}</div> : <div className="workerMessage"><span>Today&apos;s live checks</span><p>No live signals have been evaluated yet.</p></div>}
+      {liveChecksToday.length ? <div className="checkResults"><h3>Today&apos;s live checks</h3><p className="muted">Newest first. A selection expires after {config.maxSignalAgeSeconds} seconds and must be revalidated before use.</p><div className="tableWrap"><table><thead><tr><th>Batch</th><th>Checked</th><th>Event</th><th>Selection</th><th>Minute</th><th>Confidence</th><th>Betfair odds</th><th>Result</th><th>Reason</th></tr></thead><tbody>{liveChecksToday.map((item) => { const eligible = isCheckEligible(item); const displayResult = item.result === "matched" && !eligible ? "expired" : item.result.replaceAll("_", " "); const displayReason = item.result === "matched" && !eligible ? "Quote expired — wait for a fresh check" : item.reason; return <tr key={item.id}><td><input aria-label={`Select ${item.eventName}`} type="checkbox" disabled={!eligible} checked={eligible && selectedChecks.includes(item.id)} onChange={(event) => setSelectedChecks(event.target.checked ? [...selectedChecks, item.id] : selectedChecks.filter((id) => id !== item.id))} /></td><td>{new Date(item.checkedAt).toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" })}</td><td>{item.eventName}</td><td>{item.selectionText}</td><td>{item.minute ?? "—"}</td><td>{item.confidence == null ? "—" : `${item.confidence}%`}</td><td>{item.availableOdds ?? "—"}</td><td><span className={`resultBadge ${eligible ? item.result : "rejected"}`}>{displayResult}</span></td><td>{displayReason}</td></tr>; })}</tbody></table></div><div className="saveRow"><button className="primary" disabled={!selectedChecks.some((id) => liveChecksToday.some((item) => item.id === id && isCheckEligible(item)))} onClick={() => setPreparedBatch(selectedChecks.filter((id) => liveChecksToday.some((item) => item.id === id && isCheckEligible(item))))}>Prepare selected batch</button><span>{selectedChecks.filter((id) => liveChecksToday.some((item) => item.id === id && isCheckEligible(item))).length} current selection(s) selected</span></div>{preparedItems.length ? <div className="workerMessage"><span>Prepared batch</span><p>{preparedItems.length} current selection(s). Open each verified Betfair market and complete the final placement manually.</p><div className="saveRow">{preparedItems.map((item) => <a className="button secondary" key={item.id} href={`https://www.betfair.ro/exchange/plus/market/${item.marketId}`} target="_blank" rel="noreferrer">{item.eventName} — {item.selectionText}</a>)}</div></div> : null}</div> : <div className="workerMessage"><span>Today&apos;s live checks</span><p>No live signals have been evaluated yet.</p></div>}
       {status.recentChecks?.some((item) => item.kind === "ticket") ? <div className="checkResults"><h3>Today&apos;s ticket checks</h3><div className="tableWrap"><table><thead><tr><th>Event</th><th>Selection</th><th>Betfair odds</th><th>Result</th><th>Reason</th></tr></thead><tbody>{status.recentChecks.filter((item) => item.kind === "ticket").map((item) => <tr key={item.id}><td>{item.eventName}</td><td>{item.selectionText}</td><td>{item.availableOdds ?? "—"}</td><td><span className={`resultBadge ${item.result}`}>{item.result.replaceAll("_", " ")}</span></td><td>{item.reason}</td></tr>)}</tbody></table></div></div> : null}
     </section>
     <section className="panel"><div className="panelTitle"><div><h2>Dry-run performance</h2><p>Hypothetical bets settled against actual Betfair market outcomes.</p></div></div>

@@ -5,6 +5,8 @@ import { chooseMarket, type CatalogueMarket } from "./market-matcher";
 
 type RpcResponse<T> = { result?: T; error?: { message: string; data?: unknown } };
 export type MarketOutcome = { marketId: string; status: string; runners: Array<{ selectionId: number; status: string }> };
+export type MarketCatalogueAudit = { marketId: string; marketName: string; event?: { name?: string }; runners?: Array<{ selectionId: number; runnerName: string }> };
+export type ClearedOrder = { betId: string; marketId: string; selectionId: number; placedDate?: string; settledDate?: string; priceMatched?: number; sizeSettled?: number; profit?: number; side?: string };
 
 export class BetfairClient {
   private sessionToken: string | null = null;
@@ -86,6 +88,31 @@ export class BetfairClient {
       outcomes.push(...await this.rpc<MarketOutcome[]>("listMarketBook", { marketIds: marketIds.slice(index, index + 40) }));
     }
     return outcomes;
+  }
+
+  async getMarketCatalogues(marketIds: string[]): Promise<MarketCatalogueAudit[]> {
+    const catalogues: MarketCatalogueAudit[] = [];
+    for (let index = 0; index < marketIds.length; index += 40) {
+      catalogues.push(...await this.rpc<MarketCatalogueAudit[]>("listMarketCatalogue", {
+        filter: { marketIds: marketIds.slice(index, index + 40) },
+        marketProjection: ["EVENT", "RUNNER_DESCRIPTION"],
+        sort: "FIRST_TO_START",
+        maxResults: "100",
+      }));
+    }
+    return catalogues;
+  }
+
+  async getClearedOrdersTodayDetailed(): Promise<ClearedOrder[]> {
+    const from = new Date(); from.setUTCHours(0, 0, 0, 0);
+    const report = await this.rpc<{ clearedOrders?: ClearedOrder[] }>("listClearedOrders", {
+      betStatus: "SETTLED",
+      settledDateRange: { from: from.toISOString(), to: new Date().toISOString() },
+      groupBy: "BET",
+      fromRecord: 0,
+      recordCount: 1000,
+    });
+    return report.clearedOrders ?? [];
   }
 }
 function requireEnv(name: string): string { const value = process.env[name]; if (!value) throw new Error(`Missing ${name}`); return value; }
