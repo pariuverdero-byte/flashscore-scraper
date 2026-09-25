@@ -41,9 +41,10 @@ async function cycle() {
   if (config.enabled) {
     client ??= new BetfairClient(required("BETFAIR_APP_KEY"));
     if (!client.isAuthenticated()) await client.login();
+    const settlements = await client.getSettlementsToday();
+    if (settlements.length) await control("/api/transactions", { method: "PATCH", body: JSON.stringify({ settlements }) });
     if (live) {
       ledger.pnl = await client.getSettledPnlToday();
-      await control("/api/transactions", { method: "PATCH", body: JSON.stringify({ settlements: await client.getSettlementsToday() }) });
     }
     else {
       await settleSimulations(client);
