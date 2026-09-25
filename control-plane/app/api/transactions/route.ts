@@ -15,8 +15,8 @@ export async function GET(request: Request) {
   const rows = status
     ? await sql`SELECT * FROM bet_transactions WHERE status = ${status} ORDER BY submitted_at DESC LIMIT 500`
     : kind === "all"
-    ? await sql`SELECT * FROM bet_transactions WHERE submitted_at >= ${from}::date AND submitted_at < (${to}::date + INTERVAL '1 day') ORDER BY submitted_at DESC LIMIT 500`
-    : await sql`SELECT * FROM bet_transactions WHERE kind = ${kind} AND submitted_at >= ${from}::date AND submitted_at < (${to}::date + INTERVAL '1 day') ORDER BY submitted_at DESC LIMIT 500`;
+    ? await sql`SELECT * FROM bet_transactions WHERE submitted_at >= (${from}::date AT TIME ZONE 'Europe/Bucharest') AND submitted_at < ((${to}::date + INTERVAL '1 day') AT TIME ZONE 'Europe/Bucharest') ORDER BY submitted_at DESC LIMIT 500`
+    : await sql`SELECT * FROM bet_transactions WHERE kind = ${kind} AND submitted_at >= (${from}::date AT TIME ZONE 'Europe/Bucharest') AND submitted_at < ((${to}::date + INTERVAL '1 day') AT TIME ZONE 'Europe/Bucharest') ORDER BY submitted_at DESC LIMIT 500`;
   return Response.json(rows);
 }
 
