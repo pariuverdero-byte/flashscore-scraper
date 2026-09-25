@@ -8,5 +8,8 @@ const ledger = (): DailyLedger => ({ date: "2026-08-26", pnl: 0, bets: 0, signal
 describe("risk assessment", () => {
   it("accepts a fresh candidate within limits", () => expect(assess(candidate, { ...defaultConfig, enabled: true }, ledger(), new Date("2026-08-26T10:00:20Z")).allowed).toBe(true));
   it("blocks after maximum daily loss", () => { const state = ledger(); state.pnl = -50; expect(assess(candidate, { ...defaultConfig, enabled: true }, state, new Date("2026-08-26T10:00:20Z")).reason).toMatch(/loss/); });
+  it("blocks real-money execution after daily take-profit", () => { const state = ledger(); state.pnl = 100; expect(assess(candidate, { ...defaultConfig, enabled: true }, state, new Date("2026-08-26T10:00:20Z"), true).reason).toMatch(/take-profit/); });
+  it("keeps dry-run calibration running after simulated take-profit", () => { const state = ledger(); state.pnl = 100; expect(assess(candidate, { ...defaultConfig, enabled: true }, state, new Date("2026-08-26T10:00:20Z"), false)).toEqual({ allowed: true, reason: "within controls" }); });
+  it("keeps dry-run calibration running after simulated daily loss", () => { const state = ledger(); state.pnl = -100; expect(assess(candidate, { ...defaultConfig, enabled: true }, state, new Date("2026-08-26T10:00:20Z"), false)).toEqual({ allowed: true, reason: "within controls" }); });
   it("blocks duplicate tickets", () => { const state = ledger(); state.signalIds.add("one"); expect(assess(candidate, { ...defaultConfig, enabled: true }, state, new Date("2026-08-26T10:00:20Z")).reason).toMatch(/duplicate/); });
 });

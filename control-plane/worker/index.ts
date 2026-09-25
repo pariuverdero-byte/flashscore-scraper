@@ -70,7 +70,9 @@ async function cycle() {
           recordCheck(intent, "missing_or_ambiguous", "Betfair market missing or ambiguous", null);
           continue;
         }
-        const decision = assess(candidate, config, ledger);
+        // Simulations are calibration data and must not stop when their virtual
+        // P&L reaches the real-money daily loss/take-profit thresholds.
+        const decision = assess(candidate, config, ledger, new Date(), live);
         if (!decision.allowed) {
           message = `${intent.eventName}: ${decision.reason}`;
           recordCheck(intent, "rejected", decision.reason, candidate.availableOdds, candidate);

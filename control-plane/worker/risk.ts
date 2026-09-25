@@ -3,10 +3,10 @@ import type { BetCandidate } from "./types";
 
 export type DailyLedger = { date: string; pnl: number; bets: number; signalIds: Set<string> };
 
-export function assess(candidate: BetCandidate, config: BettingConfig, ledger: DailyLedger, now = new Date()): { allowed: boolean; reason: string } {
+export function assess(candidate: BetCandidate, config: BettingConfig, ledger: DailyLedger, now = new Date(), enforceFinancialLimits = true): { allowed: boolean; reason: string } {
   if (!config.enabled) return { allowed: false, reason: "automation paused" };
-  if (ledger.pnl <= -config.maxDailyLoss) return { allowed: false, reason: "daily loss limit reached" };
-  if (ledger.pnl >= config.dailyTakeProfit) return { allowed: false, reason: "daily take-profit reached" };
+  if (enforceFinancialLimits && ledger.pnl <= -config.maxDailyLoss) return { allowed: false, reason: "daily loss limit reached" };
+  if (enforceFinancialLimits && ledger.pnl >= config.dailyTakeProfit) return { allowed: false, reason: "daily take-profit reached" };
   const minimumOdds = Math.max(candidate.kind === "live" ? config.minLiveOdds : 1.01, candidate.recommendedMinimumOdds ?? 1.01);
   if (candidate.availableOdds < minimumOdds) return { allowed: false, reason: "odds below minimum" };
   if (ledger.signalIds.has(candidate.id)) return { allowed: false, reason: "duplicate signal" };
