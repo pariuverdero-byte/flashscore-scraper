@@ -49,7 +49,7 @@ export async function PATCH(request: Request) {
   for (const item of body.auditCorrections ?? []) {
     await sql`UPDATE bet_transactions
       SET status = ${item.status}, profit = ${item.profit},
-          raw = COALESCE(raw, '{}'::jsonb) || jsonb_build_object('auditCorrection', jsonb_build_object('reason', ${item.reason}, 'correctedAt', ${new Date().toISOString()}))
+          raw = COALESCE(raw, '{}'::jsonb) || jsonb_build_object('auditCorrection', jsonb_build_object('reason', ${item.reason}::text, 'correctedAt', ${new Date().toISOString()}::text))
       WHERE intent_id = ${item.intentId} AND status LIKE 'simulated_%'`;
   }
   return Response.json({ updated: (body.settlements?.length ?? 0) + (body.simulatedSettlements?.length ?? 0) + (body.auditCorrections?.length ?? 0) });
