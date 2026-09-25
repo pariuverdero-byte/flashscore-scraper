@@ -18,14 +18,24 @@ function translated(value: string): string {
 function tokens(value: string): string[] { return translated(value).split(" ").filter((token) => token.length > 1 || /^[12x]$/.test(token)); }
 function overlap(needle: string[], haystack: string): number { const hay = new Set(tokens(haystack)); return needle.length ? needle.filter((token) => hay.has(token)).length / needle.length : 0; }
 
+function textScore(expected: string, actual: string): number {
+  if (translated(expected) === translated(actual)) return 1;
+  return overlap(tokens(expected), actual);
+}
+
 export function chooseMarket(intent: ExecutionIntent, markets: CatalogueMarket[]): { market: CatalogueMarket; runner: NonNullable<CatalogueMarket["runners"]>[number]; confidence: number } | null {
-  const desired = tokens(`${intent.marketText} ${intent.selectionText}`);
   let best: { market: CatalogueMarket; runner: NonNullable<CatalogueMarket["runners"]>[number]; confidence: number } | null = null;
   for (const market of markets) {
+    const eventScore = textScore(intent.eventName, market.event?.name ?? "");
+    const marketScore = textScore(intent.marketText, market.marketName);
+    if (eventScore < 0.7 || marketScore < 0.65) continue;
     for (const runner of market.runners ?? []) {
-      const eventScore = overlap(tokens(intent.eventName), market.event?.name ?? "");
-      const selectionScore = overlap(desired, `${market.marketName} ${runner.runnerName}`);
-      const confidence = eventScore * 0.45 + selectionScore * 0.55;
+      // Score the runner independently. Including the market name here makes
+      // both sides of an Over/Under market appear to contain "over" and can
+      // silently invert the simulated selection.
+      const selectionScore = textScore(intent.selectionText, runner.runnerName);
+      if (selectionScore < 0.8) continue;
+      const confidence = eventScore * 0.4 + marketScore * 0.3 + selectionScore * 0.3;
       if (!best || confidence > best.confidence) best = { market, runner, confidence };
     }
   }
