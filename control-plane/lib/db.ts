@@ -35,6 +35,26 @@ export async function ensureSchema() {
   await sql`CREATE INDEX IF NOT EXISTS bet_transactions_submitted_idx ON bet_transactions (submitted_at DESC)`;
   await sql`CREATE INDEX IF NOT EXISTS bet_transactions_kind_confidence_idx ON bet_transactions (kind, confidence)`;
   await sql`
+    CREATE TABLE IF NOT EXISTS execution_intents (
+      id BIGSERIAL PRIMARY KEY,
+      intent_id TEXT NOT NULL UNIQUE,
+      kind TEXT NOT NULL CHECK (kind IN ('live', 'ticket')),
+      event_name TEXT NOT NULL,
+      market_text TEXT NOT NULL,
+      selection_text TEXT NOT NULL,
+      confidence NUMERIC(5,2),
+      available_odds NUMERIC(10,3) NOT NULL,
+      stake NUMERIC(12,2) NOT NULL,
+      betfair_market_id TEXT NOT NULL,
+      betfair_selection_id BIGINT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'expired')),
+      expires_at TIMESTAMPTZ NOT NULL,
+      decided_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      raw JSONB NOT NULL DEFAULT '{}'::jsonb
+    )`;
+  await sql`CREATE INDEX IF NOT EXISTS execution_intents_status_idx ON execution_intents (status, created_at DESC)`;
+  await sql`
     CREATE TABLE IF NOT EXISTS algorithm_reviews (
       id BIGSERIAL PRIMARY KEY,
       period_start DATE NOT NULL,

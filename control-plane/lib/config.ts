@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const bettingConfigSchema = z.object({
+  executionMode: z.enum(["dry-run", "approval"]),
   stakePerBet: z.number().min(2).max(10_000),
   minLiveOdds: z.number().min(1.01).max(1000),
   maxDailyLoss: z.number().min(2).max(100_000),
@@ -20,6 +21,7 @@ export const bettingConfigSchema = z.object({
 export type BettingConfig = z.infer<typeof bettingConfigSchema>;
 
 export const defaultConfig: BettingConfig = {
+  executionMode: "dry-run",
   stakePerBet: 5,
   minLiveOdds: 1.5,
   maxDailyLoss: 50,

@@ -8,7 +8,7 @@ const NATIVE_TICKETS_KEY = "native-input:tickets";
 
 export type WorkerStatus = {
   lastHeartbeat: string | null;
-  mode: "dry-run" | "live";
+  mode: "dry-run" | "approval" | "live";
   pnlToday: number;
   betsToday: number;
   lastMessage: string;

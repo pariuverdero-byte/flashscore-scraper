@@ -10,6 +10,7 @@ type SaveSection = "algorithm" | "risk";
 type SaveFeedback = { section: SaveSection; kind: "pending" | "success" | "error"; text: string } | null;
 type TicketStatus = { date: string; receivedAt: string; cota2: number; ticketOfDay: number } | null;
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
+type ExecutionIntent = { id: number; intent_id: string; event_name: string; market_text: string; selection_text: string; confidence: number | null; available_odds: number; stake: number; betfair_market_id: string; status: "pending" | "approved" | "rejected" | "expired"; expires_at: string; created_at: string };
 
 function bucharestDate(value: Date | string = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Bucharest", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
@@ -54,6 +55,7 @@ export default function Dashboard() {
   const [selectedChecks, setSelectedChecks] = useState<string[]>([]);
   const [preparedBatch, setPreparedBatch] = useState<string[]>([]);
   const [statusNow, setStatusNow] = useState(0);
+  const [executionIntents, setExecutionIntents] = useState<ExecutionIntent[]>([]);
 
   const request = useCallback(async (path: string, init?: RequestInit, authToken = activeToken) => {
     const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}`, ...init?.headers } });
@@ -64,7 +66,7 @@ export default function Dashboard() {
 
   const refreshDashboard = useCallback(async (authToken: string, announce: boolean) => {
     try {
-      const [nextConfig, nextStatus, nextReviews, nextProposals, nextPnl, nextInputs, nextTransactions] = await Promise.all([
+      const [nextConfig, nextStatus, nextReviews, nextProposals, nextPnl, nextInputs, nextTransactions, nextExecutionIntents] = await Promise.all([
         request("/api/config", undefined, authToken),
         request("/api/status", undefined, authToken),
         request("/api/reviews", undefined, authToken).catch(() => []),
@@ -72,6 +74,7 @@ export default function Dashboard() {
         request("/api/pnl", undefined, authToken).catch(() => emptyPnl),
         request("/api/inputs", undefined, authToken).catch(() => null),
         request(`/api/transactions?from=${from}&to=${to}&kind=${kind}`, undefined, authToken).catch(() => []),
+        request("/api/execution-intents", undefined, authToken).catch(() => []),
       ]);
       setConfig(nextConfig);
       setStatus(nextStatus);
@@ -93,6 +96,7 @@ export default function Dashboard() {
       setProposals(nextProposals);
       setPnl(nextPnl);
       setTransactions(nextTransactions);
+      setExecutionIntents(nextExecutionIntents);
       setConnectionState("connected");
       if (announce) setMessage("Controls loaded. Status refreshes automatically.");
     } catch (error) {
@@ -189,6 +193,14 @@ export default function Dashboard() {
     catch (error) { setMessage(error instanceof Error ? error.message : "Unable to decide proposal"); }
   }
 
+  async function decideExecution(id: number, action: "approve" | "reject") {
+    try {
+      await request("/api/execution-intents", { method: "PATCH", body: JSON.stringify({ id, action }) });
+      setExecutionIntents(await request("/api/execution-intents"));
+      setMessage(action === "approve" ? "Selection approved for manual Betfair placement." : "Selection rejected.");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to update selection"); }
+  }
+
   const numberField = (key: keyof BettingConfig, label: string, step: number) => (
     <label><span>{label}</span><input type="number" step={step} value={String(config[key])} onChange={(event) => setConfig({ ...config, [key]: Number(event.target.value) })} /></label>
   );
@@ -202,7 +214,7 @@ export default function Dashboard() {
   const preparedItems = liveChecksToday.filter((item) => preparedBatch.includes(item.id) && isCheckEligible(item));
 
   return <main>
-    <header><div><p className="eyebrow">BETFAIR AUTOMATION</p><h1>LiveEdge Control</h1><p className="muted">One disciplined control surface for live execution.</p></div><div className={`mode ${status.mode}`}>{status.mode}</div></header>
+    <header><div><p className="eyebrow">BETFAIR AUTOMATION</p><h1>LiveEdge Control</h1><p className="muted">One disciplined control surface for supervised live execution.</p></div><div className={`mode ${status.mode}`}>{status.mode}</div></header>
     <section className="panel auth"><div><h2>Connection</h2><p className="muted">{connectionState === "connected" ? "Connected. Live status refreshes every 15 seconds." : connectionState === "connecting" ? "Connecting…" : "Connect once; this browser will reconnect automatically after refresh."}</p></div><label><span>Control token</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="••••••••••••" /></label><button onClick={load} disabled={connectionState === "connecting"}>{connectionState === "connecting" ? "Connecting…" : "Connect"}</button>{connectionState === "connected" ? <button className="secondary" onClick={disconnect}>Disconnect</button> : null}</section>
     <section className="metrics">
       <article><span>P&amp;L today</span><strong className={pnl.today < 0 ? "negative" : ""}>{pnl.today.toFixed(2)} RON</strong></article>
@@ -217,12 +229,19 @@ export default function Dashboard() {
       <div className="statusGrid">
         <article><span>Automation</span><strong className={config.enabled ? "online" : "negative"}>{config.enabled ? "Enabled" : "Paused"}</strong></article>
         <article><span>Worker</span><strong className={workerClass}>{workerLabel}</strong><small>{connectionState === "connected" ? `Heartbeat: ${heartbeatLabel}` : "Connect the dashboard to read heartbeat data"}</small></article>
-        <article><span>Execution mode</span><strong className={status.mode === "live" ? "negative" : "dryRunText"}>{status.mode === "live" ? "LIVE" : "DRY-RUN"}</strong><small>{status.mode === "live" ? "Real orders may be submitted" : "No real bets can be placed"}</small></article>
+        <article><span>Execution mode</span><strong className={status.mode === "live" ? "negative" : "dryRunText"}>{status.mode.toUpperCase()}</strong><small>{status.mode === "approval" ? "Eligible selections wait for your decision" : status.mode === "live" ? "Real orders may be submitted" : "Automatic simulation; no real bets are placed"}</small></article>
         <article><span>Today&apos;s tickets</span><strong>{ticketStatus?.date === today ? "Received" : "Not received"}</strong><small>{ticketStatus ? `Cota 2: ${ticketStatus.cota2} selections · Ticket of day: ${ticketStatus.ticketOfDay} selections · ${ticketStatus.receivedAt}` : "Waiting for ticket input"}</small></article>
       </div>
       <div className="workerMessage"><span>Latest worker result</span><p>{status.lastMessage}</p></div>
       {liveChecksToday.length ? <div className="checkResults"><h3>Today&apos;s live checks</h3><p className="muted">Newest first. A selection expires after {config.maxSignalAgeSeconds} seconds and must be revalidated before use.</p><div className="tableWrap"><table><thead><tr><th>Batch</th><th>Checked</th><th>Event</th><th>Selection</th><th>Minute</th><th>Confidence</th><th>Betfair odds</th><th>Result</th><th>Reason</th></tr></thead><tbody>{liveChecksToday.map((item) => { const eligible = isCheckEligible(item); const displayResult = item.result === "matched" && !eligible ? "expired" : item.result.replaceAll("_", " "); const displayReason = item.result === "matched" && !eligible ? "Quote expired — wait for a fresh check" : item.reason; return <tr key={item.id}><td><input aria-label={`Select ${item.eventName}`} type="checkbox" disabled={!eligible} checked={eligible && selectedChecks.includes(item.id)} onChange={(event) => setSelectedChecks(event.target.checked ? [...selectedChecks, item.id] : selectedChecks.filter((id) => id !== item.id))} /></td><td>{new Date(item.checkedAt).toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" })}</td><td>{item.eventName}</td><td>{item.selectionText}</td><td>{item.minute ?? "—"}</td><td>{item.confidence == null ? "—" : `${item.confidence}%`}</td><td>{item.availableOdds ?? "—"}</td><td><span className={`resultBadge ${eligible ? item.result : "rejected"}`}>{displayResult}</span></td><td>{displayReason}</td></tr>; })}</tbody></table></div><div className="saveRow"><button className="primary" disabled={!selectedChecks.some((id) => liveChecksToday.some((item) => item.id === id && isCheckEligible(item)))} onClick={() => setPreparedBatch(selectedChecks.filter((id) => liveChecksToday.some((item) => item.id === id && isCheckEligible(item))))}>Prepare selected batch</button><span>{selectedChecks.filter((id) => liveChecksToday.some((item) => item.id === id && isCheckEligible(item))).length} current selection(s) selected</span></div>{preparedItems.length ? <div className="workerMessage"><span>Prepared batch</span><p>{preparedItems.length} current selection(s). Open each verified Betfair market and complete the final placement manually.</p><div className="saveRow">{preparedItems.map((item) => <a className="button secondary" key={item.id} href={`https://www.betfair.ro/exchange/plus/market/${item.marketId}`} target="_blank" rel="noreferrer">{item.eventName} — {item.selectionText}</a>)}</div></div> : null}</div> : <div className="workerMessage"><span>Today&apos;s live checks</span><p>No live signals have been evaluated yet.</p></div>}
       {status.recentChecks?.some((item) => item.kind === "ticket") ? <div className="checkResults"><h3>Today&apos;s ticket checks</h3><div className="tableWrap"><table><thead><tr><th>Event</th><th>Selection</th><th>Betfair odds</th><th>Result</th><th>Reason</th></tr></thead><tbody>{status.recentChecks.filter((item) => item.kind === "ticket").map((item) => <tr key={item.id}><td>{item.eventName}</td><td>{item.selectionText}</td><td>{item.availableOdds ?? "—"}</td><td><span className={`resultBadge ${item.result}`}>{item.result.replaceAll("_", " ")}</span></td><td>{item.reason}</td></tr>)}</tbody></table></div></div> : null}
+    </section>
+    <section className="panel"><div className="panelTitle"><div><h2>Execution workflow</h2><p>Choose automatic simulation or persistent approval queue. Approval never submits a real order.</p></div></div>
+      <div className="grid"><label><span>Mode</span><select value={config.executionMode} onChange={(event) => setConfig({ ...config, executionMode: event.target.value as BettingConfig["executionMode"] })}><option value="dry-run">Dry-run pilot</option><option value="approval">Approval queue</option></select></label></div>
+      <div className="saveRow"><button className="primary" onClick={() => save("risk")} disabled={savingSection !== null}>Save execution mode</button><span className="muted">Real-money autopilot is not available.</span></div>
+    </section>
+    <section className="panel"><div className="panelTitle"><div><h2>Approval queue</h2><p>Persistent, expiring Betfair selections with a complete decision trail.</p></div></div>
+      <div className="tableWrap"><table><thead><tr><th>Created</th><th>Event</th><th>Selection</th><th>Odds</th><th>Stake</th><th>Status</th><th>Expires</th><th>Action</th></tr></thead><tbody>{executionIntents.length ? executionIntents.map((item) => <tr key={item.id}><td>{new Date(item.created_at).toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" })}</td><td>{item.event_name}</td><td>{item.selection_text}</td><td>{item.available_odds}</td><td>{item.stake} RON</td><td><span className={`resultBadge ${item.status === "approved" ? "matched" : item.status === "pending" ? "submitted" : "rejected"}`}>{item.status}</span></td><td>{new Date(item.expires_at).toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</td><td>{item.status === "pending" ? <div className="saveRow"><button onClick={() => decideExecution(item.id, "approve")}>Approve</button><button className="secondary" onClick={() => decideExecution(item.id, "reject")}>Reject</button></div> : item.status === "approved" ? <a className="button secondary" href={`https://www.betfair.ro/exchange/plus/market/${item.betfair_market_id}`} target="_blank" rel="noreferrer">Open Betfair</a> : "—"}</td></tr>) : <tr><td colSpan={8}>No approval candidates in the last 24 hours.</td></tr>}</tbody></table></div>
     </section>
     <section className="panel"><div className="panelTitle"><div><h2>Dry-run performance</h2><p>Hypothetical bets settled against actual Betfair market outcomes.</p></div></div>
       <div className="statusGrid simulationGrid">

@@ -77,7 +77,14 @@ async function cycle() {
           recordCheck(intent, "rejected", decision.reason, candidate.availableOdds, candidate);
           continue;
         }
-        if (live) {
+        if (config.executionMode === "approval") {
+          const expiresAt = new Date(Date.now() + config.maxSignalAgeSeconds * 1000).toISOString();
+          await control("/api/execution-intents", { method: "POST", body: JSON.stringify({ intentId: intent.id, kind: intent.kind, eventName: intent.eventName, marketText: intent.marketText, selectionText: intent.selectionText, confidence: intent.confidence, availableOdds: candidate.availableOdds, stake: config.stakePerBet, marketId: candidate.marketId, selectionId: candidate.selectionId, expiresAt, raw: { betDelaySeconds: candidate.betDelaySeconds } }) });
+          dryRunSeen.add(intent.id);
+          message = `APPROVAL ${intent.kind}: ${intent.eventName} @ ${candidate.availableOdds}`;
+          recordCheck(intent, "matched", "waiting for approval", candidate.availableOdds, candidate);
+        }
+        else if (live) {
           const placed = await client.placeBack(candidate, config.stakePerBet);
           await control("/api/transactions", { method: "POST", body: JSON.stringify({ intentId: intent.id, kind: intent.kind, eventName: intent.eventName, marketText: intent.marketText, selectionText: intent.selectionText, confidence: intent.confidence, requestedOdds: intent.recommendedMinimumOdds, availableOdds: candidate.availableOdds, stake: config.stakePerBet, marketId: candidate.marketId, selectionId: candidate.selectionId, betId: placed.betId, raw: placed.raw }) });
           ledger.bets += 1;
@@ -102,7 +109,7 @@ async function cycle() {
       }
     }
   }
-  await control("/api/status", { method: "POST", body: JSON.stringify({ lastHeartbeat: new Date().toISOString(), mode: live ? "live" : "dry-run", pnlToday: ledger.pnl, betsToday: ledger.bets, lastMessage: message, recentChecks: [...recentChecks.values()].slice(-100) }) });
+  await control("/api/status", { method: "POST", body: JSON.stringify({ lastHeartbeat: new Date().toISOString(), mode: config.executionMode === "approval" ? "approval" : live ? "live" : "dry-run", pnlToday: ledger.pnl, betsToday: ledger.bets, lastMessage: message, recentChecks: [...recentChecks.values()].slice(-100) }) });
 }
 
 async function settleSimulations(betfair: BetfairClient) {
