@@ -37,6 +37,13 @@ test("team goal markets preserve the team name and translate singular and plural
   assert.equal(englishMarketLabel("", "FC Botoșani minim 2 goluri"), "FC Botoșani to score at least 2 goals");
 });
 
+test("minimum match goal markets translate without a team prefix", () => {
+  const raw = "Minim 3 goluri marcate în meci";
+  assert.equal(englishMarketLabel("", raw), "Total goals: at least 3 goals");
+  assert.equal(englishMarketLabel("Minim 3 goluri", raw), "Total goals: at least 3 goals");
+  assert.equal(englishMarketLabel("", "Minim 1 gol marcat în meci"), "Total goals: at least 1 goal");
+});
+
 test("unknown Romanian market labels stop before publication", () => {
   assert.throws(() => englishMarketLabel("", "rezultat meci"), /Untranslated English market label/);
 });
