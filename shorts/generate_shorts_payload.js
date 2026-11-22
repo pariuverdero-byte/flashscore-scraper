@@ -1465,7 +1465,9 @@ function buildVoiceScript(
       ].filter(Boolean).join(" ");
     });
     sections.push(`Cota totală este ${spokenOdd(totalOdds)}. Găsești biletul pe ${WEBSITE.replace(/\.ro$/i, " punct ro")}.`);
-    return sections.join("\n\n");
+    return sections.join("\n\n").replace(/\bmeciuri\b/gi, word =>
+      word[0] === "M" ? "Partide" : "partide"
+    );
   }
 
   const phrases =
@@ -2287,7 +2289,7 @@ async function main() {
         OUTPUT_DIR,
         "voice_script.txt"
       ),
-      `${voiceScript}\n`,
+      `${LANG === "ro" ? voiceScript.replace(/\bGetafe\b/gi, "Hetafe") : voiceScript}\n`,
       "utf8"
     )
   ]);

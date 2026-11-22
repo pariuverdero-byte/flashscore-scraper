@@ -225,3 +225,9 @@ for (const filePath of [audioFile, subtitlesFile]) {
     throw new Error(`Voice output is missing or empty: ${filePath}`);
   }
 }
+
+if (language === "ro") {
+  const subtitles = fs.readFileSync(subtitlesFile, "utf8");
+  const corrected = subtitles.replace(/\bHetafe\b/gi, "Getafe");
+  if (corrected !== subtitles) fs.writeFileSync(subtitlesFile, corrected, "utf8");
+}
