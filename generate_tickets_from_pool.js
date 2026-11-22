@@ -6,6 +6,7 @@ import { englishMarketLabel } from "./scripts/market-translation.js";
 
 const POOL_FILE = "master_pool.json";
 const MATCHES_FILE = "matches.json";
+const TICKETS_ONLY = process.env.TICKETS_ONLY === "true";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
 // Enrich the candidate pool before the model chooses a ticket. The old limit
@@ -256,6 +257,22 @@ function buildBundles(pool) {
   }
 
   return attachBundleMeta([], "none", c2Fallback.length, day.length);
+}
+
+function selectAnalysisBundles(pool) {
+  const evidencePool = pool.filter(selection => selection.__analysisEvidence?.usable === true);
+  const evidenceBundles = buildBundles(evidencePool);
+  console.log(`[AI-STATS] evidence-ready selections=${evidencePool.length}/${pool.length}; bundles=${evidenceBundles.length}`);
+
+  const supported = evidenceBundles[0];
+  if (supported?.cota2 && supported?.day) return { evidenceBundles, selectedBundles: evidenceBundles };
+
+  const safePool = pool.filter(selection => selection.__analysisEvidence?.blocked_by_contradiction !== true);
+  const safeBundles = buildBundles(safePool);
+  const fallback = safeBundles[0];
+  const addsTicket = Boolean((fallback?.cota2 && !supported?.cota2) || (fallback?.day && !supported?.day));
+  if (addsTicket) console.log(`[AI-STATS] ticket fallback: ${safePool.length} selections without contradictory evidence`);
+  return { evidenceBundles, selectedBundles: addsTicket ? safeBundles : evidenceBundles };
 }
 
 function splitCanonicalTeams(teams = "") {
@@ -1075,64 +1092,55 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
     let chosen = bundles[0], annotations = [], aiUsed = false, aiError = null;
     let partialEvidenceUsed = false;
     let prematchContext = new Map();
-    try {
-      prematchContext = await collectPrematchContext(pool);
+    if (!TICKETS_ONLY) {
+      try {
+        prematchContext = await collectPrematchContext(pool);
 
-      for (const selection of pool) {
-        selection.__analysisEvidence = buildAnalysisEvidence(
-          selection,
-          prematchContext.get(selection.match_id) || null
-        );
-        if (
-          selection.__analysisEvidence?.usable === true &&
-          !evidenceSupportsSelection(selection, selection.__analysisEvidence)
-        ) {
-          selection.__analysisEvidence = {
-            ...selection.__analysisEvidence,
-            usable: false,
-            blocked_by_contradiction: true,
-            rejection: "Recent numerical evidence does not support the selected market"
-          };
-          console.log(`[AI-STATS] rejected contradictory selection: ${selection.teams} | ${selection.market_raw}`);
+        for (const selection of pool) {
+          selection.__analysisEvidence = buildAnalysisEvidence(
+            selection,
+            prematchContext.get(selection.match_id) || null
+          );
+          if (
+            selection.__analysisEvidence?.usable === true &&
+            !evidenceSupportsSelection(selection, selection.__analysisEvidence)
+          ) {
+            selection.__analysisEvidence = {
+              ...selection.__analysisEvidence,
+              usable: false,
+              blocked_by_contradiction: true,
+              rejection: "Recent numerical evidence does not support the selected market"
+            };
+            console.log(`[AI-STATS] rejected contradictory selection: ${selection.teams} | ${selection.market_raw}`);
+          }
         }
-      }
 
-      await addVerifiedWebFallback(pool, date);
+        await addVerifiedWebFallback(pool, date);
 
-      // Rebuild the ticket candidates from selections that have market-specific
-      // Flashscore evidence. OpenAI now curates and writes from this dossier; it
-      // is no longer expected to know current football facts by itself.
-      const evidencePool = pool.filter(selection => selection.__analysisEvidence?.usable === true);
-      const evidenceBundles = buildBundles(evidencePool);
-      console.log(`[AI-STATS] evidence-ready selections=${evidencePool.length}/${pool.length}; bundles=${evidenceBundles.length}`);
-      const hasDay = evidenceBundles.some(bundle => bundle.day);
-      const safePool = pool.filter(selection => selection.__analysisEvidence?.blocked_by_contradiction !== true);
-      const safeBundles = hasDay ? [] : buildBundles(safePool);
-      const selectedBundles = hasDay || !safeBundles.some(bundle => bundle.day)
-        ? evidenceBundles
-        : safeBundles;
-      if (selectedBundles === safeBundles) {
-        partialEvidenceUsed = true;
-        console.log(`[AI-STATS] day-ticket fallback: ${safePool.length} selections without contradictory evidence`);
-      }
-      if (selectedBundles.length) {
-        bundles = selectedBundles;
-        chosen = bundles[0];
-      }
+        // Rebuild the ticket candidates from selections that have market-specific
+        // Flashscore evidence. OpenAI now curates and writes from this dossier; it
+        // is no longer expected to know current football facts by itself.
+        const { evidenceBundles, selectedBundles } = selectAnalysisBundles(pool);
+        partialEvidenceUsed = selectedBundles !== evidenceBundles;
+        if (selectedBundles.length) {
+          bundles = selectedBundles;
+          chosen = bundles[0];
+        }
 
-      const ai = selectedBundles.length && selectedBundles === evidenceBundles
-        ? await askAI(bundles, prematchContext)
-        : null;
-      if (ai) {
-        const found = bundles.find(b => b.id === ai.bundle_id);
-        if (!found) throw new Error("AI selected unknown bundle");
-        const allowed = new Set([...(found.cota2?.selections || []), ...(found.day?.selections || [])].map(s => s.__sid));
-        annotations = (ai.annotations || []).filter(a => allowed.has(a.selection_id));
-        chosen = found; aiUsed = true;
+        const ai = selectedBundles.length && selectedBundles === evidenceBundles
+          ? await askAI(bundles, prematchContext)
+          : null;
+        if (ai) {
+          const found = bundles.find(b => b.id === ai.bundle_id);
+          if (!found) throw new Error("AI selected unknown bundle");
+          const allowed = new Set([...(found.cota2?.selections || []), ...(found.day?.selections || [])].map(s => s.__sid));
+          annotations = (ai.annotations || []).filter(a => allowed.has(a.selection_id));
+          chosen = found; aiUsed = true;
+        }
+      } catch (e) {
+        aiError = e?.message || String(e);
+        console.warn(`[AI] safe fallback: ${aiError}`);
       }
-    } catch (e) {
-      aiError = e?.message || String(e);
-      console.warn(`[AI] safe fallback: ${aiError}`);
     }
 
     const out = {
@@ -1149,8 +1157,8 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
       ai_used: aiUsed,
       ai_model: aiUsed ? OPENAI_MODEL : null,
       ai_error: aiError,
-      analysis_source: aiUsed
-        ? "openai_from_flashscore_evidence"
+      analysis_source: TICKETS_ONLY ? "disabled"
+        : aiUsed ? "openai_from_flashscore_evidence"
         : partialEvidenceUsed ? "local_with_partial_evidence" : "local_from_flashscore_evidence",
       partial_evidence_used: partialEvidenceUsed,
       ticket_of_day_relaxed: Boolean(chosen.day && chosen.day.product < ZI.min),
