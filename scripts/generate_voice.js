@@ -139,7 +139,10 @@ function runPiper() {
 
   fs.mkdirSync(dataDir, { recursive: true });
   command(pythonCommand, ["-m", "piper.download_voices", "--data-dir", dataDir, voice]);
-  command(pythonCommand, ["-m", "piper", "-m", voice, "--data-dir", dataDir, "-f", wavFile, "--input-file", scriptFile]);
+  const prosody = language === "ro" && voice === "ro_RO-mihai-medium"
+    ? ["--length-scale", "1.04", "--sentence-silence", "0.16"]
+    : [];
+  command(pythonCommand, ["-m", "piper", "-m", voice, "--data-dir", dataDir, "-f", wavFile, "--input-file", scriptFile, ...prosody]);
   const duration = wavDuration(wavFile);
   command(ffmpegCommand, ["-y", "-hide_banner", "-loglevel", "error", "-i", wavFile, "-codec:a", "libmp3lame", "-b:a", "128k", audioFile]);
   fs.writeFileSync(subtitlesFile, approximateSrt(text, duration), "utf8");

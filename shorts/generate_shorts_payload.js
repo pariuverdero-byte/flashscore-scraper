@@ -715,24 +715,6 @@ function spokenOdd(value) {
 function spokenPickNumber(
   index
 ) {
-  if (LANG === "ro") {
-    const labels = {
-      1: "Prima selecție",
-      2: "A doua selecție",
-      3: "A treia selecție",
-      4: "A patra selecție",
-      5: "A cincea selecție",
-      6: "A șasea selecție"
-    };
-
-    return (
-      labels[index] ||
-      `Selecția numărul ${integerToRomanian(
-        index
-      )}`
-    );
-  }
-
   const labels = {
     1: "First pick",
     2: "Second pick",
@@ -1384,66 +1366,7 @@ function visualHeadline(type) {
  * =========================================================
  */
 
-function getVoicePhrases(
-  random
-) {
-  if (LANG === "ro") {
-    return {
-      intros: {
-        bilet_cota2: [
-          "Salut! Iată biletul cota doi de astăzi.",
-          "Hai să vedem selecțiile pentru biletul cota doi.",
-          "Biletul cota doi de astăzi este pregătit.",
-          "Avem pregătit biletul cota doi pentru astăzi.",
-          "Acestea sunt selecțiile noastre pentru biletul cota doi."
-        ],
-
-        biletul_zilei: [
-          "Salut! Iată biletul zilei.",
-          "Hai să vedem selecțiile de astăzi.",
-          "Biletul zilei este pregătit.",
-          "Am pregătit pronosticurile zilei.",
-          "Acestea sunt selecțiile noastre pentru astăzi."
-        ]
-      },
-
-      transitions: [
-        "Mergem mai departe.",
-        "Următorul meci.",
-        "Continuăm.",
-        "Mai departe.",
-        "Următoarea selecție."
-      ],
-
-      oddsLeadIns: [
-        "Cota este",
-        "Avem cota",
-        "Selecția are cota"
-      ],
-
-      totalOdds: [
-        "Cota totală a biletului este",
-        "În total, biletul are cota",
-        "Cota finală este",
-        "Biletul ajunge la cota"
-      ],
-
-      outros: [
-        `Găsești biletul complet pe ${WEBSITE}. Succes!`,
-        `Vezi toate detaliile pe ${WEBSITE}. Mult succes!`,
-        `Biletul complet este pe ${WEBSITE}. Joacă responsabil!`,
-        `Intră pe ${WEBSITE} pentru toate detaliile. Succes!`,
-        `Urmărește-ne pentru ponturile următoare. Mult succes!`
-      ],
-
-      brandMentions: [
-        `de la ${BRAND_NAME}`,
-        `pregătit de ${BRAND_NAME}`,
-        `din partea ${BRAND_NAME}`
-      ]
-    };
-  }
-
+function getVoicePhrases() {
   return {
     intros: {
       bilet_cota2: [
@@ -1516,9 +1439,7 @@ function buildTeamsVoiceLine(
     match.home &&
     match.away
   ) {
-    return LANG === "ro"
-      ? `${match.home} contra ${match.away}.`
-      : `${match.home}, against ${match.away}.`;
+    return `${match.home}, against ${match.away}.`;
   }
 
   return `${match.teams}.`;
@@ -1529,8 +1450,26 @@ function buildVoiceScript(
   totalOdds,
   random
 ) {
+  if (LANG === "ro") {
+    const sections = matches.map((match, index) => {
+      const matchup = match.home && match.away
+        ? `${match.home} joacă cu ${match.away}`
+        : match.teams;
+      const opening = index === 0 ? "În primul meci" : "Mai departe";
+      const selection = match.spokenMarket.replace(/^\p{Ll}/u, letter => letter.toLocaleUpperCase("ro"));
+      const analysis = replaceNumbersForSpeech(match.analysisReason);
+      return [
+        `${opening}, ${matchup}.`,
+        `${selection}.`,
+        analysis && (/[.!?]$/.test(analysis) ? analysis : `${analysis}.`)
+      ].filter(Boolean).join(" ");
+    });
+    sections.push(`Cota totală este ${spokenOdd(totalOdds)}. Găsești biletul pe ${WEBSITE.replace(/\.ro$/i, " punct ro")}.`);
+    return sections.join("\n\n");
+  }
+
   const phrases =
-    getVoicePhrases(random);
+    getVoicePhrases();
 
   const lines = [];
 
@@ -1563,9 +1502,7 @@ function buildVoiceScript(
           .replace(/[.]$/, "");
 
       lines.push(
-        LANG === "ro"
-          ? `${spokenPickNumber(match.index)}. ${teamsLine}. Pronostic: ${match.spokenMarket}.`
-          : `${spokenPickNumber(match.index)}: ${teamsLine}. ${pickRandom(phrases.selectionLeadIns, random)} ${match.spokenMarket}.`
+        `${spokenPickNumber(match.index)}: ${teamsLine}. ${pickRandom(phrases.selectionLeadIns, random)} ${match.spokenMarket}.`
       );
 
       /*
