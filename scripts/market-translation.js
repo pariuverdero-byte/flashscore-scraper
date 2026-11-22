@@ -14,8 +14,8 @@ function translate(raw) {
   if (/\bambele\s+echipe\s+marcheaza\b/.test(normalized)) {
     return `Both teams to score${/\bnu\b/.test(normalized) ? " – No" : ""}`;
   }
-  let match = normalized.match(/(.+?)\s+minim\s+(\d+)\s+goluri/);
-  if (match) return `${match[1].replace(/^./, c => c.toUpperCase())} to score at least ${match[2]} goals`;
+  let match = value.match(/^(.+?)\s+minim\s+(\d+)\s+gol(?:uri)?(?:\s+marcat[ei]?)?(?:\s+[îi]n\s+meci)?$/i);
+  if (match) return `${match[1]} to score at least ${match[2]} ${match[2] === "1" ? "goal" : "goals"}`;
   match = normalized.match(/interval\s+(\d+)\s*-\s*(\d+)/);
   if (match) return `Total goals${normalized.includes("prima repriz") ? " 1st half" : ""}: ${match[1]}–${match[2]}`;
   const replacements = [

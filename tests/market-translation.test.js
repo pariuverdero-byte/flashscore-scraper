@@ -32,6 +32,11 @@ test("the mixed Romanian market is repaired across generated tickets", () => {
   }
 });
 
+test("team goal markets preserve the team name and translate singular and plural goals", () => {
+  assert.equal(englishMarketLabel("", "Craiova minim 1 gol marcat în meci"), "Craiova to score at least 1 goal");
+  assert.equal(englishMarketLabel("", "FC Botoșani minim 2 goluri"), "FC Botoșani to score at least 2 goals");
+});
+
 test("unknown Romanian market labels stop before publication", () => {
   assert.throws(() => englishMarketLabel("", "rezultat meci"), /Untranslated English market label/);
 });

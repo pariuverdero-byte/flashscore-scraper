@@ -1053,9 +1053,16 @@ function decorate(ticket, annotations) {
       const out = { ...s };
       delete out.__sid;
       delete out.__analysisEvidence;
+      let englishLabel;
+      try {
+        englishLabel = englishMarketLabel(a.label_en, out.market_raw);
+      } catch (error) {
+        if (process.env.LANG !== "ro") throw error;
+        console.warn(`[MARKET] ${error.message}`);
+      }
       out.ai = {
         label_ro: safe(a.label_ro) || safe(out.market_raw),
-        label_en: englishMarketLabel(a.label_en, out.market_raw),
+        label_en: englishLabel,
         reason_ro: cleanReason(a.reason_ro, s.__analysisEvidence) || localEvidenceReason(s, "ro"),
         reason_en: cleanReason(a.reason_en, s.__analysisEvidence) || localEvidenceReason(s, "en"),
       };
