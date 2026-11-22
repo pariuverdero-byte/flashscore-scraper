@@ -2,6 +2,39 @@
  * PariuVerde / GreenBetTips temporary homepage enhancements.
  * Installed through Code Snippets; intentionally contains no opening PHP tag.
  */
+if (wp_parse_url(home_url(), PHP_URL_HOST) === 'greenbettips.com') {
+    // Preserve the category slugs used by the publisher and existing links.
+    add_filter('get_category', function ($category) {
+        $names = [
+            'cota-2' => 'Odd 2 Bet',
+            'biletul-zilei' => 'Bet of the Day',
+        ];
+        if (is_admin() || !isset($names[$category->slug])) return $category;
+        $category = clone $category;
+        $category->name = $names[$category->slug];
+        return $category;
+    });
+
+    // Localize the shared Elementor footer used outside the homepage.
+    add_filter('elementor/widget/render_content', function ($content, $widget) {
+        $widgets = [
+            '61e2fdcd' => [
+                'Despre PariuVerde.ro' => 'About GreenBetTips.com',
+                'Pe PariuVerde.ro găsești zilnic ponturi gratuite, analizate cu responsabilitate. Nu oferim garanții false, ci inspirație pentru pasionații de fotbal și alte sporturi. Alătură-te celor care pariază informat.' => 'On GreenBetTips.com, you’ll find free daily tips, carefully analyzed and shared responsibly. We don’t offer false guarantees — just inspiration for football and sports enthusiasts. Join those who bet with insight.',
+                'PariuVerde.ro oferă pronosticuri și analize cu scop informativ. Nu încurajăm și nu intermediem accesul la platforme de jocuri de noroc. Pariurile sunt destinate exclusiv persoanelor majore. Jucați responsabil.' => 'GreenBetTips.com provides predictions and analyses for informational purposes only. We do not encourage or facilitate access to gambling platforms. Betting is intended for adults only. Play responsibly.',
+            ],
+            '5b12f982' => [
+                'Urmărește-ne:' => 'We are social. Follow us:',
+            ],
+            '12331fc1' => [
+                'Pentru colaborări, parteneriate sau alte solicitări, ne puteți contacta la adresa:' => 'For collaborations, partnerships, or other inquiries, you can contact us at:',
+                'contact@pariuverde.ro' => 'contact@greenbettips.com',
+            ],
+        ];
+        return strtr($content, $widgets[$widget->get_id()] ?? []);
+    }, 10, 2);
+}
+
 add_filter('the_content', function ($content) {
     if (is_admin() || !is_string($content) || $content === '') return $content;
 

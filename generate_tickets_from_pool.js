@@ -1003,6 +1003,7 @@ LANGUAGE:
 - label_en/reason_en: natural English betting language with no Romanian terminology.`;
   const r = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
+    signal: AbortSignal.timeout(75000),
     headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: OPENAI_MODEL,

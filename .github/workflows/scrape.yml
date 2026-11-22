@@ -6,6 +6,11 @@ concurrency:
 
 on:
   workflow_dispatch:
+    inputs:
+      tickets_only:
+        description: Publish tickets without AI analysis or video
+        type: boolean
+        default: false
   schedule:
     # Keep 13:30 Romanian local time throughout summer and winter.
     - cron: "30 13 * * *"
@@ -116,57 +121,6 @@ jobs:
               --prefer-offline
           fi
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Restore Piper Romanian voice cache
-        uses: actions/cache@v4
-        with:
-          path: .cache/piper
-          key: piper-ro-RO-mihai-medium-v1
-
-      - name: Install Romanian voice engines
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --disable-pip-version-check --quiet edge-tts piper-tts
-          edge-tts --version
-
-      - name: Verify FFmpeg and fonts
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
-            echo "FFmpeg and ffprobe are already available on the GitHub runner."
-          else
-            echo "FFmpeg is missing. Installing minimum required packages..."
-            sudo apt-get update -qq
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-              --no-install-recommends \
-              ffmpeg \
-              fonts-dejavu-core
-          fi
-
-          if ! fc-match DejaVuSans >/dev/null 2>&1; then
-            echo "DejaVu fonts are missing. Installing fonts-dejavu-core..."
-            sudo apt-get update -qq
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-              --no-install-recommends \
-              fonts-dejavu-core
-          fi
-
-          echo "FFmpeg:"
-          ffmpeg -version | head -n 3
-
-          echo "FFprobe:"
-          ffprobe -version | head -n 3
-
-          echo "Font:"
-          fc-match DejaVuSans | head -n 1
-
       # ==================================================
       # 1) FLASHSCORE
       # ==================================================
@@ -217,11 +171,13 @@ jobs:
       - name: Generate tickets from master pool
         timeout-minutes: 5
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ !inputs.tickets_only && secrets.OPENAI_API_KEY || '' }}
           OPENAI_MODEL: "gpt-5.6-luna"
         run: node generate_tickets_from_pool.js
 
       - name: Publish generated tickets to control plane
+        continue-on-error: true
+        timeout-minutes: 1
         env:
           CONTROL_API_TOKEN: ${{ secrets.CONTROL_API_TOKEN }}
           CONTROL_PLANE_URL: https://liveedge-control.vercel.app
@@ -238,6 +194,7 @@ jobs:
       # 7) RAW ARTIFACTS
       # ==================================================
       - name: Upload raw artifacts
+        continue-on-error: true
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -268,6 +225,7 @@ jobs:
           retention-days: 7
 
       - name: Upload ticket artifacts
+        continue-on-error: true
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -331,11 +289,66 @@ jobs:
           node verify_and_update_wp.js
           echo "WordPress verification step completed."
 
+      - name: Set up Python
+        if: success() && !inputs.tickets_only
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Restore Piper Romanian voice cache
+        if: success() && !inputs.tickets_only
+        uses: actions/cache@v4
+        with:
+          path: .cache/piper
+          key: piper-ro-RO-mihai-medium-v1
+
+      - name: Install Romanian voice engines
+        shell: bash
+        if: success() && !inputs.tickets_only
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet edge-tts piper-tts
+          edge-tts --version
+
+      - name: Verify FFmpeg and fonts
+        shell: bash
+        if: success() && !inputs.tickets_only
+        run: |
+          set -euo pipefail
+
+          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+            echo "FFmpeg and ffprobe are already available on the GitHub runner."
+          else
+            echo "FFmpeg is missing. Installing minimum required packages..."
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              --no-install-recommends \
+              ffmpeg \
+              fonts-dejavu-core
+          fi
+
+          if ! fc-match DejaVuSans >/dev/null 2>&1; then
+            echo "DejaVu fonts are missing. Installing fonts-dejavu-core..."
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              --no-install-recommends \
+              fonts-dejavu-core
+          fi
+
+          echo "FFmpeg:"
+          ffmpeg -version
+
+          echo "FFprobe:"
+          ffprobe -version
+
+          echo "Font:"
+          fc-match DejaVuSans
+
       # ==================================================
       # 9A) GENERATE BILET COTA 2 PAYLOAD
       # ==================================================
       - name: Generate Bilet Cota 2 Shorts payload
-        if: success()
+        if: success() && !inputs.tickets_only
         env:
           SHORTS_TICKET_TYPE: bilet_cota2
           SHORTS_OUTPUT_DIR: output/bilet_cota2
@@ -374,7 +387,7 @@ jobs:
       # 9B) GENERATE BILETUL ZILEI PAYLOAD
       # ==================================================
       - name: Generate Biletul Zilei Shorts payload
-        if: success()
+        if: success() && !inputs.tickets_only
         env:
           SHORTS_TICKET_TYPE: biletul_zilei
           SHORTS_OUTPUT_DIR: output/biletul_zilei
@@ -413,7 +426,7 @@ jobs:
       # 10) VERIFY REQUIRED CONTENT FILES
       # ==================================================
       - name: Verify PariuVerde content engine files
-        if: success()
+        if: success() && !inputs.tickets_only
         shell: bash
         run: |
           set -euo pipefail
@@ -450,7 +463,7 @@ jobs:
       # 11) BUILD ALL AVAILABLE ROMANIAN SHORTS
       # ==================================================
       - name: Build all available PariuVerde Shorts
-        if: success()
+        if: success() && !inputs.tickets_only
         timeout-minutes: 35
         shell: bash
         run: |
@@ -470,7 +483,7 @@ jobs:
       # 12) VERIFY GENERATED SHORTS
       # ==================================================
       - name: Verify generated PariuVerde Shorts
-        if: success()
+        if: success() && !inputs.tickets_only
         shell: bash
         run: |
           set -euo pipefail
@@ -563,7 +576,7 @@ jobs:
       # 13) TEST YOUTUBE PARIUVERDE OAUTH
       # ==================================================
       - name: Test PariuVerde YouTube OAuth credentials
-        if: success()
+        if: success() && !inputs.tickets_only
         env:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_PV_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_PV_CLIENT_SECRET }}
@@ -626,7 +639,7 @@ jobs:
       # 14) PUBLISH ALL AVAILABLE SHORTS TO YOUTUBE
       # ==================================================
       - name: Publish all available PariuVerde Shorts to YouTube
-        if: success()
+        if: success() && !inputs.tickets_only
         timeout-minutes: 30
         env:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_PV_CLIENT_ID }}
@@ -851,7 +864,7 @@ jobs:
           cat output/publishing_summary.json
 
       - name: Embed published PariuVerde videos in WordPress articles
-        if: success()
+        if: success() && !inputs.tickets_only
         env:
           WP_URL: https://pariuverde.ro
           WP_USER: ${{ secrets.WP_USER }}
@@ -860,7 +873,7 @@ jobs:
         run: node embed_youtube_wp.js
 
       - name: Publish PariuVerde tickets to Telegram
-        if: success()
+        if: success() && !inputs.tickets_only
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_PV_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_PV_CHAT_ID }}
@@ -877,7 +890,7 @@ jobs:
           done
 
       - name: Publish alternating PariuVerde ticket through Buffer
-        if: success()
+        if: success() && !inputs.tickets_only
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_TARGET_SERVICES: tiktok,instagram,facebook

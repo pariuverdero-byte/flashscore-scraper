@@ -6,6 +6,11 @@ concurrency:
 
 on:
   workflow_dispatch:
+    inputs:
+      tickets_only:
+        description: Publish tickets without AI analysis or video
+        type: boolean
+        default: false
   schedule:
     # Keep 13:30 Romanian local time throughout summer and winter.
     - cron: "30 13 * * *"
@@ -86,28 +91,6 @@ jobs:
             --no-audit \
             --prefer-offline
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Install Edge TTS
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install edge-tts
-          edge-tts --version
-
-      - name: Install FFmpeg and fonts
-        run: |
-          sudo apt-get update
-
-          sudo apt-get install -y \
-            ffmpeg \
-            fonts-dejavu-core
-
-          ffmpeg -version
-          ffprobe -version
-
       # ==================================================
       # 1) FLASHSCORE
       # ==================================================
@@ -158,7 +141,7 @@ jobs:
       - name: Generate tickets from master pool
         timeout-minutes: 5
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ !inputs.tickets_only && secrets.OPENAI_API_KEY || '' }}
           OPENAI_MODEL: "gpt-5.6-luna"
         run: node generate_tickets_from_pool.js
 
@@ -172,6 +155,7 @@ jobs:
       # 7) RAW + TICKET ARTIFACTS
       # ==================================================
       - name: Upload raw artifacts
+        continue-on-error: true
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -202,6 +186,7 @@ jobs:
           retention-days: 7
 
       - name: Upload ticket artifacts
+        continue-on-error: true
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -225,11 +210,36 @@ jobs:
           WP_APP_PASS: ${{ secrets.WP_APP_PASS_GREENBET }}
         run: node publish_wp.js
 
+      - name: Set up Python
+        if: success() && !inputs.tickets_only
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Edge TTS
+        if: success() && !inputs.tickets_only
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install edge-tts
+          edge-tts --version
+
+      - name: Install FFmpeg and fonts
+        if: success() && !inputs.tickets_only
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            ffmpeg \
+            fonts-dejavu-core
+
+          ffmpeg -version
+          ffprobe -version
+
       # ==================================================
       # 9A) ODDS 2 PAYLOAD
       # ==================================================
       - name: Generate Odds 2 Shorts payload
-        if: success()
+        if: success() && !inputs.tickets_only
         env:
           LANG: "en"
           WP_URL: https://greenbettips.com
@@ -267,7 +277,7 @@ jobs:
       # 9B) TICKET OF THE DAY PAYLOAD
       # ==================================================
       - name: Generate Ticket of the Day Shorts payload
-        if: success()
+        if: success() && !inputs.tickets_only
         env:
           LANG: "en"
           WP_URL: https://greenbettips.com
@@ -305,7 +315,7 @@ jobs:
       # 10) VERIFY CONTENT ENGINE FILES
       # ==================================================
       - name: Verify content engine files
-        if: success()
+        if: success() && !inputs.tickets_only
         shell: bash
         run: |
           set -euo pipefail
@@ -341,7 +351,7 @@ jobs:
       # 11) BUILD ALL AVAILABLE SHORTS
       # ==================================================
       - name: Build all available Shorts
-        if: success()
+        if: success() && !inputs.tickets_only
         timeout-minutes: 35
         shell: bash
         run: |
@@ -361,7 +371,7 @@ jobs:
       # 12) VERIFY GENERATED VIDEOS
       # ==================================================
       - name: Verify generated Shorts
-        if: success()
+        if: success() && !inputs.tickets_only
         shell: bash
         run: |
           set -euo pipefail
@@ -421,7 +431,7 @@ jobs:
       # 13) TEST YOUTUBE OAUTH
       # ==================================================
       - name: Test YouTube OAuth credentials
-        if: success()
+        if: success() && !inputs.tickets_only
         env:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
@@ -478,7 +488,7 @@ jobs:
       # 14) PUBLISH ALL AVAILABLE SHORTS TO YOUTUBE
       # ==================================================
       - name: Publish all available Shorts to YouTube
-        if: success()
+        if: success() && !inputs.tickets_only
         timeout-minutes: 30
         env:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
@@ -661,7 +671,7 @@ jobs:
           cat output/publishing_summary.json
 
       - name: Embed published GreenBetTips videos in WordPress articles
-        if: success()
+        if: success() && !inputs.tickets_only
         env:
           WP_URL: https://greenbettips.com
           WP_USER: ${{ secrets.WP_USER }}
@@ -670,7 +680,7 @@ jobs:
         run: node embed_youtube_wp.js
 
       - name: Publish GreenBetTips tickets to Telegram
-        if: success()
+        if: success() && !inputs.tickets_only
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_GBT_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_GBT_CHAT_ID }}
@@ -687,7 +697,7 @@ jobs:
           done
 
       - name: Publish alternating GreenBetTips ticket through Buffer
-        if: success()
+        if: success() && !inputs.tickets_only
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_GBT_API_KEY }}
           BUFFER_TARGET_SERVICES: tiktok,instagram,facebook
