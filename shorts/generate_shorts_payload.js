@@ -587,7 +587,8 @@ function integerToEnglish(
 }
 
 function integerToRomanian(
-  value
+  value,
+  useFeminineTwo = false
 ) {
   const number =
     Math.trunc(
@@ -602,11 +603,14 @@ function integerToRomanian(
 
   if (number < 0) {
     return `minus ${integerToRomanian(
-      Math.abs(number)
+      Math.abs(number),
+      useFeminineTwo
     )}`;
   }
 
   if (number < 20) {
+    if (number === 2 && useFeminineTwo) return "două";
+    if (number === 12 && !useFeminineTwo) return "doisprezece";
     return RO_UNITS[number];
   }
 
@@ -621,7 +625,7 @@ function integerToRomanian(
 
     return unit === 0
       ? RO_TENS[tens]
-      : `${RO_TENS[tens]} și ${RO_UNITS[unit]}`;
+      : `${RO_TENS[tens]} și ${integerToRomanian(unit, useFeminineTwo)}`;
   }
 
   if (number < 200) {
@@ -631,7 +635,8 @@ function integerToRomanian(
     return remainder === 0
       ? "o sută"
       : `o sută ${integerToRomanian(
-          remainder
+          remainder,
+          useFeminineTwo
         )}`;
   }
 
@@ -645,12 +650,13 @@ function integerToRomanian(
       number % 100;
 
     const prefix =
-      `${RO_UNITS[hundreds]} sute`;
+      `${integerToRomanian(hundreds, true)} sute`;
 
     return remainder === 0
       ? prefix
       : `${prefix} ${integerToRomanian(
-          remainder
+          remainder,
+          useFeminineTwo
         )}`;
   }
 
@@ -684,20 +690,10 @@ function spokenOdd(value) {
   ] = fixed.split(".");
 
   if (LANG === "ro") {
-    return (
-      `${integerToRomanian(
-        Number(integerPart)
-      )} virgulă ` +
-      decimalPart
-        .split("")
-        .map(
-          (digit) =>
-            RO_UNITS[
-              Number(digit)
-            ]
-        )
-        .join(" ")
-    );
+    const decimals = decimalPart.startsWith("0")
+      ? [...decimalPart].map(digit => RO_UNITS[Number(digit)]).join(" ")
+      : integerToRomanian(Number(decimalPart));
+    return `${integerToRomanian(Number(integerPart))} virgulă ${decimals}`;
   }
 
   return (
@@ -996,6 +992,28 @@ function replaceNumbersForSpeech(
   let result =
     clean(value);
 
+  if (LANG === "ro") {
+    // Agree with the following stat noun. Digits in odds and match codes
+    // are read independently and keep their usual numerical forms.
+    const counts = /\b(?:(\d+)\s*\/\s*)?(\d+)(?:[.,](\d+))?\s+(?:de\s+)?(gol(?:uri)?|corner(?:e)?|cartonaș(?:e)?|șut(?:uri)?|meci(?:uri)?|rezultat(?:e)?|victori(?:e|i)|înfrânger(?:e|i)|selecți(?:e|i)|etap(?:ă|e)|repriz(?:ă|e)|echip(?:ă|e)|ocazi(?:e|i)|remiz(?:ă|e)|punct(?:e)?|minut(?:e)?)(?![\p{L}\p{M}])/giu;
+    result = result.replace(counts, (_, numerator, integerPart, decimalPart, noun) => {
+      const number = Number(integerPart);
+      const feminineNoun = /^(?:victori|înfrânger|selecți|etap|repriz|echip|ocazi|remiz)/i.test(noun);
+      const cardinal = number === 1 ? (feminineNoun ? "o" : "un") : integerToRomanian(number, true);
+      if (numerator) {
+        return `${integerToRomanian(Number(numerator), true)} din ${cardinal} ${noun}`;
+      }
+      if (decimalPart === "5" && number > 0) return `${cardinal} ${noun} și jumătate`;
+      if (decimalPart) {
+        const decimal = [...decimalPart].map(digit => RO_UNITS[Number(digit)]).join(" ");
+        return `${integerToRomanian(number)} virgulă ${decimal} ${noun}`;
+      }
+      const remainder = number % 100;
+      const linker = number >= 20 && (remainder === 0 || remainder >= 20) ? " de " : " ";
+      return cardinal + linker + noun;
+    });
+  }
+
   // Ratios and percentages are common in the evidence-backed analysis. Spell
   // them naturally before the generic number pass ("4/5" -> "patru din cinci").
   result = result.replace(
@@ -1086,6 +1104,15 @@ function naturalRomanianMarket(
     normalizeRomanianText(
       value
     );
+
+  const minimum = clean(value).match(/^(?:(.+?)\s+)?minim\s+(\d+(?:[.,]\d+)?)\s+gol(?:uri)?(?:\s+marcat[ei]?)?(?:\s+[îi]n\s+meci)?$/i);
+  if (minimum) {
+    const goals = Math.ceil(Number(minimum[2].replace(",", ".")));
+    const count = replaceNumbersForSpeech(`${goals} ${goals === 1 ? "gol" : "goluri"}`);
+    return minimum[1]
+      ? `${minimum[1]} marchează cel puțin ${count}`
+      : `cel puțin ${count} în meci`;
+  }
 
   const exact = {
     "peste 0.5 goluri":
@@ -1388,18 +1415,9 @@ function getVoicePhrases(
         "Următoarea selecție."
       ],
 
-      selectionLeadIns: [
-        "Pronosticul nostru este",
-        "Alegerea noastră este",
-        "Mergem pe",
-        "Selecția recomandată este",
-        "Pentru acest meci alegem"
-      ],
-
       oddsLeadIns: [
         "Cota este",
         "Avem cota",
-        "La cota",
         "Selecția are cota"
       ],
 
@@ -1499,7 +1517,7 @@ function buildTeamsVoiceLine(
     match.away
   ) {
     return LANG === "ro"
-      ? `${match.home}, contra ${match.away}.`
+      ? `${match.home} contra ${match.away}.`
       : `${match.home}, against ${match.away}.`;
   }
 
@@ -1544,14 +1562,10 @@ function buildVoiceScript(
         )
           .replace(/[.]$/, "");
 
-      const leadIn =
-        pickRandom(
-          phrases.selectionLeadIns,
-          random
-        );
-
       lines.push(
-        `${spokenPickNumber(match.index)}: ${teamsLine}. ${leadIn} ${match.spokenMarket}.`
+        LANG === "ro"
+          ? `${spokenPickNumber(match.index)}. ${teamsLine}. Pronostic: ${match.spokenMarket}.`
+          : `${spokenPickNumber(match.index)}: ${teamsLine}. ${pickRandom(phrases.selectionLeadIns, random)} ${match.spokenMarket}.`
       );
 
       /*

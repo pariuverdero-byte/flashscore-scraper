@@ -1005,6 +1005,11 @@ function main() {
       "en"
     ).toLowerCase();
 
+  // The Romanian studio intro frames the presenter to the right of center.
+  const presenterCropX = language === "ro" && path.basename(PRESENTER_FILE) === "intro_05.mp4"
+    ? "iw*0.70-ow/2"
+    : "(iw-ow)/2";
+
   const ticketType =
     cleanText(
       payload.ticketType
@@ -1814,7 +1819,7 @@ function main() {
     /* The recorded presenter is a self-contained introduction segment. */
     "[0:v]" +
       "scale=1080:1920:force_original_aspect_ratio=increase," +
-      "crop=1080:1920," +
+      `crop=1080:1920:x=${presenterCropX},` +
       "fps=30," +
       `trim=duration=${presenterDuration.toFixed(3)},` +
       "setpts=PTS-STARTPTS," +
