@@ -1,0 +1,33 @@
+name: Live signals monthly calibration
+
+on:
+  workflow_dispatch:
+    inputs:
+      preview:
+        description: Test with the current month without sending email
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pv-live-calibration
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Generate calibration review
+        env:
+          PREVIEW: ${{ inputs.preview }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+        run: node live-betting/scripts/monthly-calibration.js
