@@ -11,7 +11,7 @@ const UA =
 /**
  * Download one Flashscore page.
  */
-export async function fetchText(url, { timeoutMs = 20000 } = {}) {
+export async function fetchText(url, { timeoutMs = 20000, signal } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -24,7 +24,7 @@ export async function fetchText(url, { timeoutMs = 20000 } = {}) {
         'Cache-Control': 'no-cache',
         'Pragma': 'no-cache',
       },
-      signal: controller.signal,
+      signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
     });
 
     if (!response.ok) {

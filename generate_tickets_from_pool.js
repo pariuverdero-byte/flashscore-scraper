@@ -544,7 +544,7 @@ function cleanReason(reason, evidence) {
   return banned.some(rule => rule.test(text)) ? "" : text;
 }
 
-async function collectPrematchContext(selections) {
+async function collectPrematchContext(selections, signal) {
   if (AI_PREMATCH_MAX <= 0) return new Map();
 
   const unique = new Map();
@@ -558,6 +558,7 @@ async function collectPrematchContext(selections) {
   const result = new Map();
 
   for (let start = 0; start < jobs.length; start += AI_PREMATCH_CONCURRENCY) {
+    if (signal.aborted) break;
     const batch = jobs.slice(start, start + AI_PREMATCH_CONCURRENCY);
 
     const rows = await Promise.all(batch.map(async (s) => {
@@ -569,7 +570,7 @@ async function collectPrematchContext(selections) {
           id: s.match_id,
           home,
           away
-        });
+        }, { signal });
 
         return [s.match_id, compactPrematch(data)];
       } catch (e) {
@@ -680,7 +681,7 @@ function dateVariants(date) {
   ];
 }
 
-async function fetchSourcePageEvidence(selection, eventDate, candidateUrl = "") {
+async function fetchSourcePageEvidence(selection, eventDate, signal, candidateUrl = "") {
   const sourceUrl = safe(candidateUrl || selection.source_url || selection.meta?.source_url);
   if (!/^https?:\/\//i.test(sourceUrl)) return null;
 
@@ -696,7 +697,7 @@ async function fetchSourcePageEvidence(selection, eventDate, candidateUrl = "") 
         "User-Agent": "Mozilla/5.0 (compatible; PariuVerdeEvidenceBot/1.0)",
         "Accept-Language": "ro,en;q=0.8"
       },
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.any([signal, AbortSignal.timeout(15000)])
     });
     if (!response.ok) return null;
 
@@ -768,7 +769,7 @@ function decodeSearchUrl(value) {
   }
 }
 
-async function discoverExactEventPages(selection, eventDate) {
+async function discoverExactEventPages(selection, eventDate, signal) {
   const confidence = Number(selection.meta?.flashscore_match_confidence || 0);
   if (confidence < 0.88) return [];
   const { home, away } = splitCanonicalTeams(selection.teams);
@@ -794,7 +795,7 @@ async function discoverExactEventPages(selection, eventDate) {
       const searchUrl = `https://www.bing.com/search?format=rss&q=${encodeURIComponent(query)}`;
       const response = await fetch(searchUrl, {
         headers: { "User-Agent": "Mozilla/5.0 (compatible; PariuVerdeEvidenceBot/1.0)" },
-        signal: AbortSignal.timeout(12000)
+        signal: AbortSignal.any([signal, AbortSignal.timeout(12000)])
       });
       if (!response.ok) continue;
       const $ = cheerio.load(await response.text(), { xmlMode: true });
@@ -812,7 +813,7 @@ async function discoverExactEventPages(selection, eventDate) {
       const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
       const response = await fetch(searchUrl, {
         headers: { "User-Agent": "Mozilla/5.0 (compatible; PariuVerdeEvidenceBot/1.0)" },
-        signal: AbortSignal.timeout(12000)
+        signal: AbortSignal.any([signal, AbortSignal.timeout(12000)])
       });
       if (response.ok) {
         const $ = cheerio.load(await response.text());
@@ -829,10 +830,11 @@ async function discoverExactEventPages(selection, eventDate) {
   return found.slice(0, 10);
 }
 
-async function fetchDiscoveredWebEvidence(selection, eventDate) {
-  const urls = await discoverExactEventPages(selection, eventDate);
+async function fetchDiscoveredWebEvidence(selection, eventDate, signal) {
+  const urls = await discoverExactEventPages(selection, eventDate, signal);
   for (const url of urls) {
-    const evidence = await fetchSourcePageEvidence(selection, eventDate, url);
+    if (signal.aborted) break;
+    const evidence = await fetchSourcePageEvidence(selection, eventDate, signal, url);
     if (evidence) {
       console.log(`[WEB-EVIDENCE] exact event verified from discovered page: ${selection.teams} | ${url}`);
       return evidence;
@@ -845,7 +847,7 @@ function cleanReasonText(value) {
   return String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 }
 
-async function addVerifiedWebFallback(pool, eventDate) {
+async function addVerifiedWebFallback(pool, eventDate, signal) {
   const missing = pool.filter(selection =>
     selection.__analysisEvidence?.usable !== true &&
     selection.__analysisEvidence?.blocked_by_contradiction !== true
@@ -853,10 +855,11 @@ async function addVerifiedWebFallback(pool, eventDate) {
   const concurrency = 4;
   let added = 0;
   for (let start = 0; start < missing.length; start += concurrency) {
+    if (signal.aborted) break;
     const batch = missing.slice(start, start + concurrency);
     const evidence = await Promise.all(batch.map(async selection => {
-      const original = await fetchSourcePageEvidence(selection, eventDate);
-      return original || fetchDiscoveredWebEvidence(selection, eventDate);
+      const original = await fetchSourcePageEvidence(selection, eventDate, signal);
+      return original || fetchDiscoveredWebEvidence(selection, eventDate, signal);
     }));
     evidence.forEach((item, index) => {
       if (!item) return;
@@ -1094,7 +1097,8 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
     let prematchContext = new Map();
     if (!TICKETS_ONLY) {
       try {
-        prematchContext = await collectPrematchContext(pool);
+        const evidenceDeadline = AbortSignal.timeout(135000);
+        prematchContext = await collectPrematchContext(pool, evidenceDeadline);
 
         for (const selection of pool) {
           selection.__analysisEvidence = buildAnalysisEvidence(
@@ -1115,7 +1119,8 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
           }
         }
 
-        await addVerifiedWebFallback(pool, date);
+        await addVerifiedWebFallback(pool, date, evidenceDeadline);
+        if (evidenceDeadline.aborted) console.warn("[AI-STATS] Evidence collection timed out; using the evidence collected so far.");
 
         // Rebuild the ticket candidates from selections that have market-specific
         // Flashscore evidence. OpenAI now curates and writes from this dossier; it

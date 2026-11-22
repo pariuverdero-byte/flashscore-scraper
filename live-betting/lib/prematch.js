@@ -255,22 +255,22 @@ function hasAnyPrematchData(data) {
   );
 }
 
-async function safeFetch(url) {
+async function safeFetch(url, signal) {
   try {
-    return await fetchText(url, { timeoutMs: 18000 });
+    return await fetchText(url, { timeoutMs: 18000, signal });
   } catch (error) {
     console.warn(`[prematch] ${url}: ${error.message}`);
     return '';
   }
 }
 
-export async function fetchPrematchData(match) {
+export async function fetchPrematchData(match, { signal } = {}) {
   const base = `${BASE}/match/${match.id}/`;
   const [summaryHtml, h2hHtml, standingsHtml, oddsHtml] = await Promise.all([
-    safeFetch(base),
-    safeFetch(`${base}?t=h2h`),
-    safeFetch(`${base}?t=standings`),
-    safeFetch(`${base}?t=odds`),
+    safeFetch(base, signal),
+    safeFetch(`${base}?t=h2h`, signal),
+    safeFetch(`${base}?t=standings`, signal),
+    safeFetch(`${base}?t=odds`, signal),
   ]);
 
   const standings = parseStandings(standingsHtml || summaryHtml, match);
