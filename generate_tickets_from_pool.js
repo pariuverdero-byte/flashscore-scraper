@@ -1197,5 +1197,6 @@ async function writeNoPicks(date, reason, poolSize = 0, extra = {}) {
   } catch (e) {
     console.error("[AI] generator error:", e);
     await writeNoPicks(new Date().toISOString().slice(0, 10), `Generator exception: ${e?.message || e}`);
+    process.exitCode = 1;
   }
 })();
